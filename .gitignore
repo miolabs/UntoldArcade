@@ -1,0 +1,53 @@
+# Xcode user data
+*.xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Xcode schemes (user-specific)
+xcshareddata/swiftpm/Package.resolved
+*.xccheckout
+
+# Build products
+build/
+DerivedData/
+*.o
+*.d
+*.ll
+*.bc
+*.out
+*.app
+*.dSYM/
+*.ipa
+*.xcarchive
+
+# SwiftPM (just in case)
+.build/
+.swiftpm/
+
+# CocoaPods / Carthage (if ever used)
+Pods/
+Carthage/
+Carthage/Build/
+
+# Other generated files
+*.log
+*.tmp
+*.lock
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear in repo root
+*.mode1v3
+*.pbxuser
+!default.pbxuser
+*.mode2v3
+!default.mode2v3
+
