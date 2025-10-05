@@ -6,6 +6,9 @@
 # Xcode schemes (user-specific)
 xcshareddata/swiftpm/Package.resolved
 *.xccheckout
+xcuserdata
+xcuserdata/*
+
 
 # Build products
 build/
@@ -51,3 +54,5 @@ Carthage/Build/
 *.mode2v3
 !default.mode2v3
 
+/SceneBuilder/SceneBuilder.xcodeproj/xcuserdata
+/SceneBuilder/SceneBuilder.xcodeproj/xcuserdata
