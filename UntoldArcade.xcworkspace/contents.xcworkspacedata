@@ -4,4 +4,7 @@
    <FileRef
       location = "group:SoccerArcade/SoccerArcade.xcodeproj">
    </FileRef>
+   <FileRef
+      location = "group:SceneBuilder/SceneBuilder.xcodeproj">
+   </FileRef>
 </Workspace>
