@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		030BD8C92EA5B54C002F870C /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 030BD8C82EA5B54C002F870C /* UntoldEngine */; };
+		030BD8CB2EA5B54C002F870C /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 030BD8CA2EA5B54C002F870C /* UntoldEngineXR */; };
+		030BD8DD2EA5B6E2002F870C /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 030BD8DC2EA5B6E2002F870C /* UntoldEngine */; };
+		030BD8DF2EA5B6E2002F870C /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 030BD8DE2EA5B6E2002F870C /* UntoldEngineXR */; };
+		030BD8E22EA5F2C8002F870C /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 030BD8E12EA5F2C8002F870C /* UntoldEngine */; };
+		030BD8E42EA5F2C8002F870C /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 030BD8E32EA5F2C8002F870C /* UntoldEngineXR */; };
 		0364D1342E9F733C0021D0C4 /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 0364D1332E9F733C0021D0C4 /* RealityKitContent */; };
 		0364D14E2E9F73600021D0C4 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 0364D14D2E9F73600021D0C4 /* UntoldEngine */; };
 		0364D1502E9F73600021D0C4 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 0364D14F2E9F73600021D0C4 /* UntoldEngineXR */; };
@@ -47,9 +53,15 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				030BD8E42EA5F2C8002F870C /* UntoldEngineXR in Frameworks */,
+				030BD8E22EA5F2C8002F870C /* UntoldEngine in Frameworks */,
+				030BD8C92EA5B54C002F870C /* UntoldEngine in Frameworks */,
 				0364D1502E9F73600021D0C4 /* UntoldEngineXR in Frameworks */,
+				030BD8DF2EA5B6E2002F870C /* UntoldEngineXR in Frameworks */,
 				0364D14E2E9F73600021D0C4 /* UntoldEngine in Frameworks */,
 				0364D1342E9F733C0021D0C4 /* RealityKitContent in Frameworks */,
+				030BD8DD2EA5B6E2002F870C /* UntoldEngine in Frameworks */,
+				030BD8CB2EA5B54C002F870C /* UntoldEngineXR in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -104,6 +116,12 @@
 				0364D1332E9F733C0021D0C4 /* RealityKitContent */,
 				0364D14D2E9F73600021D0C4 /* UntoldEngine */,
 				0364D14F2E9F73600021D0C4 /* UntoldEngineXR */,
+				030BD8C82EA5B54C002F870C /* UntoldEngine */,
+				030BD8CA2EA5B54C002F870C /* UntoldEngineXR */,
+				030BD8DC2EA5B6E2002F870C /* UntoldEngine */,
+				030BD8DE2EA5B6E2002F870C /* UntoldEngineXR */,
+				030BD8E12EA5F2C8002F870C /* UntoldEngine */,
+				030BD8E32EA5F2C8002F870C /* UntoldEngineXR */,
 			);
 			productName = UntoldImmersive;
 			productReference = 0364D12E2E9F733C0021D0C4 /* UntoldImmersive.app */;
@@ -134,7 +152,7 @@
 			mainGroup = 0364D1252E9F733C0021D0C4;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				0364D14C2E9F73600021D0C4 /* XCLocalSwiftPackageReference "../../UntoldEngine" */,
+				030BD8E02EA5F2C8002F870C /* XCRemoteSwiftPackageReference "UntoldEngine" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0364D12F2E9F733C0021D0C4 /* Products */;
@@ -369,14 +387,44 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCLocalSwiftPackageReference section */
-		0364D14C2E9F73600021D0C4 /* XCLocalSwiftPackageReference "../../UntoldEngine" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../../UntoldEngine;
+/* Begin XCRemoteSwiftPackageReference section */
+		030BD8E02EA5F2C8002F870C /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/untoldengine/UntoldEngine.git";
+			requirement = {
+				branch = develop;
+				kind = branch;
+			};
 		};
-/* End XCLocalSwiftPackageReference section */
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		030BD8C82EA5B54C002F870C /* UntoldEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UntoldEngine;
+		};
+		030BD8CA2EA5B54C002F870C /* UntoldEngineXR */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UntoldEngineXR;
+		};
+		030BD8DC2EA5B6E2002F870C /* UntoldEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UntoldEngine;
+		};
+		030BD8DE2EA5B6E2002F870C /* UntoldEngineXR */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UntoldEngineXR;
+		};
+		030BD8E12EA5F2C8002F870C /* UntoldEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 030BD8E02EA5F2C8002F870C /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			productName = UntoldEngine;
+		};
+		030BD8E32EA5F2C8002F870C /* UntoldEngineXR */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 030BD8E02EA5F2C8002F870C /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			productName = UntoldEngineXR;
+		};
 		0364D1332E9F733C0021D0C4 /* RealityKitContent */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RealityKitContent;
