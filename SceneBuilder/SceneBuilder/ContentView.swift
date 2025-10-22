@@ -78,9 +78,9 @@ struct SceneBuilderView: View {
         // Root container for our 3D scene, similar to a SwiftUI View hierarchy.
         UntoldView( renderer: renderer ) {
             // Create the player mesh from a USD file, assigning it a root entity ID.
-            MeshNode( resource: "redplayer.usdc", entityID: rootID ) {
+            MeshNode( resource: "redplayer.usdz", entityID: rootID ) {
                 // Declare a ball mesh as a child of the player node.
-                MeshNode(resource: "ball.usdc")
+                MeshNode(resource: "ball.usdz")
                     // Apply textures to the ball:
                     // - Base color texture (diffuse map)
                     // - Normal map (surface detail)
