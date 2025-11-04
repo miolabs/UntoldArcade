@@ -28,8 +28,19 @@ struct UntoldEngineConfiguration: CompositorLayerConfiguration {
 
 @main
 struct UntoldImmersiveApp: App {
+
+    @State private var selectedImmersionMode: UntoldImmersionMode = .full
+    @State private var immersionStyle: ImmersionStyle = .full
+
     var body: some Scene {
-        WindowGroup { LauncherView().hidden() }
+        WindowGroup {
+            LauncherView(
+                selectedMode: $selectedImmersionMode,
+                immersionStyle: $immersionStyle
+            )
+        }
+        .windowStyle(.plain)
+        .defaultSize(width: 600, height: 400)
 
         ImmersiveSpace(id: "ImmersiveSpace") {
             
@@ -38,6 +49,9 @@ struct UntoldImmersiveApp: App {
                 if XRHolder.shared.xr == nil,
                    let xr = CompositorXRSystem(layerRenderer: layerRenderer) {
                     XRHolder.shared.xr = xr
+
+                    // Set engine's immersion mode
+                    xr.setImmersionMode(xrImmersionMode: selectedImmersionMode)
                     
                     // load assets
                     loadAssets()
@@ -53,15 +67,53 @@ struct UntoldImmersiveApp: App {
                 }
             })
         }
-        .immersionStyle(selection: .constant(.full), in: .full)
+        .immersionStyle(selection: $immersionStyle, in: .mixed, .full)
     }
 }
 
 struct LauncherView: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Binding var selectedMode: UntoldImmersionMode
+    @Binding var immersionStyle: ImmersionStyle
+
     var body: some View {
-        Color.clear.task {
-            _ = await openImmersiveSpace(id: "ImmersiveSpace") // IDs match
+        VStack(spacing: 30) {
+            Text("Untold Engine XR")
+                .font(.extraLargeTitle)
+                .fontWeight(.bold)
+
+            Text("Select Immersion Mode")
+                .font(.title)
+                .foregroundColor(.secondary)
+
+            VStack(spacing: 20) {
+                Button(action: {
+                    Task {
+                        selectedMode = .full
+                        immersionStyle = .full
+                        await openImmersiveSpace(id: "ImmersiveSpace")
+                    }
+                }) {
+                    Label("Full Immersion", systemImage: "visionpro.fill")
+                        .frame(minWidth: 250)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Button(action: {
+                    Task {
+                        selectedMode = .mixed
+                        immersionStyle = .mixed
+                        await openImmersiveSpace(id: "ImmersiveSpace")
+                    }
+                }) {
+                    Label("Mixed Mode", systemImage: "square.stack.3d.up")
+                        .frame(minWidth: 250)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
         }
+        .padding(60)
     }
 }
