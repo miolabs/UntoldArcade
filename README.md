@@ -3,9 +3,22 @@
 **UntoldArcade** is a collection of demo games built with the [Untold Engine](https://github.com/untoldengine/UntoldEngine).  
 These demos give game developers a **quick look** at what the engine can do.
 
-The first demo included is:
+The demos included are:
 
-- ⚽ **SoccerArcade** – a small arcade-style soccer prototype showcasing the engine’s ECS, rendering, and input systems.
+- ⚽ **SoccerArcade** – a small macOS arcade-style soccer prototype showcasing the engine's ECS, rendering, and input systems.
+- 🥽 **UntoldAR** – an AR demo showcasing augmented reality capabilities on iOS devices.
+- 🌐 **UntoldImmersive** – an immersive demo built for Apple Vision Pro, demonstrating spatial computing features.
+- 🛠️ **SceneBuilder** – a declarative scene-building demo using SwiftUI-style syntax to construct 3D scenes programmatically.
+
+---
+
+## ⚙️ Requirements
+
+- **Xcode 26.1** or later
+- **macOS 26.01+** (for macOS demos)
+- **iOS 26.01+** (for iOS/AR demos)
+- **visionOS 26.01+** (for Vision Pro demos)
+- Metal-capable GPU
 
 ---
 
@@ -17,20 +30,27 @@ git clone https://github.com/untoldengine/UntoldArcade.git
 cd UntoldArcade
 ```
 
-### 2. Open the workspace
-Open the workspace in Xcode:
+### 2. Open a demo project
+Each demo is a standalone Xcode project. Navigate to the demo folder and open the `.xcodeproj` file:
 
 ```bash
-xed UntoldArcade.xcworkspace
+# For SoccerArcade
+open SoccerArcade/SoccerArcade.xcodeproj
+
+# For UntoldAR
+open UntoldAR/UntoldAR.xcodeproj
+
+# For UntoldImmersive (requires Vision Pro simulator or device)
+open UntoldImmersive/UntoldImmersive.xcodeproj
+
+# For SceneBuilder
+open SceneBuilder/SceneBuilder.xcodeproj
 ```
 
-(or double-click UntoldArcade.xcworkspace in Finder).
-
-### 3. Select and run the game
-
-- In the Xcode toolbar, select the SoccerArcade scheme.
-- Choose your platform/device (macOS, iOS, or visionOS if supported).
-- Press Run ▶️ to build and launch the demo.
+### 3. Build and run
+- Select your target device (Mac, iPhone, iPad, or Vision Pro simulator)
+- Press `⌘R` to build and run
+- SPM will automatically fetch the Untold Engine dependency on first build
 
 ## 🔗 Engine Dependency
 
@@ -42,11 +62,18 @@ Game developers: The workspace is already configured to fetch the engine from it
 
 ```bash
 UntoldArcade/
-├── UntoldArcade.xcworkspace   # Workspace with all demos
-├── SoccerArcade/              # First demo project
+├── SoccerArcade/              # Arcade-style soccer game
 │   ├── Sources/               # Game source code
 │   └── Resources/             # Game assets
-└── Shared/                    # (optional) shared assets across demos
+├── UntoldAR/                  # AR demo for iOS
+│   ├── Sources/               # Game source code
+│   └── Resources/             # Game assets
+├── UntoldImmersive/           # Vision Pro immersive demo
+│   ├── Sources/               # Game source code
+│   └── Resources/             # Game assets
+└── SceneBuilder/              # Declarative scene-building demo
+    ├── Sources/               # Demo source code
+    └── Resources/             # Demo assets
 ```
 
 ## Untold Editor
