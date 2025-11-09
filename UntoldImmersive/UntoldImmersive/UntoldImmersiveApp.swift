@@ -13,7 +13,7 @@ import UntoldEngineXR
 // Simple owner so the XR system doesn't deallocate.
 final class XRHolder {
     static let shared = XRHolder()
-    var xr: CompositorXRSystem?
+    var xr: UntoldEngineXR?
     var renderThread: Thread?
 }
 
@@ -47,7 +47,7 @@ struct UntoldImmersiveApp: App {
             CompositorLayer(configuration: UntoldEngineConfiguration(), renderer: { layerRenderer in
                 // init + retain XR system
                 if XRHolder.shared.xr == nil,
-                   let xr = CompositorXRSystem(layerRenderer: layerRenderer) {
+                   let xr = UntoldEngineXR(layerRenderer: layerRenderer) {
                     XRHolder.shared.xr = xr
 
                     // Set engine's immersion mode
