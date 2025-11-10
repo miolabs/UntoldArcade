@@ -8,6 +8,7 @@ The demos included are:
 - ⚽ **SoccerArcade** – a small macOS arcade-style soccer prototype showcasing the engine's ECS, rendering, and input systems.
 - 🥽 **UntoldAR** – an AR demo showcasing augmented reality capabilities on iOS devices.
 - 🌐 **UntoldImmersive** – an immersive demo built for Apple Vision Pro, demonstrating spatial computing features.
+- **UntoldiOS** - an ios demo showcasing the engine on iOS devices
 - 🛠️ **SceneBuilder** – a declarative scene-building demo using SwiftUI-style syntax to construct 3D scenes programmatically.
 
 ---
@@ -43,6 +44,9 @@ open UntoldAR/UntoldAR.xcodeproj
 # For UntoldImmersive (requires Vision Pro simulator or device)
 open UntoldImmersive/UntoldImmersive.xcodeproj
 
+# For UntoldiOS 
+open UntoldiOS/UntoldiOS.xcodeproj
+
 # For SceneBuilder
 open SceneBuilder/SceneBuilder.xcodeproj
 ```
@@ -71,9 +75,13 @@ UntoldArcade/
 ├── UntoldImmersive/           # Vision Pro immersive demo
 │   ├── Sources/               # Game source code
 │   └── Resources/             # Game assets
+├── UntoldiOS/                 # iOS demo
+│   ├── Sources/               # Game source code
+│   └── Resources/             # Game assets
 └── SceneBuilder/              # Declarative scene-building demo
     ├── Sources/               # Demo source code
     └── Resources/             # Demo assets
+
 ```
 
 ## Untold Editor
