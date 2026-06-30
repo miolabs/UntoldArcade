@@ -41,14 +41,14 @@ struct ContentView : View {
 // Scene Builder style to create a scene with hierarchy
 struct SceneBuilderView: View {
     @State var playerAngle: Float = 0
+    @ObservedObject var renderer: UntoldRenderer
+    let step = 5
+    let range = 1...60
     
-    let timer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     var rootID: EntityID = createEntity()
     
-    var renderer: UntoldRenderer?
-    
     init() {
-        self.renderer = UntoldRenderer.create()
+        self.renderer = UntoldRenderer.create( )!
     }
     
     /// This function demonstrates **declarative scene setup** (similar to SwiftUI).
@@ -101,10 +101,18 @@ struct SceneBuilderView: View {
             // Rotate the player to face forward along the Y axis.
             .rotateTo(angle: 0, axis: [.y])
         }
-        .onReceive(timer) { _ in
-            playerAngle += 1
+        .onUpdateFrame { _ in
+            playerAngle += 0.5
             rotateTo(entityId: rootID, pitch: 0, yaw: playerAngle, roll: 0)
         }
+        Spacer()
+        HStack {
+            Spacer()
+            Stepper("FPS", value: $renderer.fps, in: 1...60, step: 5 )
+            Text( "FPS: \(renderer.fps)")
+            Spacer()
+        }
+        Spacer()
     }
 }
 
@@ -138,4 +146,5 @@ struct TestView : View
         }
     }
 }
+
 

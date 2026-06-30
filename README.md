@@ -10,6 +10,7 @@ The demos included are:
 - 🌐 **UntoldImmersive** – an immersive demo built for Apple Vision Pro, demonstrating spatial computing features.
 - **UntoldiOS** - an ios demo showcasing the engine on iOS devices
 - 🛠️ **SceneBuilder** – a declarative scene-building demo using SwiftUI-style syntax to construct 3D scenes programmatically.
+- 🌊 **WebGLWater** – a macOS + iOS port of Evan Wallace's WebGL Water, showcasing a GPU heightfield simulation with raytraced reflection, refraction and caustics (powered by the engine's water feature).
 
 ---
 

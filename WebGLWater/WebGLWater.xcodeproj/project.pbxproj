@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 46;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -20,11 +20,11 @@
 		65BF2398E069B168BEB0CD43 /* DemoAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764C2CFAFB8C048B40F9F338 /* DemoAssets.swift */; };
 		69A77D2A4FB2D06994C68F39 /* tiles.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 53638FA95CB5018BECF96940 /* tiles.jpg */; };
 		6AD915349078F51A518709EB /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CEA0C5217CF990B44F7D842A /* Cocoa.framework */; };
-		730795E011DF308C486CCC39 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; productRef = 3C8B09919BB527F26454085B /* SwiftPackageProductDependency */; };
-		7547FA72B9454D74E85A4578 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; productRef = 60345C623F9D5C84C11D300B /* SwiftPackageProductDependency */; };
+		730795E011DF308C486CCC39 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 3C8B09919BB527F26454085B /* UntoldEngineXR */; };
+		7547FA72B9454D74E85A4578 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 60345C623F9D5C84C11D300B /* UntoldEngine */; };
 		7C96214E585525BA78CAF612 /* xneg.jpg in Resources */ = {isa = PBXBuildFile; fileRef = BFAE121DB9508A9F9FF45D28 /* xneg.jpg */; };
 		847410326CEAE2AD7F3EEA95 /* DemoAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 764C2CFAFB8C048B40F9F338 /* DemoAssets.swift */; };
-		940336E9C7BC99500DE07907 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; productRef = 4DDA289C8FF64D118104D346 /* SwiftPackageProductDependency */; };
+		940336E9C7BC99500DE07907 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 4DDA289C8FF64D118104D346 /* UntoldEngine */; };
 		9B4ED25E6FD3765F6C2F3CEC /* zneg.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 4782A1F323DDA298CBBCFF87 /* zneg.jpg */; };
 		A82205BEA721E0F73EAFFFF8 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D084D5C31B190805B67F046B /* AppDelegate.swift */; };
 		ACA801950A3E0715A6318FDE /* WaterGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BF3EE0280875BFF845C111D /* WaterGame.swift */; };
@@ -40,7 +40,7 @@
 		E6B4FB437A1A1C419E07825A /* xneg.jpg in Resources */ = {isa = PBXBuildFile; fileRef = BFAE121DB9508A9F9FF45D28 /* xneg.jpg */; };
 		E7DD9C0B1959C7310FAA762A /* zneg.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 4782A1F323DDA298CBBCFF87 /* zneg.jpg */; };
 		E86F705EBDEC6F06F3A9548D /* WebGLWaterXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E415EA5C6AC6B2F8E6D53682 /* WebGLWaterXRApp.swift */; };
-		EB1E9D35937243948FD7DF01 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; productRef = BEB5CEF47FC2E7C64B29AB14 /* SwiftPackageProductDependency */; };
+		EB1E9D35937243948FD7DF01 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = BEB5CEF47FC2E7C64B29AB14 /* UntoldEngine */; };
 		F0FD20B6A9CBB38007E2AB00 /* GameViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A114EADE7446ADC30EC21DF4 /* GameViewController.swift */; };
 		F6DAB434909FAFE903CA049B /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E8FD19F23F3FF5291D0E5BE6 /* Foundation.framework */; };
 		F9FA2D00F125B2AA7271165B /* xneg.jpg in Resources */ = {isa = PBXBuildFile; fileRef = BFAE121DB9508A9F9FF45D28 /* xneg.jpg */; };
@@ -49,23 +49,23 @@
 /* Begin PBXFileReference section */
 		1BF3EE0280875BFF845C111D /* WaterGame.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WaterGame.swift; path = Shared/WaterGame.swift; sourceTree = "<group>"; };
 		1BFC86A00118F3A39AFF52BB /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = macOS/AppDelegate.swift; sourceTree = "<group>"; };
-		444A20814B65706C528FF404 /* zpos.jpg */ = {isa = PBXFileReference; includeInIndex = 1; name = zpos.jpg; path = Resources/zpos.jpg; sourceTree = "<group>"; };
-		4782A1F323DDA298CBBCFF87 /* zneg.jpg */ = {isa = PBXFileReference; includeInIndex = 1; name = zneg.jpg; path = Resources/zneg.jpg; sourceTree = "<group>"; };
+		444A20814B65706C528FF404 /* zpos.jpg */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.jpeg; name = zpos.jpg; path = Resources/zpos.jpg; sourceTree = "<group>"; };
+		4782A1F323DDA298CBBCFF87 /* zneg.jpg */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.jpeg; name = zneg.jpg; path = Resources/zneg.jpg; sourceTree = "<group>"; };
 		53406CBD61991AC8F42EBFC6 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = iOS/Info.plist; sourceTree = "<group>"; };
-		53638FA95CB5018BECF96940 /* tiles.jpg */ = {isa = PBXFileReference; includeInIndex = 1; name = tiles.jpg; path = Resources/tiles.jpg; sourceTree = "<group>"; };
-		702CDA761A5D5DED53E96F6F /* WebGLWater-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "WebGLWater-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		7424DE0D6914F99B8BCAF8C6 /* xpos.jpg */ = {isa = PBXFileReference; includeInIndex = 1; name = xpos.jpg; path = Resources/xpos.jpg; sourceTree = "<group>"; };
+		53638FA95CB5018BECF96940 /* tiles.jpg */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.jpeg; name = tiles.jpg; path = Resources/tiles.jpg; sourceTree = "<group>"; };
+		702CDA761A5D5DED53E96F6F /* WebGLWater-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "WebGLWater-iOS.app"; path = WebGLWater.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7424DE0D6914F99B8BCAF8C6 /* xpos.jpg */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.jpeg; name = xpos.jpg; path = Resources/xpos.jpg; sourceTree = "<group>"; };
 		764C2CFAFB8C048B40F9F338 /* DemoAssets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DemoAssets.swift; path = Shared/DemoAssets.swift; sourceTree = "<group>"; };
 		8305CF5771FC5CB5D3AB39E3 /* WaterXRGame.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WaterXRGame.swift; path = visionOS/WaterXRGame.swift; sourceTree = "<group>"; };
-		83A05026F483F9D5910EC85C /* WebGLWater-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "WebGLWater-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		83A05026F483F9D5910EC85C /* WebGLWater.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WebGLWater.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A114EADE7446ADC30EC21DF4 /* GameViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GameViewController.swift; path = iOS/GameViewController.swift; sourceTree = "<group>"; };
 		A1ADAE8B530C3F29ED7EBBB8 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = macOS/Info.plist; sourceTree = "<group>"; };
 		BB77BBC36715D839F6983304 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = visionOS/Info.plist; sourceTree = "<group>"; };
-		BFAE121DB9508A9F9FF45D28 /* xneg.jpg */ = {isa = PBXFileReference; includeInIndex = 1; name = xneg.jpg; path = Resources/xneg.jpg; sourceTree = "<group>"; };
-		C1E69E765B27AB281AC7C640 /* ypos.jpg */ = {isa = PBXFileReference; includeInIndex = 1; name = ypos.jpg; path = Resources/ypos.jpg; sourceTree = "<group>"; };
+		BFAE121DB9508A9F9FF45D28 /* xneg.jpg */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.jpeg; name = xneg.jpg; path = Resources/xneg.jpg; sourceTree = "<group>"; };
+		C1E69E765B27AB281AC7C640 /* ypos.jpg */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.jpeg; name = ypos.jpg; path = Resources/ypos.jpg; sourceTree = "<group>"; };
 		CEA0C5217CF990B44F7D842A /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.14.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		D084D5C31B190805B67F046B /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = iOS/AppDelegate.swift; sourceTree = "<group>"; };
-		DC2407AD362C1A348AE76BAD /* WebGLWater-visionOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "WebGLWater-visionOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DC2407AD362C1A348AE76BAD /* WebGLWater.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WebGLWater.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DED0D76E99B0B2563F950B4D /* SceneOcclusion.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SceneOcclusion.swift; path = visionOS/SceneOcclusion.swift; sourceTree = "<group>"; };
 		E415EA5C6AC6B2F8E6D53682 /* WebGLWaterXRApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WebGLWaterXRApp.swift; path = visionOS/WebGLWaterXRApp.swift; sourceTree = "<group>"; };
 		E550126FB11BCC6F54BFE484 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = main.swift; path = macOS/main.swift; sourceTree = "<group>"; };
@@ -78,8 +78,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				C78D031F3DA967481ACDC8C9 /* Foundation.framework in Frameworks */,
-				7547FA72B9454D74E85A4578 /* BuildFile in Frameworks */,
-				730795E011DF308C486CCC39 /* BuildFile in Frameworks */,
+				7547FA72B9454D74E85A4578 /* UntoldEngine in Frameworks */,
+				730795E011DF308C486CCC39 /* UntoldEngineXR in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -88,7 +88,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F6DAB434909FAFE903CA049B /* Foundation.framework in Frameworks */,
-				EB1E9D35937243948FD7DF01 /* BuildFile in Frameworks */,
+				EB1E9D35937243948FD7DF01 /* UntoldEngine in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -97,7 +97,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6AD915349078F51A518709EB /* Cocoa.framework in Frameworks */,
-				940336E9C7BC99500DE07907 /* BuildFile in Frameworks */,
+				940336E9C7BC99500DE07907 /* UntoldEngine in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -108,7 +108,6 @@
 			isa = PBXGroup;
 			children = (
 			);
-			name = Resources;
 			path = Resources;
 			sourceTree = "<group>";
 		};
@@ -157,7 +156,6 @@
 				444A20814B65706C528FF404 /* zpos.jpg */,
 				4782A1F323DDA298CBBCFF87 /* zneg.jpg */,
 			);
-			name = WebGLWater;
 			path = WebGLWater;
 			sourceTree = "<group>";
 		};
@@ -165,7 +163,6 @@
 			isa = PBXGroup;
 			children = (
 			);
-			name = Shared;
 			path = Shared;
 			sourceTree = "<group>";
 		};
@@ -181,7 +178,6 @@
 			isa = PBXGroup;
 			children = (
 			);
-			name = visionOS;
 			path = visionOS;
 			sourceTree = "<group>";
 		};
@@ -189,16 +185,15 @@
 			isa = PBXGroup;
 			children = (
 			);
-			name = macOS;
 			path = macOS;
 			sourceTree = "<group>";
 		};
 		E4BBF9A2E21E273BA7ACC193 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				83A05026F483F9D5910EC85C /* WebGLWater-macOS.app */,
+				83A05026F483F9D5910EC85C /* WebGLWater.app */,
 				702CDA761A5D5DED53E96F6F /* WebGLWater-iOS.app */,
-				DC2407AD362C1A348AE76BAD /* WebGLWater-visionOS.app */,
+				DC2407AD362C1A348AE76BAD /* WebGLWater.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -207,7 +202,6 @@
 			isa = PBXGroup;
 			children = (
 			);
-			name = iOS;
 			path = iOS;
 			sourceTree = "<group>";
 		};
@@ -236,10 +230,10 @@
 			);
 			name = "WebGLWater-macOS";
 			packageProductDependencies = (
-				4DDA289C8FF64D118104D346 /* SwiftPackageProductDependency */,
+				4DDA289C8FF64D118104D346 /* UntoldEngine */,
 			);
 			productName = "WebGLWater-macOS";
-			productReference = 83A05026F483F9D5910EC85C /* WebGLWater-macOS.app */;
+			productReference = 83A05026F483F9D5910EC85C /* WebGLWater.app */;
 			productType = "com.apple.product-type.application";
 		};
 		AD381C8DC71E1A5E76A79F44 /* WebGLWater-iOS */ = {
@@ -256,7 +250,7 @@
 			);
 			name = "WebGLWater-iOS";
 			packageProductDependencies = (
-				BEB5CEF47FC2E7C64B29AB14 /* SwiftPackageProductDependency */,
+				BEB5CEF47FC2E7C64B29AB14 /* UntoldEngine */,
 			);
 			productName = "WebGLWater-iOS";
 			productReference = 702CDA761A5D5DED53E96F6F /* WebGLWater-iOS.app */;
@@ -276,11 +270,11 @@
 			);
 			name = "WebGLWater-visionOS";
 			packageProductDependencies = (
-				60345C623F9D5C84C11D300B /* SwiftPackageProductDependency */,
-				3C8B09919BB527F26454085B /* SwiftPackageProductDependency */,
+				60345C623F9D5C84C11D300B /* UntoldEngine */,
+				3C8B09919BB527F26454085B /* UntoldEngineXR */,
 			);
 			productName = "WebGLWater-visionOS";
-			productReference = DC2407AD362C1A348AE76BAD /* WebGLWater-visionOS.app */;
+			productReference = DC2407AD362C1A348AE76BAD /* WebGLWater.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -302,7 +296,7 @@
 			);
 			mainGroup = 44E94FE00A72F38D2E4E8EDA;
 			packageReferences = (
-				8CB95F6F74E80D67EAAF0400 /* RemoteSwiftPackageReference */,
+				8CB95F6F74E80D67EAAF0400 /* XCLocalSwiftPackageReference "../../UntoldEngine" */,
 			);
 			productRefGroup = E4BBF9A2E21E273BA7ACC193 /* Products */;
 			projectDirPath = "";
@@ -459,7 +453,10 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WebGLWater/iOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.WebGLWater;
 				PRODUCT_NAME = WebGLWater;
@@ -537,12 +534,16 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53X2422NYU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WebGLWater/visionOS/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.WebGLWater;
+				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.WebGLWater;
 				PRODUCT_NAME = WebGLWater;
 				SDKROOT = xros;
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
@@ -560,10 +561,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WebGLWater/macOS/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.WebGLWater;
@@ -585,7 +590,10 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WebGLWater/iOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.WebGLWater;
 				PRODUCT_NAME = WebGLWater;
@@ -604,12 +612,16 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53X2422NYU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WebGLWater/visionOS/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.WebGLWater;
+				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.WebGLWater;
 				PRODUCT_NAME = WebGLWater;
 				SDKROOT = xros;
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
@@ -628,10 +640,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WebGLWater/macOS/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.WebGLWater;
@@ -683,31 +699,31 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		8CB95F6F74E80D67EAAF0400 /* RemoteSwiftPackageReference */ = {
+		8CB95F6F74E80D67EAAF0400 /* XCLocalSwiftPackageReference "../../UntoldEngine" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "../../UntoldEngine";
+			relativePath = ../../UntoldEngine;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		3C8B09919BB527F26454085B /* SwiftPackageProductDependency */ = {
+		3C8B09919BB527F26454085B /* UntoldEngineXR */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8CB95F6F74E80D67EAAF0400 /* RemoteSwiftPackageReference */;
+			package = 8CB95F6F74E80D67EAAF0400 /* XCLocalSwiftPackageReference "../../UntoldEngine" */;
 			productName = UntoldEngineXR;
 		};
-		4DDA289C8FF64D118104D346 /* SwiftPackageProductDependency */ = {
+		4DDA289C8FF64D118104D346 /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8CB95F6F74E80D67EAAF0400 /* RemoteSwiftPackageReference */;
+			package = 8CB95F6F74E80D67EAAF0400 /* XCLocalSwiftPackageReference "../../UntoldEngine" */;
 			productName = UntoldEngine;
 		};
-		60345C623F9D5C84C11D300B /* SwiftPackageProductDependency */ = {
+		60345C623F9D5C84C11D300B /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8CB95F6F74E80D67EAAF0400 /* RemoteSwiftPackageReference */;
+			package = 8CB95F6F74E80D67EAAF0400 /* XCLocalSwiftPackageReference "../../UntoldEngine" */;
 			productName = UntoldEngine;
 		};
-		BEB5CEF47FC2E7C64B29AB14 /* SwiftPackageProductDependency */ = {
+		BEB5CEF47FC2E7C64B29AB14 /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8CB95F6F74E80D67EAAF0400 /* RemoteSwiftPackageReference */;
+			package = 8CB95F6F74E80D67EAAF0400 /* XCLocalSwiftPackageReference "../../UntoldEngine" */;
 			productName = UntoldEngine;
 		};
 /* End XCSwiftPackageProductDependency section */
