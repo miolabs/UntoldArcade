@@ -1,0 +1,455 @@
+//
+//  SaberXRGame.swift  (visionOS)
+//  CoolSaber
+//
+//  Per-frame duel logic, driven from the XR render thread:
+//    PSVR2 poses → blade segments → plugin slots; trigger edges → ignition;
+//    segment-segment distance → clash sparks/haptics/audio; SharePlay mailbox
+//    in both directions. Solo practice works with no session at all.
+//
+//  Coordinates: the engine's XR world frame is ARKit's world origin (on the
+//  floor beneath the user at immersive-space open). PSVR2 poses arrive in the
+//  same frame. With spatial Personas in a group immersive space the origin is
+//  shared across participants, so remote blade poses render raw; otherwise
+//  they are re-based onto a fixed opponent anchor 2 m in front, facing us.
+//
+
+import CoolSaber
+import Foundation
+import simd
+import UntoldEngine
+
+/// Everything worth tweaking on hardware lives here.
+struct SaberTuning {
+    /// Blade start relative to the controller pose (controller-local metres).
+    var gripOffsetLocal = SIMD3<Float>(0, 0.02, -0.08)
+    /// Blade direction in controller-local space (-Z points away from the grip).
+    var bladeAxisLocal = SIMD3<Float>(0, 0, -1)
+    var fullLength: Float = 0.95
+    var coreRadius: Float = 0.02
+    var clashTriggerDistance: Float = 0.05
+    var remoteColor = SIMD3<Float>(1.0, 0.22, 0.15)
+    var glowIntensity: Float = 4
+    /// Keep an untracked blade at its last pose this long before retracting.
+    var untrackedGrace: Float = 1.0
+}
+
+final class SaberXRGame {
+    private struct HandState {
+        var ignitedTarget = false
+        var ignition = CoolSaberIgnition()
+        var hilt = SIMD3<Float>(0, 1.1, -0.4)
+        var direction = SIMD3<Float>(0, 1, 0)
+        var lastTip = SIMD3<Float>(0, 1.1, -0.4)
+        var tipSpeed: Float = 0
+        var untrackedTime: Float = 0
+        var everTracked = false
+        var wasTriggerPressed = false
+    }
+
+    private struct RemoteHandState {
+        var ignition = CoolSaberIgnition()
+        var hilt = SIMD3<Float>(0, 0, 0)
+        var direction = SIMD3<Float>(0, 1, 0)
+        var wire = SaberBladeWire()
+        var hasPose = false
+    }
+
+    var tuning = SaberTuning()
+
+    private let mailbox = SaberDuelMailbox.shared
+    private let audio = SaberAudio()
+    private let haptics = SaberHaptics()
+
+    private var localHands: [HandState] = [HandState(), HandState()] // left, right
+    private var remoteHands: [RemoteHandState] = [RemoteHandState(), RemoteHandState()]
+    private var clashDetector: CoolSaberClashDetector
+    private var wasAPressed = false
+    private var sequence: UInt32 = 0
+    private var sendAccumulator: Float = 0
+    private var lastLocalClashUptime: TimeInterval = 0
+    private var loggedControllerState = false
+    private var elapsed: Float = 0
+
+    init() {
+        clashDetector = CoolSaberClashDetector(triggerDistance: 0.05)
+    }
+
+    func start() {
+        clashDetector.triggerDistance = tuning.clashTriggerDistance
+
+        // Without these the engine drops all spatial input events.
+        registerXREvents()
+        setSceneReady(true)
+
+        audio.start()
+        haptics.start()
+
+        print(
+            "CoolSaber: starting — trigger ignites a hand's blade, Cross/A toggles both. "
+                + "PSVR2 connected: \(isPSVR2SenseConnected())"
+        )
+    }
+
+    func shutdown() {
+        audio.stop()
+        haptics.stop()
+        clearCoolSaberScene()
+    }
+
+    var localColor: SIMD3<Float> {
+        SaberXRHolder.shared.localColor
+    }
+
+    // MARK: - Per frame
+
+    func update(deltaTime: Float) {
+        let dt = min(max(deltaTime, 0), 1.0 / 30.0)
+        elapsed += dt
+
+        updateLocalInput(dt: dt)
+        updateRemote(dt: dt)
+        publishBlades()
+        detectClashes(dt: dt)
+        updateAudio()
+        sendPoses(dt: dt)
+    }
+
+    func handleInput() {}
+
+    // MARK: - Local controllers
+
+    private func updateLocalInput(dt: Float) {
+        let sense = getPSVR2SenseState()
+        let pad = getGameControllerState()
+
+        if sense.isConnected, !loggedControllerState {
+            loggedControllerState = true
+            // One-shot dump so the per-hand trigger mapping is verifiable on device.
+            print(
+                "CoolSaber: PSVR2 connected — LT=\(pad.leftTriggerValue) RT=\(pad.rightTriggerValue) "
+                    + "A=\(pad.aPressed) leftTracked=\(sense.left.isTracked) rightTracked=\(sense.right.isTracked)"
+            )
+        }
+
+        // Per-hand trigger edges. The engine maps each wand's side-prefixed
+        // trigger elements into the shared pad state; if that mapping ever
+        // fails on real firmware, the Cross/A fallback below still works.
+        let triggers = [pad.leftTriggerPressed, pad.rightTriggerPressed]
+        for hand in 0 ..< 2 {
+            if triggers[hand], !localHands[hand].wasTriggerPressed {
+                toggleIgnite(hand: hand)
+            }
+            localHands[hand].wasTriggerPressed = triggers[hand]
+        }
+        if pad.aPressed, !wasAPressed {
+            let anyOn = localHands.contains { $0.ignitedTarget }
+            for hand in 0 ..< 2 where localHands[hand].ignitedTarget == anyOn {
+                toggleIgnite(hand: hand)
+            }
+        }
+        wasAPressed = pad.aPressed
+
+        let poses = [sense.left, sense.right]
+        for hand in 0 ..< 2 {
+            var state = localHands[hand]
+            if poses[hand].isTracked {
+                state.everTracked = true
+                state.untrackedTime = 0
+                state.hilt = poses[hand].position
+                    + poses[hand].orientation.act(tuning.gripOffsetLocal)
+                state.direction = simd_normalize(
+                    poses[hand].orientation.act(tuning.bladeAxisLocal)
+                )
+            } else if state.everTracked {
+                // Hold the last pose briefly, then retract rather than flicker.
+                state.untrackedTime += dt
+                if state.untrackedTime > tuning.untrackedGrace {
+                    state.ignitedTarget = false
+                }
+            }
+            state.ignition.update(deltaTime: dt, ignited: state.ignitedTarget)
+
+            let length = state.ignition.easedProgress * tuning.fullLength
+            let tip = state.hilt + state.direction * length
+            state.tipSpeed = dt > 0 ? simd_distance(tip, state.lastTip) / dt : 0
+            state.lastTip = tip
+            localHands[hand] = state
+        }
+
+        #if targetEnvironment(simulator)
+        driveSimulatorDebugBlades()
+        #endif
+    }
+
+    private func toggleIgnite(hand: Int) {
+        localHands[hand].ignitedTarget.toggle()
+        let ignited = localHands[hand].ignitedTarget
+        if ignited {
+            audio.playIgnite()
+        } else {
+            audio.playRetract()
+        }
+        let saberHand: SaberHand = hand == 0 ? .left : .right
+        haptics.ignitePulse(hand: saberHand)
+        mailbox.pushLocalEvent(
+            .ignite(hand: saberHand, ignited: ignited, color: localColor)
+        )
+    }
+
+    #if targetEnvironment(simulator)
+    /// The simulator has no PSVR2: swing two auto-ignited debug blades so the
+    /// full render/clash path is verifiable without hardware.
+    private func driveSimulatorDebugBlades() {
+        for hand in 0 ..< 2 {
+            var state = localHands[hand]
+            if elapsed > 1.5 { state.ignitedTarget = true }
+            let side: Float = hand == 0 ? -1 : 1
+            let swing = sin(elapsed * 1.6 + (hand == 0 ? 0 : 0.9))
+            state.hilt = SIMD3<Float>(side * 0.28, 1.05, -0.85)
+            state.direction = simd_normalize(
+                SIMD3<Float>(-side * (0.45 + 0.35 * swing), 1.0, 0.15 * swing)
+            )
+            localHands[hand] = state
+        }
+    }
+    #endif
+
+    // MARK: - Remote opponent
+
+    private func updateRemote(dt: Float) {
+        for event in mailbox.takeRemoteEvents() {
+            switch event {
+            case .ignite(_, let ignited, _):
+                if ignited { audio.playIgnite() } else { audio.playRetract() }
+            case .clash(let position, let intensity):
+                // Dedupe: our own detector probably saw the same contact.
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - lastLocalClashUptime > 0.15 {
+                    spawnCoolSaberClashSpark(at: position, intensity: intensity)
+                    audio.playClash(intensity: intensity)
+                }
+            }
+        }
+
+        let snapshot = mailbox.remoteSnapshot()
+        let now = ProcessInfo.processInfo.systemUptime
+        guard mailbox.sessionActive, mailbox.opponentPresent,
+              let packet = snapshot.packet,
+              now - snapshot.arrivalUptime < 2.0
+        else {
+            for hand in 0 ..< 2 {
+                remoteHands[hand].hasPose = false
+                remoteHands[hand].ignition.update(deltaTime: dt, ignited: false)
+            }
+            return
+        }
+
+        let stale = now - snapshot.arrivalUptime > 0.5
+        let wires = [packet.left, packet.right]
+        for hand in 0 ..< 2 {
+            var state = remoteHands[hand]
+            var wire = wires[hand]
+
+            if !mailbox.isSpatial {
+                // No shared origin: re-base onto the opponent anchor 2 m in
+                // front of us, turned to face us. Both origins sit on their
+                // respective floors, so heights roughly line up.
+                wire.hilt = Self.opponentAnchor(wire.hilt)
+                wire.direction = Self.opponentAnchorRotation(wire.direction)
+            }
+
+            if !state.hasPose {
+                state.hilt = wire.hilt
+                state.direction = wire.direction
+                state.hasPose = true
+            } else if !stale {
+                // Exponential smoothing toward the newest packet.
+                let alpha = 1 - exp(-20 * dt)
+                state.hilt += (wire.hilt - state.hilt) * alpha
+                let blended = simd_mix(state.direction, wire.direction, SIMD3(repeating: alpha))
+                state.direction = simd_length_squared(blended) > 1e-8
+                    ? simd_normalize(blended)
+                    : wire.direction
+            }
+            state.wire = wire
+            state.ignition.update(deltaTime: dt, ignited: wire.ignited)
+            remoteHands[hand] = state
+        }
+    }
+
+    /// translate(0, 0, -2) · rotateY(π) applied to a point.
+    private static func opponentAnchor(_ point: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3<Float>(-point.x, point.y, -point.z - 2)
+    }
+
+    private static func opponentAnchorRotation(_ vector: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3<Float>(-vector.x, vector.y, -vector.z)
+    }
+
+    // MARK: - Feeding the renderer
+
+    private func localBladeLength(_ hand: Int) -> Float {
+        localHands[hand].ignition.easedProgress * tuning.fullLength
+    }
+
+    private func remoteBladeLength(_ hand: Int) -> Float {
+        remoteHands[hand].ignition.easedProgress * tuning.fullLength
+    }
+
+    private func publishBlades() {
+        let localSlots: [CoolSaberBladeSlot] = [.localLeft, .localRight]
+        let remoteSlots: [CoolSaberBladeSlot] = [.remoteLeft, .remoteRight]
+
+        for hand in 0 ..< 2 {
+            let state = localHands[hand]
+            let length = localBladeLength(hand)
+            setCoolSaberBlade(
+                localSlots[hand],
+                length > 0.01
+                    ? CoolSaberBladeDesc(
+                        hilt: state.hilt,
+                        direction: state.direction,
+                        length: length,
+                        radius: tuning.coreRadius,
+                        color: localColor,
+                        glowIntensity: tuning.glowIntensity
+                    )
+                    : nil
+            )
+
+            let remote = remoteHands[hand]
+            let remoteLength = remoteBladeLength(hand)
+            setCoolSaberBlade(
+                remoteSlots[hand],
+                remote.hasPose && remoteLength > 0.01
+                    ? CoolSaberBladeDesc(
+                        hilt: remote.hilt,
+                        direction: remote.direction,
+                        length: remoteLength,
+                        radius: tuning.coreRadius,
+                        color: tuning.remoteColor,
+                        glowIntensity: tuning.glowIntensity
+                    )
+                    : nil
+            )
+        }
+    }
+
+    // MARK: - Clash detection
+
+    private struct BladeSegment {
+        var slot: CoolSaberBladeSlot
+        var start: SIMD3<Float>
+        var end: SIMD3<Float>
+        var tipVelocityRef: SIMD3<Float>
+        var isLocal: Bool
+        var hand: Int
+    }
+
+    private func detectClashes(dt: Float) {
+        var segments: [BladeSegment] = []
+        for hand in 0 ..< 2 {
+            let length = localBladeLength(hand)
+            if length > 0.05 {
+                let state = localHands[hand]
+                segments.append(BladeSegment(
+                    slot: hand == 0 ? .localLeft : .localRight,
+                    start: state.hilt,
+                    end: state.hilt + state.direction * length,
+                    tipVelocityRef: state.lastTip,
+                    isLocal: true,
+                    hand: hand
+                ))
+            }
+            let remoteLength = remoteBladeLength(hand)
+            if remoteHands[hand].hasPose, remoteLength > 0.05 {
+                let state = remoteHands[hand]
+                segments.append(BladeSegment(
+                    slot: hand == 0 ? .remoteLeft : .remoteRight,
+                    start: state.hilt,
+                    end: state.hilt + state.direction * remoteLength,
+                    tipVelocityRef: .zero,
+                    isLocal: false,
+                    hand: hand
+                ))
+            }
+        }
+
+        guard segments.count >= 2 else { return }
+        for i in 0 ..< segments.count - 1 {
+            for j in (i + 1) ..< segments.count {
+                let a = segments[i]
+                let b = segments[j]
+                guard a.isLocal || b.isLocal else { continue }
+                let result = CoolSaberMath.segmentSegmentClosest(
+                    a.start, a.end, b.start, b.end
+                )
+                let pairKey = a.slot.rawValue * 4 + b.slot.rawValue
+                guard clashDetector.update(
+                    pairKey: pairKey,
+                    distance: result.distance,
+                    deltaTime: dt
+                ) else { continue }
+
+                let contact = (result.pointA + result.pointB) * 0.5
+                // Faster combined tip motion → brighter spark, harder kick.
+                let speed = max(localHands[0].tipSpeed, localHands[1].tipSpeed)
+                let intensity = 6 + min(speed, 6) * 1.5
+
+                lastLocalClashUptime = ProcessInfo.processInfo.systemUptime
+                spawnCoolSaberClashSpark(at: contact, intensity: intensity)
+                audio.playClash(intensity: intensity)
+                for segment in [a, b] where segment.isLocal {
+                    haptics.clashPulse(
+                        hand: segment.hand == 0 ? .left : .right,
+                        intensity: min(0.5 + speed * 0.12, 1)
+                    )
+                }
+                if mailbox.sessionActive {
+                    mailbox.pushLocalEvent(.clash(position: contact, intensity: intensity))
+                }
+            }
+        }
+    }
+
+    // MARK: - Audio + network
+
+    private func updateAudio() {
+        for hand in 0 ..< 2 {
+            audio.setHum(
+                slot: hand,
+                ignited: localBladeLength(hand) > 0.05,
+                tipSpeed: localHands[hand].tipSpeed
+            )
+            audio.setHum(
+                slot: 2 + hand,
+                ignited: remoteHands[hand].hasPose && remoteBladeLength(hand) > 0.05,
+                tipSpeed: 2
+            )
+        }
+    }
+
+    private func sendPoses(dt: Float) {
+        guard mailbox.sessionActive else { return }
+        sendAccumulator += dt
+        guard sendAccumulator >= 1.0 / 45.0 else { return }
+        sendAccumulator = 0
+
+        sequence &+= 1
+        func wire(_ hand: Int) -> SaberBladeWire {
+            SaberBladeWire(
+                hilt: localHands[hand].hilt,
+                direction: localHands[hand].direction,
+                length: localBladeLength(hand),
+                ignited: localHands[hand].ignitedTarget
+            )
+        }
+        mailbox.publishLocalPoses(SaberPosePacket(
+            sequence: sequence,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            left: wire(0),
+            right: wire(1)
+        ))
+    }
+}
