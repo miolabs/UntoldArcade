@@ -186,13 +186,34 @@
             // heading directly toward the goal; turning clips replace this
             // once real mocap lands.
             if distance > Locomotion.stopDistance {
-                alignOrientation(
-                    entityId: zombie,
-                    targetDirection: simd_normalize(toTarget),
-                    deltaTime: deltaTime,
-                    turnSpeed: 2.5
-                )
+                turnToward(direction: toTarget / distance, deltaTime: deltaTime)
             }
+        }
+
+        /// Rotates the character's yaw toward `direction` along the shortest
+        /// arc, capped at `turnSpeed` rad/s. Explicit yaw-only control: the
+        /// engine's alignOrientation mixes orientation-matrix columns, which
+        /// degenerates for large heading changes (a target passing behind
+        /// the character), and it expects physics components this entity
+        /// doesn't carry.
+        private func turnToward(direction: simd_float3, deltaTime: Float) {
+            let turnSpeed: Float = 3.0 // rad/s
+
+            let forward = getForwardAxisVector(entityId: zombie)
+            let currentYaw = atan2f(forward.x, forward.z)
+            let targetYaw = atan2f(direction.x, direction.z)
+
+            // Shortest signed arc, wrapped to (-π, π].
+            var delta = fmodf(targetYaw - currentYaw + .pi, 2 * .pi)
+            if delta < 0 { delta += 2 * .pi }
+            delta -= .pi
+
+            let maxStep = turnSpeed * deltaTime
+            let step = max(-maxStep, min(maxStep, delta))
+            rotateTo(
+                entityId: zombie,
+                rotation: simd_quatf(angle: currentYaw + step, axis: simd_float3(0, 1, 0))
+            )
         }
 
         private func moveTarget(deltaTime: Float) {
