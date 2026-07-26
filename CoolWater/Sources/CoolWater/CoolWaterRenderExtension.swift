@@ -341,10 +341,20 @@ final class CoolWaterRenderExtension: RenderExtension, @unchecked Sendable {
     ) {
         let width = max(1, pipeline.threadExecutionWidth)
         let height = max(1, pipeline.maxTotalThreadsPerThreadgroup / width)
+        #if targetEnvironment(simulator)
+        // The simulator GPU doesn't support non-uniform threadgroup sizes
+        // (dispatchThreads). Round up to whole threadgroups instead;
+        // out-of-bounds texture writes are ignored.
+        encoder.dispatchThreadgroups(
+            MTLSize(width: (256 + width - 1) / width, height: (256 + height - 1) / height, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: width, height: height, depth: 1)
+        )
+        #else
         encoder.dispatchThreads(
             MTLSize(width: 256, height: 256, depth: 1),
             threadsPerThreadgroup: MTLSize(width: width, height: height, depth: 1)
         )
+        #endif
         encoder.endEncoding()
         currentTextureIsA.toggle()
     }
