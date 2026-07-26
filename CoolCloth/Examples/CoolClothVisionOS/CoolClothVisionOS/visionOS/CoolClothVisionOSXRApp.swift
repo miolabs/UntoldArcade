@@ -19,6 +19,9 @@ final class XRHolder {
     var xr: UntoldEngineXR?
     var game: ClothXRGame?
     var renderThread: Thread?
+    /// Style selected in the control window; applied by the game on start and
+    /// live whenever it changes afterwards.
+    var style: ClothStyle = .silk
 }
 
 struct ClothLayerConfiguration: CompositorLayerConfiguration {
@@ -33,6 +36,23 @@ struct ClothLayerConfiguration: CompositorLayerConfiguration {
 /// UI-facing knobs; every change is pushed straight into the CoolCloth API.
 @Observable
 final class ClothControls {
+    var style: ClothStyle = .silk {
+        didSet {
+            XRHolder.shared.style = style
+            XRHolder.shared.game?.apply(style: style)
+            // A flag belongs on a pole in a good breeze; plain silk hangs.
+            switch style {
+            case .silk:
+                pinMode = .topEdge
+                windStrength = 0.35
+                gustiness = 0.5
+            case .spainFlag:
+                pinMode = .leftEdge
+                windStrength = 1.2
+                gustiness = 0.8
+            }
+        }
+    }
     var material: CoolClothMaterialPreset = .silk {
         didSet { setCoolClothMaterial(material) }
     }
@@ -88,6 +108,14 @@ struct CoolClothVisionOSXRApp: App {
                 Divider()
 
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
+                    GridRow {
+                        Text("Fabric")
+                        Picker("Fabric", selection: $controls.style) {
+                            Text("Silk").tag(ClothStyle.silk)
+                            Text("Spain 🇪🇸").tag(ClothStyle.spainFlag)
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                    }
                     GridRow {
                         Text("Material")
                         Picker("Material", selection: $controls.material) {

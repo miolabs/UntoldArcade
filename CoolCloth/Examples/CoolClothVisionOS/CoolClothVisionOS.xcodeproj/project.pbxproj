@@ -14,6 +14,7 @@
 		AEEF779EA5664684FED5A349 /* ClothXRGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8305CF5771FC5CB5D3AB39E3 /* ClothXRGame.swift */; };
 		C00000000000000000000001 /* CoolCloth in Frameworks */ = {isa = PBXBuildFile; productRef = C00000000000000000000003 /* CoolCloth */; };
 		E86F705EBDEC6F06F3A9548D /* CoolClothVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E415EA5C6AC6B2F8E6D53682 /* CoolClothVisionOSXRApp.swift */; };
+		F100000000000000000000A2 /* spain_flag.png in Resources */ = {isa = PBXBuildFile; fileRef = F100000000000000000000A1 /* spain_flag.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +22,7 @@
 		BB77BBC36715D839F6983304 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = visionOS/Info.plist; sourceTree = "<group>"; };
 		DC2407AD362C1A348AE76BAD /* CoolClothVisionOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoolClothVisionOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E415EA5C6AC6B2F8E6D53682 /* CoolClothVisionOSXRApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CoolClothVisionOSXRApp.swift; path = visionOS/CoolClothVisionOSXRApp.swift; sourceTree = "<group>"; };
+		F100000000000000000000A1 /* spain_flag.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = spain_flag.png; path = Resources/spain_flag.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +56,7 @@
 				E415EA5C6AC6B2F8E6D53682 /* CoolClothVisionOSXRApp.swift */,
 				8305CF5771FC5CB5D3AB39E3 /* ClothXRGame.swift */,
 				BB77BBC36715D839F6983304 /* Info.plist */,
+				F100000000000000000000A1 /* spain_flag.png */,
 			);
 			path = CoolClothVisionOS;
 			sourceTree = "<group>";
@@ -136,6 +139,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F100000000000000000000A2 /* spain_flag.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

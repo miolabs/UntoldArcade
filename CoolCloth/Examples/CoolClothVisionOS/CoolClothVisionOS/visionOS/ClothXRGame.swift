@@ -11,8 +11,17 @@
 //
 
 import simd
+import Metal
+import MetalKit
 import UntoldEngine
 import CoolCloth
+
+/// Visual presets for the sheet. Silk is the plain deep-red fabric; the flag
+/// styles map a texture once across the cloth and widen it to flag proportions.
+enum ClothStyle {
+    case silk
+    case spainFlag
+}
 
 final class ClothXRGame {
 
@@ -28,8 +37,10 @@ final class ClothXRGame {
     private var floorDetected = false
     private var clothCenterXZ = simd_float2(0.0, -1.2)  // ~1.2 m in front of the start pose
     private var clothScale: Float = 0.75                // half-side → 1.5 m sheet
+    private var clothAspectX: Float = 1.0               // 1.5 for 3:2 flag proportions
     private var clothYaw: Float = 0.0
     private var placed = false
+    private var flagTexture: MTLTexture?
 
     // Ball state (world space).
     private var ballWorld = simd_float3(0.35, 1.0, -0.9)
@@ -44,13 +55,18 @@ final class ClothXRGame {
     private var wasPinching = false
 
     func start() {
+        let style = XRHolder.shared.style
         setCoolClothLightDirection(simd_float3(0.6, 1.4, 0.8))
         setCoolClothGravity(simd_float3(0, gravity, 0))
         setCoolClothMaterial(.silk)
-        setCoolClothWind(directionWorld: simd_float3(0.2, 0, 1), strength: 0.35, gustiness: 0.5)
+        setCoolClothWind(
+            directionWorld: simd_float3(0.2, 0, 1),
+            strength: style == .spainFlag ? 1.2 : 0.35,
+            gustiness: style == .spainFlag ? 0.8 : 0.5
+        )
         setCoolClothBallVisible(true)
-        resetCoolCloth(pinMode: .topEdge)
-        updateModel()
+        apply(style: style)
+        resetCoolCloth(pinMode: style == .spainFlag ? .leftEdge : .topEdge)
         updateBall()
 
         // Required for spatial input: the engine's onSpatialEvent handler drops all
@@ -80,8 +96,59 @@ final class ClothXRGame {
     private func model() -> simd_float4x4 {
         let t = simd_float4x4(translation: clothCenter())
         let r = simd_float4x4(rotationY: clothYaw)
-        let s = simd_float4x4(scale: simd_float3(clothScale, clothScale, clothScale))
+        let s = simd_float4x4(
+            scale: simd_float3(clothScale * clothAspectX, clothScale, clothScale)
+        )
         return simd_mul(simd_mul(t, r), s)
+    }
+
+    // MARK: - Styles
+
+    /// Applies a visual style. The pin mode is owned by the UI picker, so the
+    /// caller resets the cloth separately after switching.
+    func apply(style: ClothStyle) {
+        switch style {
+        case .silk:
+            clothAspectX = 1.0
+            setCoolClothFabricTexture(nil)
+            setCoolClothColors(
+                front: simd_float3(0.62, 0.07, 0.13),
+                back: simd_float3(0.42, 0.05, 0.10),
+                sheen: simd_float3(1.0, 0.75, 0.72),
+                sheenIntensity: 0.35
+            )
+        case .spainFlag:
+            if flagTexture == nil {
+                flagTexture = Self.loadTexture(named: "spain_flag")
+            }
+            clothAspectX = 1.5   // real flag proportions (2:3)
+            // The texture carries the color: white base shows it unmodified,
+            // the back face is dimmed slightly like light through fabric.
+            setCoolClothFabricTexture(flagTexture, tiling: 1.0)
+            setCoolClothColors(
+                front: simd_float3(1.0, 1.0, 1.0),
+                back: simd_float3(0.78, 0.78, 0.78),
+                sheen: simd_float3(1.0, 0.95, 0.85),
+                sheenIntensity: 0.22
+            )
+        }
+        updateModel()
+    }
+
+    private static func loadTexture(named name: String) -> MTLTexture? {
+        guard let device = MTLCreateSystemDefaultDevice(),
+              let url = Bundle.main.url(forResource: name, withExtension: "png") else {
+            print("CoolCloth: missing texture \(name).png")
+            return nil
+        }
+        let loader = MTKTextureLoader(device: device)
+        let options: [MTKTextureLoader.Option: Any] = [
+            .SRGB: true,
+            .generateMipmaps: true,
+            .textureUsage: NSNumber(value: MTLTextureUsage([.shaderRead]).rawValue),
+            .textureStorageMode: NSNumber(value: MTLStorageMode.private.rawValue),
+        ]
+        return try? loader.newTexture(URL: url, options: options)
     }
 
     private func updateModel() {
