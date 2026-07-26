@@ -77,18 +77,52 @@
 
     private struct CoolZombieView: View {
         let renderer: UntoldRenderer
+        @State private var isPlaying = false
 
         var body: some View {
-            ZStack(alignment: .topLeading) {
+            ZStack {
                 SceneView(renderer: renderer)
-                Text("Motion matching: the character picks clips by itself — no state machine.")
-                    .font(.caption)
-                    .padding(8)
-                    .background(.black.opacity(0.5))
+
+                if isPlaying {
+                    // Minimal overlay while running so recordings stay clean.
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            playPauseButton(systemName: "pause.fill")
+                                .padding(16)
+                        }
+                    }
+                } else {
+                    VStack(spacing: 16) {
+                        Text("CoolZombie")
+                            .font(.title.bold())
+                        Text("Motion matching: the character picks clips by itself — no state machine.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        playPauseButton(systemName: "play.fill")
+                    }
+                    .padding(28)
+                    .background(.black.opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
                     .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .padding(12)
+                }
             }
+        }
+
+        private func playPauseButton(systemName: String) -> some View {
+            Button {
+                isPlaying.toggle()
+                gameMode = isPlaying
+            } label: {
+                Image(systemName: systemName)
+                    .font(.title2)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(.black.opacity(0.45)))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.space, modifiers: [])
         }
     }
 #endif

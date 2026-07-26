@@ -58,7 +58,9 @@
         // MARK: - Setup
 
         private func configureEngine() {
-            gameMode = true
+            // Starts paused; the play button (or Space) flips gameMode so a
+            // screen recording can be armed on a clean still frame.
+            gameMode = false
             setSceneReady(false)
             if let resources = Bundle.module.resourceURL {
                 setEngine(.assetBasePath(resources))
