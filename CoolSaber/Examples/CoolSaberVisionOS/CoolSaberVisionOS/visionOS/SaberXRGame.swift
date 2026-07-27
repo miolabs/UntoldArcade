@@ -279,9 +279,14 @@ final class SaberXRGame {
         }
 
         let poses = [sense.left, sense.right]
+        var autoIgnite: [Int] = []
         for hand in 0 ..< 2 {
             var state = localHands[hand]
             if poses[hand].isTracked {
+                // First sight of this wand: light it up, so entering the arena
+                // gives immediate feedback (mixed immersion shows nothing at
+                // all otherwise). The trigger retracts it as usual.
+                if !state.everTracked { autoIgnite.append(hand) }
                 state.everTracked = true
                 state.untrackedTime = 0
                 state.hilt = poses[hand].position
@@ -303,6 +308,9 @@ final class SaberXRGame {
             state.tipSpeed = dt > 0 ? simd_distance(tip, state.lastTip) / dt : 0
             state.lastTip = tip
             localHands[hand] = state
+        }
+        for hand in autoIgnite where !localHands[hand].ignitedTarget {
+            toggleIgnite(hand: hand)
         }
 
         #if targetEnvironment(simulator)

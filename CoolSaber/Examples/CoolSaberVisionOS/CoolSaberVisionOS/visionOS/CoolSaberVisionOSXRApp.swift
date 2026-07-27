@@ -21,6 +21,8 @@ final class SaberXRHolder: @unchecked Sendable {
     var xr: UntoldEngineXR?
     var game: SaberXRGame?
     var renderThread: Thread?
+    /// Main-actor flag: the immersive space is currently open and rendering.
+    var spaceOpen = false
 
     private let lock = NSLock()
     private var localColorStorage = SIMD3<Float>(0.35, 0.55, 1.0)
@@ -59,7 +61,6 @@ struct CoolSaberVisionOSXRApp: App {
     @State private var immersionStyle: ImmersionStyle = .mixed
     @State private var sessionController = SaberSessionController()
     @State private var bladeColorID = "blue"
-    @State private var immersed = false
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -70,8 +71,8 @@ struct CoolSaberVisionOSXRApp: App {
 
                 Button {
                     Task {
-                        await openImmersiveSpace(id: "Saber")
-                        immersed = true
+                        let result = await openImmersiveSpace(id: "Saber")
+                        print("CoolSaber: openImmersiveSpace → \(String(describing: result))")
                     }
                 } label: {
                     Label("Enter the Duel Arena", systemImage: "sparkles")
@@ -81,7 +82,7 @@ struct CoolSaberVisionOSXRApp: App {
                 #if targetEnvironment(simulator)
                 // The simulator has no controllers: enter directly and watch
                 // the auto-swinging debug blades.
-                .task { await openImmersiveSpace(id: "Saber"); immersed = true }
+                .task { _ = await openImmersiveSpace(id: "Saber") }
                 #endif
 
                 Divider()
@@ -133,12 +134,10 @@ struct CoolSaberVisionOSXRApp: App {
             .onChange(of: sessionController.groupImmersionActive) { _, active in
                 guard let active else { return }
                 Task {
-                    if active, !immersed {
-                        await openImmersiveSpace(id: "Saber")
-                        immersed = true
-                    } else if !active, immersed {
+                    if active, !SaberXRHolder.shared.spaceOpen {
+                        _ = await openImmersiveSpace(id: "Saber")
+                    } else if !active, SaberXRHolder.shared.spaceOpen {
                         await dismissImmersiveSpace()
-                        immersed = false
                     }
                 }
             }
@@ -148,11 +147,15 @@ struct CoolSaberVisionOSXRApp: App {
 
         ImmersiveSpace(id: "Saber") {
             CompositorLayer(configuration: SaberLayerConfiguration()) { layerRenderer in
-                guard SaberXRHolder.shared.xr == nil else { return }
+                guard SaberXRHolder.shared.xr == nil else {
+                    print("CoolSaber: immersive space reopened before teardown finished")
+                    return
+                }
                 guard installCoolSaber() else { return }
 
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 SaberXRHolder.shared.xr = xr
+                SaberXRHolder.shared.spaceOpen = true
                 xr.setImmersionMode(xrImmersionMode: .mixed)
 
                 // The CompositorLayer renderer closure is @MainActor, so set up
@@ -169,6 +172,20 @@ struct CoolSaberVisionOSXRApp: App {
                 let thread = Thread {
                     xr.start()
                     xr.runLoop()
+                    // The layer was invalidated: the space closed (crown press,
+                    // SharePlay transition, system dismiss). Tear everything
+                    // down so the next open rebuilds cleanly instead of hitting
+                    // a dead renderer.
+                    game.shutdown()
+                    Task { @MainActor in
+                        SaberXRHolder.shared.spaceOpen = false
+                        shutdownUntoldEngineXR(xr) {
+                            SaberXRHolder.shared.xr = nil
+                            SaberXRHolder.shared.game = nil
+                            SaberXRHolder.shared.renderThread = nil
+                            print("CoolSaber: immersive space torn down, ready to reopen")
+                        }
+                    }
                 }
                 thread.name = "XR Render Thread"
                 thread.qualityOfService = .userInteractive
