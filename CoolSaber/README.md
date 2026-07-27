@@ -19,8 +19,7 @@ Open `Examples/CoolSaberVisionOS/CoolSaberVisionOS.xcodeproj` for the app (visio
 
 ## Controls
 
-- **Trigger** (either controller): ignite/retract that hand's blade.
-- **Cross (A) button**: ignite/retract both blades (fallback if per-hand triggers don't map on your firmware).
+- **Trigger or Cross (A)** on a controller: ignite/retract that hand's blade. Bindings are attached per wand straight from GameController (the wand's trigger surfaces as a "Button A" alias on real firmware), so each saber always toggles independently.
 - **Start Duel** button in the control window: begin the SharePlay activity (on a FaceTime call, or via the system share flow).
 
 ## Known limitation: visionOS simulator

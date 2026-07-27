@@ -28,6 +28,8 @@ final class SaberWandInput: @unchecked Sendable {
     private let lock = NSLock()
     private var pendingToggles: [SaberHand] = []
     private var assignedHands: [ObjectIdentifier: SaberHand] = [:]
+    private var boundElements: Set<ObjectIdentifier> = []
+    private var lastToggleUptime: [ObjectIdentifier: TimeInterval] = [:]
     private var observers: [NSObjectProtocol] = []
 
     func start() {
@@ -100,7 +102,20 @@ final class SaberWandInput: @unchecked Sendable {
 
         for (name, button) in buttons {
             let lower = name.lowercased()
-            guard lower.contains("trigger"), !lower.contains("grip") else { continue }
+            // The wand's trigger may surface as "Trigger", side-prefixed, or
+            // via a "Button A"/"Cross" alias depending on firmware — accept
+            // any of them; each toggles only this wand's blade.
+            let isTrigger = lower.contains("trigger")
+            let isPrimary = lower == "button a" || lower == "a" || lower == "cross"
+            guard isTrigger || isPrimary,
+                  !lower.contains("grip"), !lower.contains("shoulder")
+            else { continue }
+
+            // Aliases share the element object: bind each element once.
+            let elementKey = ObjectIdentifier(button)
+            let alreadyBound = lock.withLock { !boundElements.insert(elementKey).inserted }
+            guard !alreadyBound else { continue }
+
             // If one GCController carries both sides' triggers, the element
             // prefix wins over the controller-level assignment.
             let target: SaberHand
@@ -113,8 +128,20 @@ final class SaberWandInput: @unchecked Sendable {
             }
             button.pressedChangedHandler = { [weak self] _, _, pressed in
                 guard pressed, let self else { return }
-                self.lock.withLock { self.pendingToggles.append(target) }
+                self.enqueueToggle(target, controllerKey: key)
             }
+        }
+    }
+
+    /// One physical press can reach us through several distinct elements
+    /// (analog trigger + click + alias); debounce per controller so it
+    /// produces exactly one toggle.
+    private func enqueueToggle(_ hand: SaberHand, controllerKey: ObjectIdentifier) {
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.withLock {
+            if let last = lastToggleUptime[controllerKey], now - last < 0.3 { return }
+            lastToggleUptime[controllerKey] = now
+            pendingToggles.append(hand)
         }
     }
 
@@ -170,7 +197,6 @@ final class SaberXRGame {
     private var localHands: [HandState] = [HandState(), HandState()] // left, right
     private var remoteHands: [RemoteHandState] = [RemoteHandState(), RemoteHandState()]
     private var clashDetector: CoolSaberClashDetector
-    private var wasAPressed = false
     private var sequence: UInt32 = 0
     private var sendAccumulator: Float = 0
     private var lastLocalClashUptime: TimeInterval = 0
@@ -240,19 +266,13 @@ final class SaberXRGame {
             )
         }
 
-        // Per-wand trigger presses, read directly from each GCController so
-        // each saber ignites independently. Cross/A stays as a toggle-both
-        // fallback.
+        // Per-wand presses, read directly from each GCController so each
+        // saber ignites independently. No merged-state fallback: the wand's
+        // trigger surfaces as a "Button A" alias on real firmware, so a
+        // toggle-both path on aPressed would fire on every trigger pull.
         for hand in wandInput.takeToggles() {
             toggleIgnite(hand: hand == .left ? 0 : 1)
         }
-        if pad.aPressed, !wasAPressed {
-            let anyOn = localHands.contains { $0.ignitedTarget }
-            for hand in 0 ..< 2 where localHands[hand].ignitedTarget == anyOn {
-                toggleIgnite(hand: hand)
-            }
-        }
-        wasAPressed = pad.aPressed
 
         let poses = [sense.left, sense.right]
         for hand in 0 ..< 2 {
