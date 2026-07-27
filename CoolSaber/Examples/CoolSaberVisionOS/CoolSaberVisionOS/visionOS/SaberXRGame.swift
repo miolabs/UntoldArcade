@@ -154,10 +154,14 @@ final class SaberWandInput: @unchecked Sendable {
 
 /// Everything worth tweaking on hardware lives here.
 struct SaberTuning {
-    /// Blade start relative to the controller pose (controller-local metres).
-    var gripOffsetLocal = SIMD3<Float>(0, 0.02, -0.08)
-    /// Blade direction in controller-local space (-Z points away from the grip).
-    var bladeAxisLocal = SIMD3<Float>(0, 0, -1)
+    /// Blade start relative to the controller pose (controller-local metres):
+    /// just above the fist, at the top of the controller ring.
+    var gripOffsetLocal = SIMD3<Float>(0, 0.03, -0.03)
+    /// Blade direction in controller-local space. -Z is the controller's
+    /// forward (an arm extension); a saber blade rises out of the fist almost
+    /// perpendicular to the forearm, tilted slightly forward — mostly +Y with
+    /// a touch of -Z.
+    var bladeAxisLocal = simd_normalize(SIMD3<Float>(0, 1.0, -0.3))
     var fullLength: Float = 0.95
     var coreRadius: Float = 0.02
     var clashTriggerDistance: Float = 0.05
