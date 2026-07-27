@@ -23,6 +23,8 @@ final class SaberXRHolder: @unchecked Sendable {
     var renderThread: Thread?
     /// Main-actor flag: the immersive space is currently open and rendering.
     var spaceOpen = false
+    /// Main-actor: result of the most recent openImmersiveSpace call.
+    var lastOpenResult = "—"
 
     private let lock = NSLock()
     private var localColorStorage = SIMD3<Float>(0.35, 0.55, 1.0)
@@ -72,6 +74,7 @@ struct CoolSaberVisionOSXRApp: App {
                 Button {
                     Task {
                         let result = await openImmersiveSpace(id: "Saber")
+                        SaberXRHolder.shared.lastOpenResult = String(describing: result)
                         print("CoolSaber: openImmersiveSpace → \(String(describing: result))")
                     }
                 } label: {
@@ -108,6 +111,21 @@ struct CoolSaberVisionOSXRApp: App {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+
+                // Live diagnostics: shows exactly where the entry flow stalls.
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    let sense = getPSVR2SenseState()
+                    let holder = SaberXRHolder.shared
+                    Text(
+                        "Arena \(holder.spaceOpen ? "OPEN" : "closed")"
+                            + " (last open: \(holder.lastOpenResult))"
+                            + " · PSVR2 \(sense.isConnected ? "connected" : "NOT connected")"
+                            + " · L \(sense.left.isTracked ? "tracked" : "—")"
+                            + " · R \(sense.right.isTracked ? "tracked" : "—")"
+                    )
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.tertiary)
+                }
 
                 if case .idle = sessionController.status {
                     Button {

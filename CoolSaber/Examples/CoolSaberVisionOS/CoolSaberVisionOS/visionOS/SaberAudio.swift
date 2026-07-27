@@ -164,6 +164,9 @@ final class SaberAudio: @unchecked Sendable {
     /// Session activation can lag the immersive space opening; keep trying
     /// instead of failing silently (or worse, throwing).
     private func startEngineWithRetry() {
+        // Session activation itself can fail while the space is transitioning;
+        // re-attempt it together with the engine.
+        try? AVAudioSession.sharedInstance().setActive(true)
         engine.prepare()
         do {
             try engine.start()

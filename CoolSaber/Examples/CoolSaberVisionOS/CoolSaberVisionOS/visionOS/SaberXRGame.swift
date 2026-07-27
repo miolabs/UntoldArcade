@@ -161,7 +161,7 @@ struct SaberTuning {
     /// forward (an arm extension); a saber blade rises out of the fist almost
     /// perpendicular to the forearm, tilted slightly forward — mostly +Y with
     /// a touch of -Z.
-    var bladeAxisLocal = simd_normalize(SIMD3<Float>(0, 1.0, -0.3))
+    var bladeAxisLocal = simd_normalize(SIMD3<Float>(0, 1.0, -0.55))
     var fullLength: Float = 0.95
     var coreRadius: Float = 0.02
     var clashTriggerDistance: Float = 0.05
