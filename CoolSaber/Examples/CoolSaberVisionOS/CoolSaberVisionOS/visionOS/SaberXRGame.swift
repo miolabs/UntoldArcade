@@ -161,7 +161,7 @@ struct SaberTuning {
     /// forward (an arm extension); a saber blade rises out of the fist almost
     /// perpendicular to the forearm, tilted slightly forward — mostly +Y with
     /// a touch of -Z.
-    var bladeAxisLocal = simd_normalize(SIMD3<Float>(0, 1.0, -0.55))
+    var bladeAxisLocal = simd_normalize(SIMD3<Float>(0, 1.0, -0.75))
     var fullLength: Float = 0.95
     var coreRadius: Float = 0.02
     var clashTriggerDistance: Float = 0.05
@@ -205,6 +205,7 @@ final class SaberXRGame {
     private var sendAccumulator: Float = 0
     private var lastLocalClashUptime: TimeInterval = 0
     private var loggedControllerState = false
+    private var fallbackIgniteDone = false
     private var elapsed: Float = 0
 
     init() {
@@ -311,6 +312,17 @@ final class SaberXRGame {
         }
         for hand in autoIgnite where !localHands[hand].ignitedTarget {
             toggleIgnite(hand: hand)
+        }
+
+        // Tracking not delivering after a couple of seconds in the arena?
+        // Ignite anyway at the resting pose: two frozen blades ahead of you
+        // beat an empty room — and they diagnose "tracking dead" at a glance
+        // (blades that follow the wands mean everything is healthy).
+        if !fallbackIgniteDone, elapsed > 2.0 {
+            fallbackIgniteDone = true
+            for hand in 0 ..< 2 where !localHands[hand].everTracked && !localHands[hand].ignitedTarget {
+                toggleIgnite(hand: hand)
+            }
         }
 
         #if targetEnvironment(simulator)

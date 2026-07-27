@@ -148,6 +148,13 @@ struct CoolSaberVisionOSXRApp: App {
             .padding(48)
             .task {
                 sessionController.startSessionObserver()
+                // Warm up the engine's input system at launch: touching it
+                // starts PSVR2 wand discovery and the (slow) ARKit accessory
+                // loading NOW, so the accessory provider already exists when
+                // the immersive space runs its ARKit providers. Loading it
+                // late forces a provider re-run that can leave world tracking
+                // paused (observed on device).
+                _ = isPSVR2SenseConnected()
             }
             .onChange(of: sessionController.groupImmersionActive) { _, active in
                 guard let active else { return }
