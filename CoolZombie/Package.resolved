@@ -1,13 +1,13 @@
 {
-  "originHash" : "1d9a5e85d3ca3acb0f09613f9fba7fb1efde91928fa367f4df85054007d4b02b",
+  "originHash" : "d72e7cf6d19345d751ca8fb3cb19bfead0932d752f2bd6710e1e5be893dc6b90",
   "pins" : [
     {
       "identity" : "untoldengine",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/miolabs/UntoldEngine.git",
       "state" : {
-        "branch" : "feature/animation_motion_matching",
-        "revision" : "db25b660228a8aeda155246279baa0124511c12c"
+        "branch" : "develop",
+        "revision" : "1edf2c18ac19aa4332e0ca3401b9c04335247528"
       }
     }
   ],

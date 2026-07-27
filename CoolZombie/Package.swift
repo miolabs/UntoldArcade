@@ -17,9 +17,7 @@ let package = Package(
         .visionOS(.v2),
     ],
     dependencies: [
-        // Pinned to the motion matching branch until the animation stack
-        // merges into develop; then switch back to branch: "develop".
-        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/animation_motion_matching"),
+        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "develop"),
     ],
     targets: [
         .executableTarget(
