@@ -2,12 +2,18 @@
 //  SaberAudio.swift  (visionOS)
 //  CoolSaber
 //
-//  Saber sound design with zero asset files: every buffer is synthesized at
-//  startup (hum loop, ignite/retract sweeps, three clash variants). The engine
-//  has no audio system, so this is plain AVAudioEngine. All node mutation runs
-//  on a private serial queue; per-frame hum modulation from the XR game thread
-//  only writes lock-guarded targets that a 30 Hz timer applies (no zipper, no
-//  cross-thread AVAudioEngine access).
+//  Saber sound design with zero asset files: every sample bank is synthesized
+//  at startup (hum loop, ignite/retract sweeps, three clash variants) and
+//  mixed in a single AVAudioSourceNode render callback. Deliberately NO
+//  AVAudioPlayerNode and NO scheduleBuffer: on visionOS the engine can report
+//  started before audio IO cycles, and player.play() then throws the
+//  uncatchable "player did not see an IO cycle" NSException. A source node
+//  only renders when IO actually runs, so that failure mode cannot exist.
+//
+//  Threading: the XR game thread writes lock-guarded targets; the audio
+//  render callback smooths toward them per sample (no zipper). Engine
+//  start/stop happens on a private serial queue with retry, because session
+//  activation can lag the immersive space opening.
 //
 
 import AVFAudio
@@ -15,28 +21,44 @@ import CoolSaber
 import Foundation
 
 final class SaberAudio: @unchecked Sendable {
-    private struct HumTarget {
-        var volume: Float = 0
-        var pitchCents: Float = 0
+    private struct HumVoice {
+        var targetVolume: Float = 0
+        var currentVolume: Float = 0
+        var targetRate: Float = 1
+        var currentRate: Float = 1
+        var phase: Float = 0 // fractional sample index into the hum loop
+    }
+
+    private struct OneShot {
+        var bank: Int // index into sampleBanks
+        var position: Int = 0
+        var volume: Float
+    }
+
+    private enum Bank {
+        static let ignite = 0
+        static let retract = 1
+        static let clashFirst = 2 // 2, 3, 4
+        static let clashCount = 3
     }
 
     private let queue = DispatchQueue(label: "com.miolabs.coolsaber.audio")
     private let engine = AVAudioEngine()
+    private var sourceNode: AVAudioSourceNode?
     private let sampleRate: Double = 48000
 
-    private var humPlayers: [AVAudioPlayerNode] = []
-    private var humPitches: [AVAudioUnitTimePitch] = []
-    private var oneShotPlayer = AVAudioPlayerNode()
+    // Immutable after synthesis.
+    private var humLoop: [Float] = []
+    private var sampleBanks: [[Float]] = []
 
-    private var humBuffer: AVAudioPCMBuffer?
-    private var igniteBuffer: AVAudioPCMBuffer?
-    private var retractBuffer: AVAudioPCMBuffer?
-    private var clashBuffers: [AVAudioPCMBuffer] = []
+    private let stateLock = NSLock()
+    private var voices = [HumVoice](repeating: HumVoice(), count: 4)
+    private var oneShots: [OneShot] = []
+    private var randomState: UInt64 = 0x243F_6A88_85A3_08D3
 
-    private let targetLock = NSLock()
-    private var humTargets = [HumTarget](repeating: HumTarget(), count: 4)
-    private var applyTimer: DispatchSourceTimer?
     private var started = false
+    private var observers: [NSObjectProtocol] = []
+    private var retryTimer: DispatchSourceTimer?
 
     // MARK: - Public API (safe from the XR game thread)
 
@@ -46,10 +68,16 @@ final class SaberAudio: @unchecked Sendable {
 
     func stop() {
         queue.async { [weak self] in
-            self?.applyTimer?.cancel()
-            self?.applyTimer = nil
-            self?.engine.stop()
-            self?.started = false
+            guard let self else { return }
+            self.retryTimer?.cancel()
+            self.retryTimer = nil
+            for observer in self.observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            self.observers.removeAll()
+            self.engine.stop()
+            self.started = false
+            self.stateLock.withLock { self.oneShots.removeAll() }
         }
     }
 
@@ -57,138 +85,169 @@ final class SaberAudio: @unchecked Sendable {
     func setHum(slot: Int, ignited: Bool, tipSpeed: Float) {
         guard (0 ..< 4).contains(slot) else { return }
         let speed = min(max(tipSpeed, 0), 6)
-        var target = HumTarget()
-        target.volume = ignited ? 0.22 + speed * 0.05 : 0
-        target.pitchCents = speed * 90
-        targetLock.withLock { humTargets[slot] = target }
+        let volume: Float = ignited ? 0.22 + speed * 0.05 : 0
+        let rate = pow(2, speed * 90 / 1200) // cents → playback-rate multiplier
+        stateLock.withLock {
+            voices[slot].targetVolume = volume
+            voices[slot].targetRate = rate
+        }
     }
 
     func playIgnite() {
-        playOneShot { $0.igniteBuffer }
+        enqueueOneShot(bank: Bank.ignite, volume: 0.7)
     }
 
     func playRetract() {
-        playOneShot { $0.retractBuffer }
+        enqueueOneShot(bank: Bank.retract, volume: 0.7)
     }
 
     func playClash(intensity: Float) {
         let volume = min(max(intensity / 8, 0.4), 1)
-        queue.async { [weak self] in
-            guard let self, self.started, !self.clashBuffers.isEmpty else { return }
-            let buffer = self.clashBuffers.randomElement()!
-            self.oneShotPlayer.volume = volume
-            self.oneShotPlayer.scheduleBuffer(buffer)
-            if !self.oneShotPlayer.isPlaying { self.oneShotPlayer.play() }
+        let variant = stateLock.withLock { Int(Self.nextRandom(&randomState) % UInt64(Bank.clashCount)) }
+        enqueueOneShot(bank: Bank.clashFirst + variant, volume: volume)
+    }
+
+    private func enqueueOneShot(bank: Int, volume: Float) {
+        stateLock.withLock {
+            guard bank < sampleBanks.count, !sampleBanks[bank].isEmpty else { return }
+            if oneShots.count < 12 {
+                oneShots.append(OneShot(bank: bank, volume: volume))
+            }
         }
     }
 
-    // MARK: - Setup (on `queue`)
+    // MARK: - Engine lifecycle (on `queue`)
 
     private func startOnQueue() {
         guard !started else { return }
+
+        if humLoop.isEmpty {
+            humLoop = makeHumLoop()
+            sampleBanks = [
+                makeSweep(from: 60, to: 220),
+                makeSweep(from: 220, to: 60),
+                makeClash(seed: 17),
+                makeClash(seed: 7919),
+                makeClash(seed: 104_729),
+            ]
+        }
+
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
-        humBuffer = makeHumBuffer(format: format)
-        igniteBuffer = makeSweepBuffer(format: format, from: 60, to: 220)
-        retractBuffer = makeSweepBuffer(format: format, from: 220, to: 60)
-        clashBuffers = (0 ..< 3).compactMap {
-            makeClashBuffer(format: format, seed: UInt64($0) &* 7919 &+ 17)
+        if sourceNode == nil {
+            let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+            let node = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
+                self?.render(frameCount: frameCount, audioBufferList: audioBufferList)
+                return noErr
+            }
+            engine.attach(node)
+            engine.connect(node, to: engine.mainMixerNode, format: format)
+            sourceNode = node
+
+            observers.append(NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: engine,
+                queue: nil
+            ) { [weak self] _ in
+                self?.queue.async {
+                    guard let self, self.started else { return }
+                    self.engine.stop()
+                    self.startEngineWithRetry()
+                }
+            })
         }
 
-        for _ in 0 ..< 4 {
-            let player = AVAudioPlayerNode()
-            let pitch = AVAudioUnitTimePitch()
-            engine.attach(player)
-            engine.attach(pitch)
-            engine.connect(player, to: pitch, format: format)
-            engine.connect(pitch, to: engine.mainMixerNode, format: format)
-            humPlayers.append(player)
-            humPitches.append(pitch)
-        }
-        engine.attach(oneShotPlayer)
-        engine.connect(oneShotPlayer, to: engine.mainMixerNode, format: format)
+        startEngineWithRetry()
+    }
 
-        NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: nil
-        ) { [weak self] _ in
-            self?.queue.async { self?.restartAfterConfigurationChange() }
-        }
-
+    /// Session activation can lag the immersive space opening; keep trying
+    /// instead of failing silently (or worse, throwing).
+    private func startEngineWithRetry() {
+        engine.prepare()
         do {
             try engine.start()
+            started = true
+            retryTimer?.cancel()
+            retryTimer = nil
         } catch {
-            print("CoolSaber: audio engine start failed: \(error)")
-            return
+            print("CoolSaber: audio engine start failed (\(error)) — retrying")
+            started = false
+            guard retryTimer == nil else { return }
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + 1, repeating: 1)
+            timer.setEventHandler { [weak self] in
+                guard let self else { return }
+                if self.started {
+                    self.retryTimer?.cancel()
+                    self.retryTimer = nil
+                } else {
+                    self.startEngineWithRetry()
+                }
+            }
+            timer.resume()
+            retryTimer = timer
         }
-        started = true
+    }
 
-        if let humBuffer {
-            for player in humPlayers {
-                player.volume = 0
-                player.scheduleBuffer(humBuffer, at: nil, options: .loops)
-                player.play()
+    // MARK: - Render (audio thread)
+
+    private func render(frameCount: AVAudioFrameCount, audioBufferList: UnsafeMutablePointer<AudioBufferList>) {
+        let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        guard let out = buffers.first?.mData?.assumingMemoryBound(to: Float.self) else { return }
+        let frames = Int(frameCount)
+
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        let loopCount = Float(humLoop.count)
+        // ~40 ms exponential smoothing per sample step.
+        let smoothing: Float = 0.0005
+
+        for frame in 0 ..< frames {
+            var value: Float = 0
+
+            if !humLoop.isEmpty {
+                for index in 0 ..< voices.count {
+                    voices[index].currentVolume += (voices[index].targetVolume - voices[index].currentVolume) * smoothing
+                    voices[index].currentRate += (voices[index].targetRate - voices[index].currentRate) * smoothing
+                    guard voices[index].currentVolume > 0.0005 else { continue }
+                    voices[index].phase += voices[index].currentRate
+                    if voices[index].phase >= loopCount { voices[index].phase -= loopCount }
+                    value += humLoop[Int(voices[index].phase)] * voices[index].currentVolume
+                }
+            }
+
+            for index in 0 ..< oneShots.count {
+                let samples = sampleBanks[oneShots[index].bank]
+                if oneShots[index].position < samples.count {
+                    value += samples[oneShots[index].position] * oneShots[index].volume
+                    oneShots[index].position += 1
+                }
+            }
+
+            out[frame] = max(-1, min(1, value))
+        }
+        oneShots.removeAll { $0.position >= sampleBanks[$0.bank].count }
+
+        // Mirror mono into any additional buffers the engine hands us.
+        for buffer in buffers.dropFirst() {
+            if let data = buffer.mData?.assumingMemoryBound(to: Float.self) {
+                data.update(from: out, count: frames)
             }
         }
-
-        // Apply hum targets at 30 Hz with a light ramp toward the target so the
-        // 90 Hz game writes never zipper.
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(33))
-        timer.setEventHandler { [weak self] in self?.applyHumTargets() }
-        timer.resume()
-        applyTimer = timer
     }
 
-    private func restartAfterConfigurationChange() {
-        guard started else { return }
-        engine.stop()
-        try? engine.start()
-        if let humBuffer, engine.isRunning {
-            for player in humPlayers {
-                player.scheduleBuffer(humBuffer, at: nil, options: .loops)
-                player.play()
-            }
-        }
-    }
-
-    private func applyHumTargets() {
-        guard started, engine.isRunning else { return }
-        let targets = targetLock.withLock { humTargets }
-        for (index, target) in targets.enumerated() {
-            let player = humPlayers[index]
-            let pitch = humPitches[index]
-            player.volume += (target.volume - player.volume) * 0.35
-            pitch.pitch += (target.pitchCents - pitch.pitch) * 0.35
-        }
-    }
-
-    private func playOneShot(_ buffer: @escaping (SaberAudio) -> AVAudioPCMBuffer?) {
-        queue.async { [weak self] in
-            guard let self, self.started, let buffer = buffer(self) else { return }
-            self.oneShotPlayer.volume = 0.7
-            self.oneShotPlayer.scheduleBuffer(buffer)
-            if !self.oneShotPlayer.isPlaying { self.oneShotPlayer.play() }
-        }
-    }
-
-    // MARK: - DSP
+    // MARK: - DSP (all pure, run once at startup)
 
     /// 1 s seamless hum loop: two detuned low tones with odd harmonics and a
     /// slow amplitude wobble. All component frequencies are integer Hz, so the
-    /// buffer is phase-continuous at the loop point.
-    private func makeHumBuffer(format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        let frames = AVAudioFrameCount(sampleRate)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
-            return nil
-        }
-        buffer.frameLength = frames
-        let samples = buffer.floatChannelData![0]
+    /// loop is phase-continuous.
+    private func makeHumLoop() -> [Float] {
+        let frames = Int(sampleRate)
+        var samples = [Float](repeating: 0, count: frames)
         let twoPi = 2 * Float.pi
-        for frame in 0 ..< Int(frames) {
+        for frame in 0 ..< frames {
             let t = Float(frame) / Float(sampleRate)
             var value: Float = 0
             for (base, weight) in [(Float(85), Float(1.0)), (Float(113), Float(0.7))] {
@@ -199,49 +258,41 @@ final class SaberAudio: @unchecked Sendable {
             let wobble = 1 + 0.15 * sin(twoPi * 6 * t)
             samples[frame] = value * wobble * 0.18
         }
-        return buffer
+        return samples
     }
 
     /// 0.4 s exponential frequency sweep plus a noise swish, for ignite/retract.
-    private func makeSweepBuffer(format: AVAudioFormat, from: Float, to: Float) -> AVAudioPCMBuffer? {
+    private func makeSweep(from: Float, to: Float) -> [Float] {
         let duration: Float = 0.4
-        let frames = AVAudioFrameCount(Float(sampleRate) * duration)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
-            return nil
-        }
-        buffer.frameLength = frames
-        let samples = buffer.floatChannelData![0]
+        let frames = Int(Float(sampleRate) * duration)
+        var samples = [Float](repeating: 0, count: frames)
         let twoPi = 2 * Float.pi
         var phase: Float = 0
-        var noiseState: UInt64 = 0x9E3779B97F4A7C15
-        for frame in 0 ..< Int(frames) {
-            let t = Float(frame) / (Float(sampleRate) * duration)
+        var noiseState: UInt64 = 0x9E37_79B9_7F4A_7C15
+        for frame in 0 ..< frames {
+            let t = Float(frame) / Float(frames)
             let frequency = from * pow(to / from, t)
             phase += twoPi * frequency / Float(sampleRate)
-            let envelope = sin(Float.pi * t) // smooth in and out
+            let envelope = sin(Float.pi * t)
             let noise = Self.nextNoise(&noiseState) * 0.25 * envelope * envelope
             samples[frame] = (sin(phase) * 0.6 + noise) * envelope * 0.8
         }
-        return buffer
+        return samples
     }
 
     /// 0.3 s clash: white-noise burst with instant attack, fast decay, a low
     /// thump, and a couple of crackle ticks. Seed varies the crackle placement.
-    private func makeClashBuffer(format: AVAudioFormat, seed: UInt64) -> AVAudioPCMBuffer? {
+    private func makeClash(seed: UInt64) -> [Float] {
         let duration: Float = 0.3
-        let frames = AVAudioFrameCount(Float(sampleRate) * duration)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
-            return nil
-        }
-        buffer.frameLength = frames
-        let samples = buffer.floatChannelData![0]
+        let frames = Int(Float(sampleRate) * duration)
+        var samples = [Float](repeating: 0, count: frames)
         let twoPi = 2 * Float.pi
         var noiseState = seed
-        var tickState = seed &* 6364136223846793005 &+ 1442695040888963407
+        var tickState = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
         let tickTimes: [Float] = (0 ..< 3).map { _ in
             0.02 + Self.nextNoise(&tickState) * 0.04 + 0.06
         }
-        for frame in 0 ..< Int(frames) {
+        for frame in 0 ..< frames {
             let t = Float(frame) / Float(sampleRate)
             let decay = exp(-t * 18)
             var value = Self.nextNoise(&noiseState) * decay * 0.9
@@ -254,15 +305,18 @@ final class SaberAudio: @unchecked Sendable {
             }
             samples[frame] = value * 0.85
         }
-        return buffer
+        return samples
     }
 
     /// Cheap deterministic white noise in [-1, 1] (xorshift64*).
     private static func nextNoise(_ state: inout UInt64) -> Float {
+        Float(Int64(bitPattern: nextRandom(&state))) / Float(Int64.max)
+    }
+
+    private static func nextRandom(_ state: inout UInt64) -> UInt64 {
         state ^= state >> 12
         state ^= state << 25
         state ^= state >> 27
-        let value = state &* 2685821657736338717
-        return Float(Int64(bitPattern: value)) / Float(Int64.max)
+        return state &* 2_685_821_657_736_338_717
     }
 }
