@@ -20,7 +20,7 @@ struct SaberVertexOut {
     float2 local;              // blade: (m along axis from hilt, m perpendicular)
                                // spark: normalized quad coords in [-1, 1]
     float4 color [[flat]];     // rgb color, w glow intensity
-    float4 params [[flat]];    // blade: (core radius, length, unused, time)
+    float4 params [[flat]];    // blade: (core radius, length, glow margin, time)
                                // spark: (radius, intensity, seed, time)
     uint kind [[flat]];        // 0 = blade, 1 = spark
 };
@@ -62,8 +62,9 @@ vertex SaberVertexOut coolSaberBladeVertex(
 
         const float3 hilt = blade.hilt.xyz;
         const float3 dir = normalize(blade.direction.xyz);
-        // Soft glow must not clip at the quad edge: pad both ends and the sides.
-        const float margin = radius * 6.0 + 0.04;
+        // Halo containment margin: the fragment windows the glow to exactly
+        // zero at this distance, so the quad itself can never show.
+        const float margin = radius * 4.0 + 0.02;
         const float halfWidth = radius + margin;
 
         // Rotate the quad about the blade axis so it faces the camera.
@@ -85,7 +86,7 @@ vertex SaberVertexOut coolSaberBladeVertex(
         out.position = u.viewProj * float4(world, 1.0);
         out.local = float2(along, across);
         out.color = blade.color;
-        out.params = float4(radius, length_, 0.0, time);
+        out.params = float4(radius, length_, margin, time);
         out.kind = 0;
         return out;
     }
@@ -141,6 +142,7 @@ fragment float4 coolSaberBladeFragment(SaberVertexOut in [[stage_in]]) {
     // Blade: capsule SDF in the quad's local (along, across) space.
     const float radius = in.params.x;
     const float bladeLength = in.params.y;
+    const float margin = in.params.z;
     const float time = in.params.w;
     const float along = clamp(in.local.x, 0.0, bladeLength);
     const float dist = length(float2(in.local.x - along, in.local.y));
@@ -149,14 +151,19 @@ fragment float4 coolSaberBladeFragment(SaberVertexOut in [[stage_in]]) {
     const float flicker = 1.0 + 0.05 * sin(time * 87.0 + in.local.x * 31.0)
         + 0.03 * sin(time * 133.0);
 
-    // Hot white core with a colored halo falling off exponentially.
+    // Hot white core with a tight colored halo. The window forces the halo to
+    // exactly zero inside the quad bounds — the billboard itself must never
+    // read as a plane, only the light around the core.
+    const float window = saturate(1.0 - dist / margin);
     const float core = smoothstep(radius, radius * 0.45, dist);
-    const float glow = exp(-dist / (radius * 2.2));
+    const float glow = exp(-dist / (radius * 1.2)) * window * window;
     const float glowIntensity = in.color.w;
 
     const float3 coreColor = mix(in.color.rgb, float3(1.0), 0.82) * 9.0;
     const float3 rgb = (coreColor * core + in.color.rgb * glowIntensity * glow) * flicker;
-    const float alpha = saturate(core + glow * 0.5);
+    // Alpha lives almost entirely in the core: the halo is added light and
+    // must not dim the passthrough behind it.
+    const float alpha = saturate(core + glow * 0.15);
     if (max(rgb.r, max(rgb.g, rgb.b)) < 0.002) {
         discard_fragment();
     }

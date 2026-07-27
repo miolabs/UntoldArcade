@@ -80,7 +80,7 @@ final class SaberHaptics: @unchecked Sendable {
             return
         }
 
-        let hand = Self.inferHand(of: controller)
+        let hand = SaberWandInput.inferHand(of: controller)
         engines[key] = (engine, hand)
         print(
             "CoolSaber: haptics attached to \(controller.vendorName ?? "controller") "
@@ -92,16 +92,6 @@ final class SaberHaptics: @unchecked Sendable {
         let key = ObjectIdentifier(controller)
         engines[key]?.engine.stop()
         engines[key] = nil
-    }
-
-    /// A Sense wand's input profile carries only its own side's elements.
-    private static func inferHand(of controller: GCController) -> SaberHand? {
-        let buttons = controller.physicalInputProfile.buttons.keys
-        let hasLeft = buttons.contains { $0.hasPrefix("Left") }
-        let hasRight = buttons.contains { $0.hasPrefix("Right") }
-        if hasLeft, !hasRight { return .left }
-        if hasRight, !hasLeft { return .right }
-        return nil
     }
 
     private func play(hand: SaberHand, intensity: Float, sharpness: Float, duration: Double) {

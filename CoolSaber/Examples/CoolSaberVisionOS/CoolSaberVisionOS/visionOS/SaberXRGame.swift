@@ -16,8 +16,114 @@
 
 import CoolSaber
 import Foundation
+@preconcurrency import GameController
 import simd
 import UntoldEngine
+
+/// Per-wand trigger input read straight from GameController. The engine folds
+/// both Sense wands into one merged GameControllerState assuming side-prefixed
+/// element names ("Left Trigger"/"Right Trigger"); real wands expose their own
+/// unprefixed elements, so per-hand ignite must bind per GCController.
+final class SaberWandInput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pendingToggles: [SaberHand] = []
+    private var assignedHands: [ObjectIdentifier: SaberHand] = [:]
+    private var observers: [NSObjectProtocol] = []
+
+    func start() {
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: .GCControllerDidConnect, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let controller = note.object as? GCController else { return }
+            self?.attach(controller)
+        })
+        observers.append(center.addObserver(
+            forName: .GCControllerDidDisconnect, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let controller = note.object as? GCController else { return }
+            self.lock.withLock {
+                _ = self.assignedHands.removeValue(forKey: ObjectIdentifier(controller))
+            }
+        })
+        for controller in GCController.controllers() {
+            attach(controller)
+        }
+    }
+
+    func stop() {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        observers.removeAll()
+        lock.withLock {
+            assignedHands.removeAll()
+            pendingToggles.removeAll()
+        }
+    }
+
+    /// Trigger presses since the last call, as the hand each belongs to.
+    func takeToggles() -> [SaberHand] {
+        lock.withLock {
+            let toggles = pendingToggles
+            pendingToggles.removeAll()
+            return toggles
+        }
+    }
+
+    /// Handedness from the vendor name ("...Left...", "(L)") or, failing that,
+    /// from side-prefixed element names appearing exclusively.
+    static func inferHand(of controller: GCController) -> SaberHand? {
+        let vendor = (controller.vendorName ?? "").lowercased()
+        if vendor.contains("left") || vendor.hasSuffix("(l)") { return .left }
+        if vendor.contains("right") || vendor.hasSuffix("(r)") { return .right }
+        let keys = controller.physicalInputProfile.buttons.keys.map { $0.lowercased() }
+        let hasLeft = keys.contains { $0.hasPrefix("left") }
+        let hasRight = keys.contains { $0.hasPrefix("right") }
+        if hasLeft != hasRight { return hasLeft ? .left : .right }
+        return nil
+    }
+
+    private func attach(_ controller: GCController) {
+        let key = ObjectIdentifier(controller)
+        let alreadyAttached = lock.withLock { assignedHands[key] != nil }
+        guard !alreadyAttached else { return }
+
+        let hand = Self.inferHand(of: controller) ?? nextFreeHand()
+        lock.withLock { assignedHands[key] = hand }
+
+        let buttons = controller.physicalInputProfile.buttons
+        print(
+            "CoolSaber: wand '\(controller.vendorName ?? "?")' → \(hand), "
+                + "elements: \(buttons.keys.sorted())"
+        )
+
+        for (name, button) in buttons {
+            let lower = name.lowercased()
+            guard lower.contains("trigger"), !lower.contains("grip") else { continue }
+            // If one GCController carries both sides' triggers, the element
+            // prefix wins over the controller-level assignment.
+            let target: SaberHand
+            if lower.hasPrefix("left") {
+                target = .left
+            } else if lower.hasPrefix("right") {
+                target = .right
+            } else {
+                target = hand
+            }
+            button.pressedChangedHandler = { [weak self] _, _, pressed in
+                guard pressed, let self else { return }
+                self.lock.withLock { self.pendingToggles.append(target) }
+            }
+        }
+    }
+
+    private func nextFreeHand() -> SaberHand {
+        lock.withLock {
+            assignedHands.values.contains(.left) ? .right : .left
+        }
+    }
+}
 
 /// Everything worth tweaking on hardware lives here.
 struct SaberTuning {
@@ -44,7 +150,6 @@ final class SaberXRGame {
         var tipSpeed: Float = 0
         var untrackedTime: Float = 0
         var everTracked = false
-        var wasTriggerPressed = false
     }
 
     private struct RemoteHandState {
@@ -60,6 +165,7 @@ final class SaberXRGame {
     private let mailbox = SaberDuelMailbox.shared
     private let audio = SaberAudio()
     private let haptics = SaberHaptics()
+    private let wandInput = SaberWandInput()
 
     private var localHands: [HandState] = [HandState(), HandState()] // left, right
     private var remoteHands: [RemoteHandState] = [RemoteHandState(), RemoteHandState()]
@@ -84,6 +190,7 @@ final class SaberXRGame {
 
         audio.start()
         haptics.start()
+        wandInput.start()
 
         print(
             "CoolSaber: starting — trigger ignites a hand's blade, Cross/A toggles both. "
@@ -94,6 +201,7 @@ final class SaberXRGame {
     func shutdown() {
         audio.stop()
         haptics.stop()
+        wandInput.stop()
         clearCoolSaberScene()
     }
 
@@ -132,15 +240,11 @@ final class SaberXRGame {
             )
         }
 
-        // Per-hand trigger edges. The engine maps each wand's side-prefixed
-        // trigger elements into the shared pad state; if that mapping ever
-        // fails on real firmware, the Cross/A fallback below still works.
-        let triggers = [pad.leftTriggerPressed, pad.rightTriggerPressed]
-        for hand in 0 ..< 2 {
-            if triggers[hand], !localHands[hand].wasTriggerPressed {
-                toggleIgnite(hand: hand)
-            }
-            localHands[hand].wasTriggerPressed = triggers[hand]
+        // Per-wand trigger presses, read directly from each GCController so
+        // each saber ignites independently. Cross/A stays as a toggle-both
+        // fallback.
+        for hand in wandInput.takeToggles() {
+            toggleIgnite(hand: hand == .left ? 0 : 1)
         }
         if pad.aPressed, !wasAPressed {
             let anyOn = localHands.contains { $0.ignitedTarget }
