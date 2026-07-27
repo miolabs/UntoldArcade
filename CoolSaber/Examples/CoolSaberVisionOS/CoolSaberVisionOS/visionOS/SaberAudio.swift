@@ -59,6 +59,9 @@ final class SaberAudio: @unchecked Sendable {
     private var started = false
     private var observers: [NSObjectProtocol] = []
     private var retryTimer: DispatchSourceTimer?
+    private var watchdogTimer: DispatchSourceTimer?
+    private var renderInvocations = 0
+    private var watchdogLastSeen = -1
 
     // MARK: - Public API (safe from the XR game thread)
 
@@ -71,6 +74,8 @@ final class SaberAudio: @unchecked Sendable {
             guard let self else { return }
             self.retryTimer?.cancel()
             self.retryTimer = nil
+            self.watchdogTimer?.cancel()
+            self.watchdogTimer = nil
             for observer in self.observers {
                 NotificationCenter.default.removeObserver(observer)
             }
@@ -132,9 +137,6 @@ final class SaberAudio: @unchecked Sendable {
             ]
         }
 
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
-
         if sourceNode == nil {
             let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
             let node = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
@@ -158,21 +160,29 @@ final class SaberAudio: @unchecked Sendable {
             })
         }
 
-        startEngineWithRetry()
+        // Give the immersive-space scene transition a beat to settle: session
+        // activation during the transition "succeeds" with a dead proxy
+        // ("Session lookup failed", silent output).
+        queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.startEngineWithRetry()
+        }
+        startWatchdog()
     }
 
     /// Session activation can lag the immersive space opening; keep trying
     /// instead of failing silently (or worse, throwing).
     private func startEngineWithRetry() {
-        // Session activation itself can fail while the space is transitioning;
-        // re-attempt it together with the engine.
-        try? AVAudioSession.sharedInstance().setActive(true)
-        engine.prepare()
         do {
+            // Activation errors are retryable, not ignorable — a swallowed
+            // failure here means permanent silence.
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+            engine.prepare()
             try engine.start()
             started = true
             retryTimer?.cancel()
             retryTimer = nil
+            print("CoolSaber: audio engine running")
         } catch {
             print("CoolSaber: audio engine start failed (\(error)) — retrying")
             started = false
@@ -193,6 +203,28 @@ final class SaberAudio: @unchecked Sendable {
         }
     }
 
+    /// The session can activate "successfully" yet be dead (proxy lookup
+    /// failure during scene transitions): the engine reports running but the
+    /// render callback never fires. Detect the stall and restart.
+    private func startWatchdog() {
+        guard watchdogTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.started else { return }
+            let seen = self.stateLock.withLock { self.renderInvocations }
+            if seen == self.watchdogLastSeen {
+                print("CoolSaber: audio IO stalled — restarting engine")
+                self.engine.stop()
+                self.started = false
+                self.startEngineWithRetry()
+            }
+            self.watchdogLastSeen = seen
+        }
+        timer.resume()
+        watchdogTimer = timer
+    }
+
     // MARK: - Render (audio thread)
 
     private func render(frameCount: AVAudioFrameCount, audioBufferList: UnsafeMutablePointer<AudioBufferList>) {
@@ -202,6 +234,7 @@ final class SaberAudio: @unchecked Sendable {
 
         stateLock.lock()
         defer { stateLock.unlock() }
+        renderInvocations &+= 1
 
         let loopCount = Float(humLoop.count)
         // ~40 ms exponential smoothing per sample step.

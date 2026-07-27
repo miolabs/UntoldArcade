@@ -223,7 +223,7 @@ final class SaberXRGame {
         wandInput.start()
 
         print(
-            "CoolSaber: starting — trigger ignites a hand's blade, Cross/A toggles both. "
+            "CoolSaber: starting — trigger or Cross ignites that hand's blade. "
                 + "PSVR2 connected: \(isPSVR2SenseConnected())"
         )
     }

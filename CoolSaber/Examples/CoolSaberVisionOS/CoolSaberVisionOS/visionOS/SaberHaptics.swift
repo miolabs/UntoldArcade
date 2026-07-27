@@ -73,12 +73,8 @@ final class SaberHaptics: @unchecked Sendable {
 
         engine.resetHandler = { [weak engine] in try? engine?.start() }
         engine.isAutoShutdownEnabled = true
-        do {
-            try engine.start()
-        } catch {
-            print("CoolSaber: haptic engine start failed: \(error)")
-            return
-        }
+        // No eager start: during the immersive-space transition it blocks with
+        // a startup timeout. play() starts the engine on demand.
 
         let hand = SaberWandInput.inferHand(of: controller)
         engines[key] = (engine, hand)
