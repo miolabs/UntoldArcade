@@ -156,7 +156,9 @@ final class SaberWandInput: @unchecked Sendable {
 struct SaberTuning {
     /// Blade start relative to the controller pose (controller-local metres):
     /// just above the fist, at the top of the controller ring.
-    var gripOffsetLocal = SIMD3<Float>(0, 0.03, -0.03)
+    var gripOffsetLocal: SIMD3<Float> {
+        SaberXRHolder.shared.gripOffsetLocal
+    }
     /// Blade direction in controller-local space, from the tilt angle set in
     /// the control window: rotates from +Y (out of the fist) toward -Z (the
     /// controller's forward) — 0° vertical grip, 90° arm extension.
