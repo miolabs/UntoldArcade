@@ -25,13 +25,26 @@ final class SaberXRHolder: @unchecked Sendable {
     var spaceOpen = false
     /// Main-actor: result of the most recent openImmersiveSpace call.
     var lastOpenResult = "—"
+    /// Set by the game thread when the first wand delivers a tracked pose;
+    /// reset on game start. While false the arena shows the loading spinner
+    /// and the window shows a progress row.
+    var wandsEverTracked = false
 
     private let lock = NSLock()
     private var localColorStorage = SIMD3<Float>(0.35, 0.55, 1.0)
+    private var bladeTiltStorage: Float = 60
 
     var localColor: SIMD3<Float> {
         get { lock.withLock { localColorStorage } }
         set { lock.withLock { localColorStorage = newValue } }
+    }
+
+    /// Forward tilt of the blade in degrees: 0 = straight out of the fist
+    /// (controller +Y), 90 = along the controller's forward axis (-Z).
+    /// Live-tunable from the control window until the right default is found.
+    var bladeTiltDegrees: Float {
+        get { lock.withLock { bladeTiltStorage } }
+        set { lock.withLock { bladeTiltStorage = newValue } }
     }
 }
 
@@ -63,6 +76,7 @@ struct CoolSaberVisionOSXRApp: App {
     @State private var immersionStyle: ImmersionStyle = .mixed
     @State private var sessionController = SaberSessionController()
     @State private var bladeColorID = "blue"
+    @State private var bladeTilt: Double = 60
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -105,6 +119,16 @@ struct CoolSaberVisionOSXRApp: App {
                     }
                 }
 
+                HStack(spacing: 16) {
+                    Text("Tilt \(Int(bladeTilt))°")
+                        .monospacedDigit()
+                        .frame(width: 90, alignment: .leading)
+                    Slider(value: $bladeTilt, in: 0 ... 90, step: 1)
+                }
+                .onChange(of: bladeTilt) { _, newValue in
+                    SaberXRHolder.shared.bladeTiltDegrees = Float(newValue)
+                }
+
                 Divider()
 
                 Text(sessionController.statusMessage)
@@ -116,15 +140,29 @@ struct CoolSaberVisionOSXRApp: App {
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     let sense = getPSVR2SenseState()
                     let holder = SaberXRHolder.shared
-                    Text(
-                        "Arena \(holder.spaceOpen ? "OPEN" : "closed")"
-                            + " (last open: \(holder.lastOpenResult))"
-                            + " · PSVR2 \(sense.isConnected ? "connected" : "NOT connected")"
-                            + " · L \(sense.left.isTracked ? "tracked" : "—")"
-                            + " · R \(sense.right.isTracked ? "tracked" : "—")"
-                    )
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(.tertiary)
+                    VStack(spacing: 8) {
+                        if holder.spaceOpen, !holder.wandsEverTracked {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text(
+                                    sense.isConnected
+                                        ? "Preparing wand tracking — the sabers ignite in a few seconds…"
+                                        : "Waiting for PSVR2 controllers — press PS to wake them…"
+                                )
+                            }
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        }
+                        Text(
+                            "Arena \(holder.spaceOpen ? "OPEN" : "closed")"
+                                + " (last open: \(holder.lastOpenResult))"
+                                + " · PSVR2 \(sense.isConnected ? "connected" : "NOT connected")"
+                                + " · L \(sense.left.isTracked ? "tracked" : "—")"
+                                + " · R \(sense.right.isTracked ? "tracked" : "—")"
+                        )
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.tertiary)
+                    }
                 }
 
                 if case .idle = sessionController.status {

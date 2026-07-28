@@ -157,11 +157,13 @@ struct SaberTuning {
     /// Blade start relative to the controller pose (controller-local metres):
     /// just above the fist, at the top of the controller ring.
     var gripOffsetLocal = SIMD3<Float>(0, 0.03, -0.03)
-    /// Blade direction in controller-local space. -Z is the controller's
-    /// forward (an arm extension); a saber blade rises out of the fist almost
-    /// perpendicular to the forearm, tilted slightly forward — mostly +Y with
-    /// a touch of -Z.
-    var bladeAxisLocal = simd_normalize(SIMD3<Float>(0, 1.0, -0.75))
+    /// Blade direction in controller-local space, from the tilt angle set in
+    /// the control window: rotates from +Y (out of the fist) toward -Z (the
+    /// controller's forward) — 0° vertical grip, 90° arm extension.
+    var bladeAxisLocal: SIMD3<Float> {
+        let tilt = SaberXRHolder.shared.bladeTiltDegrees * .pi / 180
+        return SIMD3<Float>(0, cos(tilt), -sin(tilt))
+    }
     var fullLength: Float = 0.95
     var coreRadius: Float = 0.02
     var clashTriggerDistance: Float = 0.05
@@ -205,7 +207,7 @@ final class SaberXRGame {
     private var sendAccumulator: Float = 0
     private var lastLocalClashUptime: TimeInterval = 0
     private var loggedControllerState = false
-    private var fallbackIgniteDone = false
+    private var spinnerAccumulator: Float = 0
     private var elapsed: Float = 0
 
     init() {
@@ -214,6 +216,7 @@ final class SaberXRGame {
 
     func start() {
         clashDetector.triggerDistance = tuning.clashTriggerDistance
+        SaberXRHolder.shared.wandsEverTracked = false
 
         // Without these the engine drops all spatial input events.
         registerXREvents()
@@ -247,6 +250,7 @@ final class SaberXRGame {
         elapsed += dt
 
         updateLocalInput(dt: dt)
+        updateLoadingSpinner(dt: dt)
         updateRemote(dt: dt)
         publishBlades()
         detectClashes(dt: dt)
@@ -287,7 +291,10 @@ final class SaberXRGame {
                 // First sight of this wand: light it up, so entering the arena
                 // gives immediate feedback (mixed immersion shows nothing at
                 // all otherwise). The trigger retracts it as usual.
-                if !state.everTracked { autoIgnite.append(hand) }
+                if !state.everTracked {
+                    autoIgnite.append(hand)
+                    SaberXRHolder.shared.wandsEverTracked = true
+                }
                 state.everTracked = true
                 state.untrackedTime = 0
                 state.hilt = poses[hand].position
@@ -314,20 +321,43 @@ final class SaberXRGame {
             toggleIgnite(hand: hand)
         }
 
-        // Tracking not delivering after a couple of seconds in the arena?
-        // Ignite anyway at the resting pose: two frozen blades ahead of you
-        // beat an empty room — and they diagnose "tracking dead" at a glance
-        // (blades that follow the wands mean everything is healthy).
-        if !fallbackIgniteDone, elapsed > 2.0 {
-            fallbackIgniteDone = true
-            for hand in 0 ..< 2 where !localHands[hand].everTracked && !localHands[hand].ignitedTarget {
-                toggleIgnite(hand: hand)
-            }
-        }
-
         #if targetEnvironment(simulator)
         driveSimulatorDebugBlades()
         #endif
+    }
+
+    // MARK: - Loading spinner
+
+    /// While the wands exist but neither has delivered a tracked pose yet,
+    /// orbit a pair of fading sparks on a small circle ahead of the user: a
+    /// "loading" cue for the seconds ARKit needs to bring up world tracking
+    /// and accessory anchors. It only renders once head tracking works (the
+    /// engine skips frames without a device anchor), so a visible spinner
+    /// also means the render path is healthy — it vanishes the moment the
+    /// first wand tracks and the blades auto-ignite. Replaces the old
+    /// frozen-blades-at-resting-pose fallback, which read as broken.
+    private func updateLoadingSpinner(dt: Float) {
+        guard !localHands.contains(where: { $0.everTracked }),
+              isPSVR2SenseConnected()
+        else { return }
+
+        // Spawn cadence tuned to the spark system: 2 sparks every 45 ms fill
+        // the 8-spark cap over ~0.18 s — exactly one spark lifetime — so the
+        // ring carries a full fading comet trail.
+        spinnerAccumulator += dt
+        guard spinnerAccumulator >= 0.045 else { return }
+        spinnerAccumulator = 0
+
+        // World origin is on the floor beneath the user at space open, -Z is
+        // where they were facing: chest height, one metre ahead.
+        let center = SIMD3<Float>(0, 1.35, -1.0)
+        let radius: Float = 0.12
+        let speed: Float = 3.0 // rad/s
+        for arm in 0 ..< 2 {
+            let angle = elapsed * speed + Float(arm) * .pi
+            let position = center + SIMD3<Float>(cos(angle), sin(angle), 0) * radius
+            spawnCoolSaberClashSpark(at: position, color: localColor, intensity: 2.5)
+        }
     }
 
     private func toggleIgnite(hand: Int) {
