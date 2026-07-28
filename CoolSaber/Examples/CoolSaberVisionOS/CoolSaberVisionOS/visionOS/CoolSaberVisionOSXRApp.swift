@@ -67,8 +67,8 @@ final class SaberXRHolder: @unchecked Sendable {
 /// Defaults for the saber-fit tuning; the control window persists each
 /// player's own adjustments on their device (grips and hand sizes differ).
 enum SaberFitDefaults {
-    static let tilt: Float = 83
-    static let lean: Float = 0
+    static let tilt: Float = 73
+    static let lean: Float = 6
     static let gripOffset = SIMD3<Float>(-0.015, -0.005, -0.055)
 }
 
