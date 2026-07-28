@@ -109,6 +109,9 @@ struct CoolSaberVisionOSXRApp: App {
 
     var body: some SwiftUI.Scene {
         WindowGroup {
+            // Scrollable so expanding the fit panel can never push the
+            // SharePlay controls out of the window.
+            ScrollView {
             VStack(spacing: 20) {
                 Text("Cool Saber").font(.extraLargeTitle).fontWeight(.bold)
                 Text("Grab your PSVR2 controllers, pull a trigger to ignite.\nStart a duel on a FaceTime call for a two-player laser battle.")
@@ -150,7 +153,9 @@ struct CoolSaberVisionOSXRApp: App {
 
                 // Saber fit: how the blade sits on THIS player's grip. Applied
                 // live and saved on this device, so every player dials in
-                // their own controller without touching code.
+                // their own controller without touching code. Collapsed by
+                // default so the main actions stay visible in the window.
+                DisclosureGroup("Saber fit") {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                     GridRow {
                         Text("Tilt \(Int(bladeTilt))°").monospacedDigit()
@@ -179,11 +184,7 @@ struct CoolSaberVisionOSXRApp: App {
                     }
                 }
                 .font(.callout)
-                .onChange(of: bladeTilt) { _, _ in pushFit() }
-                .onChange(of: bladeLean) { _, _ in pushFit() }
-                .onChange(of: fitSide) { _, _ in pushFit() }
-                .onChange(of: fitHeight) { _, _ in pushFit() }
-                .onChange(of: fitForward) { _, _ in pushFit() }
+                .padding(.top, 8)
 
                 Button("Reset saber fit") {
                     bladeTilt = Double(SaberFitDefaults.tilt)
@@ -194,6 +195,12 @@ struct CoolSaberVisionOSXRApp: App {
                 }
                 .buttonStyle(.borderless)
                 .font(.footnote)
+                }
+                .onChange(of: bladeTilt) { _, _ in pushFit() }
+                .onChange(of: bladeLean) { _, _ in pushFit() }
+                .onChange(of: fitSide) { _, _ in pushFit() }
+                .onChange(of: fitHeight) { _, _ in pushFit() }
+                .onChange(of: fitForward) { _, _ in pushFit() }
 
                 Divider()
 
@@ -271,9 +278,10 @@ struct CoolSaberVisionOSXRApp: App {
                     }
                 }
             }
+            }
         }
         .windowStyle(.plain)
-        .defaultSize(width: 640, height: 560)
+        .defaultSize(width: 640, height: 640)
 
         ImmersiveSpace(id: "Saber") {
             CompositorLayer(configuration: SaberLayerConfiguration()) { layerRenderer in
