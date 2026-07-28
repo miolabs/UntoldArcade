@@ -33,6 +33,7 @@ final class SaberXRHolder: @unchecked Sendable {
     private let lock = NSLock()
     private var localColorStorage = SIMD3<Float>(0.35, 0.55, 1.0)
     private var bladeTiltStorage: Float = SaberFitDefaults.tilt
+    private var bladeLeanStorage: Float = SaberFitDefaults.lean
     private var gripOffsetStorage = SaberFitDefaults.gripOffset
 
     var localColor: SIMD3<Float> {
@@ -47,6 +48,14 @@ final class SaberXRHolder: @unchecked Sendable {
         set { lock.withLock { bladeTiltStorage = newValue } }
     }
 
+    /// Sideways lean of the tilted blade in degrees: swings the blade's
+    /// forward tilt left (-) or right (+) around the controller's up axis —
+    /// the correction tilt alone can't make.
+    var bladeLeanDegrees: Float {
+        get { lock.withLock { bladeLeanStorage } }
+        set { lock.withLock { bladeLeanStorage = newValue } }
+    }
+
     /// Blade origin relative to the controller pose, controller-local metres:
     /// x = side (right +), y = up out of the fist, z = forward (-) / back (+).
     var gripOffsetLocal: SIMD3<Float> {
@@ -58,8 +67,9 @@ final class SaberXRHolder: @unchecked Sendable {
 /// Defaults for the saber-fit tuning; the control window persists each
 /// player's own adjustments on their device (grips and hand sizes differ).
 enum SaberFitDefaults {
-    static let tilt: Float = 68
-    static let gripOffset = SIMD3<Float>(0, 0.03, -0.03)
+    static let tilt: Float = 83
+    static let lean: Float = 0
+    static let gripOffset = SIMD3<Float>(-0.015, -0.005, -0.055)
 }
 
 struct SaberLayerConfiguration: CompositorLayerConfiguration {
@@ -92,6 +102,7 @@ struct CoolSaberVisionOSXRApp: App {
     @State private var bladeColorID = "blue"
     // Saber fit, persisted per player: everyone grips the wand differently.
     @AppStorage("saber.fit.tilt") private var bladeTilt = Double(SaberFitDefaults.tilt)
+    @AppStorage("saber.fit.lean") private var bladeLean = Double(SaberFitDefaults.lean)
     @AppStorage("saber.fit.side") private var fitSide = Double(SaberFitDefaults.gripOffset.x)
     @AppStorage("saber.fit.height") private var fitHeight = Double(SaberFitDefaults.gripOffset.y)
     @AppStorage("saber.fit.forward") private var fitForward = Double(SaberFitDefaults.gripOffset.z)
@@ -146,6 +157,10 @@ struct CoolSaberVisionOSXRApp: App {
                         Slider(value: $bladeTilt, in: 0 ... 90, step: 1)
                     }
                     GridRow {
+                        Text("Lean \(Int(bladeLean))°").monospacedDigit()
+                        Slider(value: $bladeLean, in: -60 ... 60, step: 1)
+                    }
+                    GridRow {
                         Text(cmLabel("Side", fitSide)).monospacedDigit()
                         Slider(value: $fitSide, in: -0.06 ... 0.06, step: 0.005)
                     }
@@ -165,12 +180,14 @@ struct CoolSaberVisionOSXRApp: App {
                 }
                 .font(.callout)
                 .onChange(of: bladeTilt) { _, _ in pushFit() }
+                .onChange(of: bladeLean) { _, _ in pushFit() }
                 .onChange(of: fitSide) { _, _ in pushFit() }
                 .onChange(of: fitHeight) { _, _ in pushFit() }
                 .onChange(of: fitForward) { _, _ in pushFit() }
 
                 Button("Reset saber fit") {
                     bladeTilt = Double(SaberFitDefaults.tilt)
+                    bladeLean = Double(SaberFitDefaults.lean)
                     fitSide = Double(SaberFitDefaults.gripOffset.x)
                     fitHeight = Double(SaberFitDefaults.gripOffset.y)
                     fitForward = Double(SaberFitDefaults.gripOffset.z)
@@ -311,6 +328,7 @@ struct CoolSaberVisionOSXRApp: App {
 
     private func pushFit() {
         SaberXRHolder.shared.bladeTiltDegrees = Float(bladeTilt)
+        SaberXRHolder.shared.bladeLeanDegrees = Float(bladeLean)
         SaberXRHolder.shared.gripOffsetLocal = SIMD3<Float>(
             Float(fitSide), Float(fitHeight), Float(fitForward)
         )

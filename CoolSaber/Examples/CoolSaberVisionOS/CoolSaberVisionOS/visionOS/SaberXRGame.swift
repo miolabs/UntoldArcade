@@ -159,12 +159,19 @@ struct SaberTuning {
     var gripOffsetLocal: SIMD3<Float> {
         SaberXRHolder.shared.gripOffsetLocal
     }
-    /// Blade direction in controller-local space, from the tilt angle set in
-    /// the control window: rotates from +Y (out of the fist) toward -Z (the
-    /// controller's forward) — 0° vertical grip, 90° arm extension.
+    /// Blade direction in controller-local space, from the fit angles set in
+    /// the control window. Tilt rotates from +Y (out of the fist) toward -Z
+    /// (the controller's forward: 0° vertical grip, 90° arm extension); lean
+    /// then swings that tilted direction left/right around the controller's
+    /// up axis — the sideways correction tilt alone can't express.
     var bladeAxisLocal: SIMD3<Float> {
         let tilt = SaberXRHolder.shared.bladeTiltDegrees * .pi / 180
-        return SIMD3<Float>(0, cos(tilt), -sin(tilt))
+        let lean = SaberXRHolder.shared.bladeLeanDegrees * .pi / 180
+        return SIMD3<Float>(
+            -sin(tilt) * sin(lean),
+            cos(tilt),
+            -sin(tilt) * cos(lean)
+        )
     }
     var fullLength: Float = 0.95
     var coreRadius: Float = 0.02
