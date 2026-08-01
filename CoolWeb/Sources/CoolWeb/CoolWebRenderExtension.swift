@@ -6,7 +6,7 @@ import UntoldEngine
 /// Rendering implementation owned by `CoolWebPlugin`.
 ///
 /// Render-only: one scene pass at `.beforePostProcess` first writes real-scene
-/// depth (ARKit reconstruction meshes, depth-only) and then draws every strand
+/// depth (ARKit reconstruction meshes, depth-only) and then draws every thread
 /// segment and impact splat in a single alpha-blended draw call over the
 /// engine's HDR scene targets. The engine executes the graph once per eye, so
 /// nothing here is eye-aware.
@@ -15,12 +15,12 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
 
     private let encodeLock = NSLock()
 
-    // Particle positions are too big for setVertexBytes (4 KB limit), so they
-    // travel in a small ring of shared buffers. The pass encodes twice per
-    // frame (once per eye); 6 slots keep writes clear of in-flight reads.
-    private static let particleBufferRingSize = 6
-    private var particleBuffers: [MTLBuffer] = []
-    private var particleBufferCursor = 0
+    // Segments are far too big for setVertexBytes (4 KB limit), so they travel
+    // in a small ring of shared buffers. The pass encodes twice per frame
+    // (once per eye); 6 slots keep writes clear of in-flight reads.
+    private static let segmentBufferRingSize = 6
+    private var segmentBuffers: [MTLBuffer] = []
+    private var segmentBufferCursor = 0
 
     // One-shot diagnostics so a silently skipped pass is visible in the log.
     private var loggedScenePass = false
@@ -99,7 +99,7 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
         encodeLock.withLock {
             let state = CoolWebSceneState.shared.state()
             let occlusionMeshes = CoolWebOcclusionStore.shared.snapshot()
-            guard !state.strands.isEmpty || !state.splats.isEmpty else { return }
+            guard !state.segments.isEmpty || !state.splats.isEmpty else { return }
 
             let now = ProcessInfo.processInfo.systemUptime
 
@@ -110,32 +110,20 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
                 Float(now.truncatingRemainder(dividingBy: 3600))
             )
 
-            guard let particleBuffer = nextParticleBuffer(device: context.device) else {
-                logOnce(&loggedSceneFailure, "scene pass: no particle buffer — NOT drawing")
+            guard let segmentBuffer = nextSegmentBuffer(device: context.device) else {
+                logOnce(&loggedSceneFailure, "scene pass: no segment buffer — NOT drawing")
                 return
             }
-            let particlePointer = particleBuffer.contents()
-                .bindMemory(
-                    to: SIMD4<Float>.self,
-                    capacity: CoolWebShaderLimits.maxStrands
-                        * CoolWebShaderLimits.strandParticles
-                )
-
-            for (index, strand) in state.strands.enumerated() {
-                var gpu = CoolWebStrandGPU()
-                gpu.color = SIMD4<Float>(strand.color, strand.opacity)
-                gpu.params = SIMD4<Float>(
-                    strand.radius,
-                    Float(strand.particles.count),
-                    strand.seed,
-                    0
-                )
-                uniforms.setStrand(index, gpu)
-
-                let base = index * CoolWebShaderLimits.strandParticles
-                for (particleIndex, particle) in strand.particles.enumerated() {
-                    particlePointer[base + particleIndex] = SIMD4<Float>(particle, 0)
-                }
+            let segmentPointer = segmentBuffer.contents().bindMemory(
+                to: CoolWebSegmentGPU.self,
+                capacity: CoolWebShaderLimits.maxSegments
+            )
+            for (index, segment) in state.segments.enumerated() {
+                var gpu = CoolWebSegmentGPU()
+                gpu.a = SIMD4<Float>(segment.a, segment.radius)
+                gpu.b = SIMD4<Float>(segment.b, segment.tension)
+                gpu.params = SIMD4<Float>(segment.opacity, segment.seed, 0, 0)
+                segmentPointer[index] = gpu
             }
 
             for (index, splat) in state.splats.enumerated() {
@@ -147,9 +135,10 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
             }
 
             uniforms.counts = SIMD4<UInt32>(
-                UInt32(state.strands.count),
+                UInt32(state.segments.count),
                 UInt32(state.splats.count),
-                0, 0
+                state.tensionHeatmap ? 1 : 0,
+                0
             )
 
             guard let encoder = context.sceneRenderTargets.makeRenderCommandEncoder(
@@ -164,8 +153,8 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
             logOnce(
                 &loggedScenePass,
                 String(
-                    format: "scene pass drawing — %d strand(s), %d splat(s), camera (%.2f, %.2f, %.2f)",
-                    state.strands.count,
+                    format: "scene pass drawing — %d segment(s), %d splat(s), camera (%.2f, %.2f, %.2f)",
+                    state.segments.count,
                     state.splats.count,
                     context.camera.worldPosition.x,
                     context.camera.worldPosition.y,
@@ -187,14 +176,12 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
                 index: CoolWebBufferIndex.uniforms.rawValue
             )
             encoder.setVertexBuffer(
-                particleBuffer,
+                segmentBuffer,
                 offset: 0,
-                index: CoolWebBufferIndex.particles.rawValue
+                index: CoolWebBufferIndex.segments.rawValue
             )
 
-            let quadCount = CoolWebShaderLimits.maxStrands
-                * CoolWebShaderLimits.strandSegments
-                + CoolWebShaderLimits.maxSplats
+            let quadCount = state.segments.count + state.splats.count
             encoder.drawPrimitives(
                 type: .triangle,
                 vertexStart: 0,
@@ -243,19 +230,19 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
         }
     }
 
-    private func nextParticleBuffer(device: MTLDevice) -> MTLBuffer? {
-        if particleBuffers.isEmpty {
-            for slot in 0 ..< Self.particleBufferRingSize {
+    private func nextSegmentBuffer(device: MTLDevice) -> MTLBuffer? {
+        if segmentBuffers.isEmpty {
+            for slot in 0 ..< Self.segmentBufferRingSize {
                 guard let buffer = device.makeBuffer(
-                    length: CoolWebShaderLimits.particleBufferLength,
+                    length: CoolWebShaderLimits.segmentBufferLength,
                     options: .storageModeShared
                 ) else { return nil }
-                buffer.label = "CoolWeb Particles \(slot)"
-                particleBuffers.append(buffer)
+                buffer.label = "CoolWeb Segments \(slot)"
+                segmentBuffers.append(buffer)
             }
         }
-        let buffer = particleBuffers[particleBufferCursor]
-        particleBufferCursor = (particleBufferCursor + 1) % particleBuffers.count
+        let buffer = segmentBuffers[segmentBufferCursor]
+        segmentBufferCursor = (segmentBufferCursor + 1) % segmentBuffers.count
         return buffer
     }
 }

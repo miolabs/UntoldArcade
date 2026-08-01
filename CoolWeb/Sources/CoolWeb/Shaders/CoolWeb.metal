@@ -2,12 +2,12 @@
 //  CoolWeb.metal
 //  CoolWeb
 //
-//  Web-strand + impact-splat rendering. All geometry is procedural from the
-//  vertex id: the first COOLWEB_MAX_STRANDS * COOLWEB_STRAND_SEGMENTS quads are
-//  strand segments (camera-facing ribbons around each rope segment, capsule SDF
-//  in the fragment), the last COOLWEB_MAX_SPLATS quads are surface-oriented
-//  web-pattern decals at attach points. Drawn with straight alpha blending,
-//  depth test on and depth write off, over the engine's HDR scene targets.
+//  Web-net + impact-splat rendering. All geometry is procedural from the
+//  vertex id: the first counts.x quads are thread segments (camera-facing
+//  ribbons with a capsule SDF in the fragment), the last COOLWEB_MAX_SPLATS
+//  quads are surface-oriented web-pattern decals at attach points. Drawn with
+//  premultiplied alpha, depth test on and depth write off, over the engine's
+//  HDR scene targets.
 //
 
 #include <metal_stdlib>
@@ -17,13 +17,12 @@ using namespace metal;
 
 struct WebVertexOut {
     float4 position [[position]];
-    float2 local;          // strand: (m along segment, m across)
+    float2 local;          // segment: (m along segment, m across)
                            // splat: plane coords in meters, centered
-    float2 extra;          // strand: (normalized distance along strand, 0)
     float4 color [[flat]]; // rgb color, w opacity
-    float4 params [[flat]]; // strand: (core radius, glow margin, seed, time)
+    float4 params [[flat]]; // segment: (core radius, seg length, seed, time)
                             // splat: (pattern radius, seed, age, time)
-    uint kind [[flat]];    // 0 = strand, 1 = splat
+    uint kind [[flat]];    // 0 = segment, 1 = splat
 };
 
 // Two CCW triangles covering the unit quad, as (u, v) in [0, 1]².
@@ -40,12 +39,11 @@ static float4 collapsedVertex() {
 vertex WebVertexOut coolWebStrandVertex(
     uint vid [[vertex_id]],
     constant CoolWebUniforms &u [[buffer(CoolWebUniformIndex)]],
-    device const float4 *particles [[buffer(CoolWebParticleIndex)]]
+    device const CoolWebSegmentGPU *segments [[buffer(CoolWebSegmentIndex)]]
 ) {
     WebVertexOut out;
     out.position = collapsedVertex();
     out.local = float2(0);
-    out.extra = float2(0);
     out.color = float4(0);
     out.params = float4(0);
     out.kind = 0;
@@ -55,23 +53,15 @@ vertex WebVertexOut coolWebStrandVertex(
     const float3 cameraPos = u.cameraWorld.xyz;
     const float time = u.cameraWorld.w;
 
-    const uint segmentQuadCount = COOLWEB_MAX_STRANDS * COOLWEB_STRAND_SEGMENTS;
-    if (quad < segmentQuadCount) {
-        const uint strandIndex = quad / COOLWEB_STRAND_SEGMENTS;
-        const uint segment = quad % COOLWEB_STRAND_SEGMENTS;
-        if (strandIndex >= u.counts.x) {
+    const uint segmentCount = u.counts.x;
+    if (quad < segmentCount) {
+        const CoolWebSegmentGPU segment = segments[quad];
+        const float opacity = segment.params.x;
+        if (opacity <= 0.001) {
             return out;
         }
-        const CoolWebStrandGPU strand = u.strands[strandIndex];
-        const float opacity = strand.color.w;
-        const uint particleCount = uint(strand.params.y);
-        if (opacity <= 0.001 || segment + 1 >= particleCount) {
-            return out;
-        }
-
-        const uint base = strandIndex * COOLWEB_STRAND_PARTICLES;
-        const float3 p0 = particles[base + segment].xyz;
-        const float3 p1 = particles[base + segment + 1].xyz;
+        const float3 p0 = segment.a.xyz;
+        const float3 p1 = segment.b.xyz;
         float3 axis = p1 - p0;
         const float segLength = length(axis);
         if (segLength < 1e-5) {
@@ -79,7 +69,7 @@ vertex WebVertexOut coolWebStrandVertex(
         }
         axis /= segLength;
 
-        const float radius = strand.params.x;
+        const float radius = segment.a.w;
         // Halo containment margin: the fragment windows the edge to exactly
         // zero at this distance and it also pads segment joints shut.
         const float margin = radius * 2.5 + 0.001;
@@ -99,19 +89,25 @@ vertex WebVertexOut coolWebStrandVertex(
         const float across = (corner.y * 2.0 - 1.0) * halfWidth;
         const float3 world = p0 + axis * along + side * across;
 
+        // Silk white, or the tension heatmap (blue at rest → red just before
+        // tearing) when the debug flag is set.
+        const float tension = saturate(segment.b.w);
+        float3 rgb = float3(0.92, 0.95, 1.0);
+        if (u.counts.z != 0) {
+            const float3 cool = float3(0.25, 0.45, 1.0);
+            const float3 hot = float3(1.0, 0.15, 0.10);
+            rgb = mix(cool, hot, tension);
+        }
+
         out.position = u.viewProj * float4(world, 1.0);
         out.local = float2(along, across);
-        out.extra = float2(
-            (float(segment) + corner.x) / float(COOLWEB_STRAND_SEGMENTS),
-            segLength
-        );
-        out.color = strand.color;
-        out.params = float4(radius, segLength, strand.params.z, time);
+        out.color = float4(rgb, opacity);
+        out.params = float4(radius, segLength, segment.params.y, time);
         out.kind = 0;
         return out;
     }
 
-    const uint splatIndex = quad - segmentQuadCount;
+    const uint splatIndex = quad - segmentCount;
     if (splatIndex >= u.counts.y) {
         return out;
     }
@@ -135,7 +131,6 @@ vertex WebVertexOut coolWebStrandVertex(
 
     out.position = u.viewProj * float4(world, 1.0);
     out.local = uv * radius;
-    out.extra = float2(0);
     out.color = float4(0.92, 0.95, 1.0, opacity);
     out.params = float4(radius, splat.params.x, splat.params.y, time);
     out.kind = 1;
@@ -188,18 +183,18 @@ fragment float4 coolWebStrandFragment(WebVertexOut in [[stage_in]]) {
         return float4(in.color.rgb * 1.1 * alpha, alpha);
     }
 
-    // Strand segment: capsule SDF in the ribbon's (along, across) space.
+    // Thread segment: capsule SDF in the ribbon's (along, across) space.
     const float radius = in.params.x;
     const float segLength = in.params.y;
     const float seed = in.params.z;
     const float along = clamp(in.local.x, 0.0, segLength);
     const float dist = length(float2(in.local.x - along, in.local.y));
 
-    // Milky silk core with a soft edge; a faint twist banding along the strand
+    // Milky silk core with a soft edge; faint banding along the thread
     // suggests wound fibers without any texture fetch.
     const float core = 1.0 - smoothstep(radius * 0.55, radius, dist);
     const float halo = (1.0 - smoothstep(radius, radius * 2.2, dist)) * 0.18;
-    const float twist = 0.88 + 0.12 * sin(in.extra.x * 240.0 + seed * 7.0);
+    const float twist = 0.88 + 0.12 * sin(in.local.x * 900.0 + seed * 7.0);
 
     const float alpha = saturate(core + halo) * in.color.w;
     if (alpha < 0.005) {

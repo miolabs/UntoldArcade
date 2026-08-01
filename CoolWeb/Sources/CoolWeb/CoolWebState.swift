@@ -1,26 +1,28 @@
 import Foundation
 import simd
 
-/// One web strand as the game wants it drawn this frame.
-public struct CoolWebStrandDesc: Sendable, Equatable {
-    /// World-space particle positions, root (hand side) first. At most
-    /// `CoolWebShaderLimits.strandParticles`; extra particles are dropped.
-    public var particles: [SIMD3<Float>]
+/// One drawable web-thread segment for this frame.
+public struct CoolWebSegmentDesc: Sendable, Equatable {
+    public var a: SIMD3<Float>
+    public var b: SIMD3<Float>
     public var radius: Float
-    public var color: SIMD3<Float>
+    /// 0 at rest length … 1 just before tearing (drives the debug heatmap).
+    public var tension: Float
     public var opacity: Float
     public var seed: Float
 
     public init(
-        particles: [SIMD3<Float>],
-        radius: Float = 0.004,
-        color: SIMD3<Float> = SIMD3<Float>(0.92, 0.95, 1.0),
+        a: SIMD3<Float>,
+        b: SIMD3<Float>,
+        radius: Float = 0.002,
+        tension: Float = 0,
         opacity: Float = 1,
         seed: Float = 0
     ) {
-        self.particles = particles
+        self.a = a
+        self.b = b
         self.radius = radius
-        self.color = color
+        self.tension = tension
         self.opacity = opacity
         self.seed = seed
     }
@@ -59,8 +61,9 @@ final class CoolWebSceneState: @unchecked Sendable {
     static let shared = CoolWebSceneState()
 
     struct State: Sendable {
-        var strands: [CoolWebStrandDesc] = []
+        var segments: [CoolWebSegmentDesc] = []
         var splats: [CoolWebSplatDesc] = []
+        var tensionHeatmap = false
     }
 
     private let lock = NSLock()
@@ -70,37 +73,41 @@ final class CoolWebSceneState: @unchecked Sendable {
         lock.withLock { current }
     }
 
-    func setScene(strands: [CoolWebStrandDesc], splats: [CoolWebSplatDesc]) {
-        let sanitizedStrands = strands
-            .prefix(CoolWebShaderLimits.maxStrands)
+    func setScene(segments: [CoolWebSegmentDesc], splats: [CoolWebSplatDesc]) {
+        let sanitizedSegments = segments
+            .prefix(CoolWebShaderLimits.maxSegments)
             .compactMap { Self.sanitize($0) }
         let sanitizedSplats = splats
             .prefix(CoolWebShaderLimits.maxSplats)
             .compactMap { Self.sanitize($0) }
         lock.withLock {
-            current.strands = sanitizedStrands
+            current.segments = sanitizedSegments
             current.splats = sanitizedSplats
         }
     }
 
-    func clear() {
-        lock.withLock { current = State() }
+    func setTensionHeatmap(_ enabled: Bool) {
+        lock.withLock { current.tensionHeatmap = enabled }
     }
 
-    private static func sanitize(_ desc: CoolWebStrandDesc) -> CoolWebStrandDesc? {
-        var strand = desc
-        if strand.particles.count > CoolWebShaderLimits.strandParticles {
-            strand.particles = Array(
-                strand.particles.prefix(CoolWebShaderLimits.strandParticles)
-            )
+    func clear() {
+        lock.withLock {
+            let heatmap = current.tensionHeatmap
+            current = State()
+            current.tensionHeatmap = heatmap
         }
-        guard strand.particles.count >= 2,
-              strand.opacity > 0,
-              strand.particles.allSatisfy({ simd_length_squared($0).isFinite })
+    }
+
+    private static func sanitize(_ desc: CoolWebSegmentDesc) -> CoolWebSegmentDesc? {
+        var segment = desc
+        guard segment.opacity > 0,
+              simd_length_squared(segment.a).isFinite,
+              simd_length_squared(segment.b).isFinite
         else { return nil }
-        strand.radius = max(0.001, strand.radius)
-        strand.opacity = min(1, strand.opacity)
-        return strand
+        segment.radius = max(0.0005, segment.radius)
+        segment.tension = min(max(segment.tension, 0), 1)
+        segment.opacity = min(segment.opacity, 1)
+        return segment
     }
 
     private static func sanitize(_ desc: CoolWebSplatDesc) -> CoolWebSplatDesc? {
@@ -112,7 +119,7 @@ final class CoolWebSceneState: @unchecked Sendable {
         else { return nil }
         splat.normal = simd_normalize(splat.normal)
         splat.radius = max(0.01, splat.radius)
-        splat.opacity = min(1, splat.opacity)
+        splat.opacity = min(splat.opacity, 1)
         return splat
     }
 }
@@ -120,16 +127,22 @@ final class CoolWebSceneState: @unchecked Sendable {
 // MARK: - Public API
 
 /// Replaces the drawn scene wholesale. Safe to call every frame from the game
-/// update; degenerate strands/splats are dropped and counts are capped at the
+/// update; degenerate segments/splats are dropped and counts are capped at the
 /// shader limits.
 public func setCoolWebScene(
-    strands: [CoolWebStrandDesc],
+    segments: [CoolWebSegmentDesc],
     splats: [CoolWebSplatDesc] = []
 ) {
-    CoolWebSceneState.shared.setScene(strands: strands, splats: splats)
+    CoolWebSceneState.shared.setScene(segments: segments, splats: splats)
 }
 
-/// Hides all strands and splats (e.g. on session teardown).
+/// Debug view: colors every thread by its tension (blue at rest → red just
+/// before tearing) instead of silk white.
+public func setCoolWebTensionHeatmap(_ enabled: Bool) {
+    CoolWebSceneState.shared.setTensionHeatmap(enabled)
+}
+
+/// Hides all segments and splats (e.g. on session teardown).
 public func clearCoolWebScene() {
     CoolWebSceneState.shared.clear()
 }

@@ -4,20 +4,20 @@ import simd
 /// Every member is padded into float4/uint4 lanes; a stride test in
 /// CoolWebPluginTests guards against drift between the two files.
 public enum CoolWebShaderLimits {
-    public static let maxStrands = 4
-    public static let strandParticles = 64
-    public static let strandSegments = strandParticles - 1
+    public static let maxSegments = 4096
     public static let maxSplats = 4
 
-    /// Bytes of the shared particle buffer:
-    /// float4[maxStrands * strandParticles], xyz world, w unused.
-    public static let particleBufferLength =
-        maxStrands * strandParticles * MemoryLayout<SIMD4<Float>>.stride
+    /// Bytes of the shared segment buffer: CoolWebSegmentGPU[maxSegments].
+    public static let segmentBufferLength =
+        maxSegments * MemoryLayout<CoolWebSegmentGPU>.stride
 }
 
-public struct CoolWebStrandGPU: Sendable, Equatable {
-    public var color: SIMD4<Float> = .zero  // rgb color, w opacity
-    public var params: SIMD4<Float> = .zero // x core radius, y particle count, z seed
+/// One drawable thread segment. Everything on screen — flying cone threads,
+/// cross-links, wall residue, torn dangles — is a list of these.
+public struct CoolWebSegmentGPU: Sendable, Equatable {
+    public var a: SIMD4<Float> = .zero      // xyz endpoint A, w core radius
+    public var b: SIMD4<Float> = .zero      // xyz endpoint B, w tension 0…1
+    public var params: SIMD4<Float> = .zero // x opacity, y seed
 
     public init() {}
 }
@@ -33,27 +33,14 @@ public struct CoolWebSplatGPU: Sendable, Equatable {
 public struct CoolWebUniforms: Sendable {
     public var viewProj = matrix_identity_float4x4
     public var cameraWorld = SIMD4<Float>(0, 0, 0, 0) // xyz camera, w time
-    public var counts = SIMD4<UInt32>(0, 0, 0, 0)     // x strand slots, y splats
-    public var strands = (
-        CoolWebStrandGPU(), CoolWebStrandGPU(),
-        CoolWebStrandGPU(), CoolWebStrandGPU()
-    )
+    /// x segments, y splats, z tension-heatmap flag.
+    public var counts = SIMD4<UInt32>(0, 0, 0, 0)
     public var splats = (
         CoolWebSplatGPU(), CoolWebSplatGPU(),
         CoolWebSplatGPU(), CoolWebSplatGPU()
     )
 
     public init() {}
-
-    public mutating func setStrand(_ index: Int, _ strand: CoolWebStrandGPU) {
-        switch index {
-        case 0: strands.0 = strand
-        case 1: strands.1 = strand
-        case 2: strands.2 = strand
-        case 3: strands.3 = strand
-        default: break
-        }
-    }
 
     public mutating func setSplat(_ index: Int, _ splat: CoolWebSplatGPU) {
         switch index {
@@ -68,5 +55,5 @@ public struct CoolWebUniforms: Sendable {
 
 public enum CoolWebBufferIndex: Int {
     case uniforms = 0
-    case particles = 1
+    case segments = 1
 }

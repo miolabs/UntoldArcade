@@ -124,7 +124,7 @@ final class WebXRGame: @unchecked Sendable {
         shooter.step(now: now, dt: deltaTime)
 
         holder.setSceneDiagnostics(
-            strandCount: shooter.liveStrandCount,
+            strandCount: shooter.liveNetCount,
             surfaceTriangles: CoolWebSurfaceStore.shared.triangleCount
         )
     }

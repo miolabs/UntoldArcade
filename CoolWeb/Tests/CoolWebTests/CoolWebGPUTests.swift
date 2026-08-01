@@ -24,8 +24,8 @@ final class CoolWebGPUTests: XCTestCase {
         }
     }
 
-    /// Renders one attached strand + splat offscreen through the real shaders
-    /// and asserts the web actually covers pixels.
+    /// Renders a web-net segment fan + splat offscreen through the real
+    /// shaders and asserts the web actually covers pixels.
     func testOffscreenRenderCoversPixels() throws {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue()
@@ -61,7 +61,7 @@ final class CoolWebGPUTests: XCTestCase {
         textureDescriptor.storageMode = .shared
         let target = try XCTUnwrap(device.makeTexture(descriptor: textureDescriptor))
 
-        // Scene: a vertical strand 2 m in front of the camera, plus a splat.
+        // Scene: a small thread fan 2 m in front of the camera, plus a splat.
         var uniforms = CoolWebUniforms()
         // Simple perspective looking down -Z from the origin.
         let fov: Float = 60 * .pi / 180
@@ -74,31 +74,28 @@ final class CoolWebGPUTests: XCTestCase {
         )
         uniforms.cameraWorld = SIMD4<Float>(0, 0, 0, 0)
 
-        var strand = CoolWebStrandGPU()
-        strand.color = SIMD4<Float>(0.92, 0.95, 1.0, 1.0)
-        strand.params = SIMD4<Float>(
-            0.05, // exaggerated radius so coverage is unambiguous
-            Float(CoolWebShaderLimits.strandParticles),
-            0,
-            0
-        )
-        uniforms.setStrand(0, strand)
-
         var splat = CoolWebSplatGPU()
         splat.center = SIMD4<Float>(0.3, 0, -2, 0.4)
         splat.normal = SIMD4<Float>(0, 0, 1, 1)
         splat.params = SIMD4<Float>(0, 10, 0, 0) // fully drawn in
         uniforms.setSplat(0, splat)
-        uniforms.counts = SIMD4<UInt32>(1, 1, 0, 0)
 
-        var particles = [SIMD4<Float>](
-            repeating: .zero,
-            count: CoolWebShaderLimits.maxStrands * CoolWebShaderLimits.strandParticles
-        )
-        for i in 0 ..< CoolWebShaderLimits.strandParticles {
-            let t = Float(i) / Float(CoolWebShaderLimits.strandParticles - 1)
-            particles[i] = SIMD4<Float>(0, -0.8 + 1.6 * t, -2, 0)
+        // A fan of exaggeratedly thick segments so coverage is unambiguous.
+        var segments: [CoolWebSegmentGPU] = []
+        for i in 0 ..< 8 {
+            let angle = Float(i) / 8 * 2 * .pi
+            var segment = CoolWebSegmentGPU()
+            segment.a = SIMD4<Float>(0, 0, -2, 0.04)
+            segment.b = SIMD4<Float>(
+                0.7 * cos(angle),
+                0.7 * sin(angle),
+                -2,
+                Float(i) / 8 // spread of tension values
+            )
+            segment.params = SIMD4<Float>(1, Float(i), 0, 0)
+            segments.append(segment)
         }
+        uniforms.counts = SIMD4<UInt32>(UInt32(segments.count), 1, 0, 0)
 
         let passDescriptor = MTLRenderPassDescriptor()
         passDescriptor.colorAttachments[0].texture = target
@@ -119,7 +116,7 @@ final class CoolWebGPUTests: XCTestCase {
             length: MemoryLayout<CoolWebUniforms>.stride,
             index: CoolWebBufferIndex.uniforms.rawValue
         )
-        particles.withUnsafeBytes { bytes in
+        segments.withUnsafeBytes { bytes in
             let buffer = device.makeBuffer(
                 bytes: bytes.baseAddress!,
                 length: bytes.count,
@@ -128,12 +125,10 @@ final class CoolWebGPUTests: XCTestCase {
             encoder.setVertexBuffer(
                 buffer,
                 offset: 0,
-                index: CoolWebBufferIndex.particles.rawValue
+                index: CoolWebBufferIndex.segments.rawValue
             )
         }
-        let quadCount = CoolWebShaderLimits.maxStrands
-            * CoolWebShaderLimits.strandSegments
-            + CoolWebShaderLimits.maxSplats
+        let quadCount = segments.count + 1
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: quadCount * 6)
         encoder.endEncoding()
         commandBuffer.commit()
@@ -158,7 +153,7 @@ final class CoolWebGPUTests: XCTestCase {
         let coverage = Float(covered) / Float(size * size)
         XCTAssertGreaterThan(
             coverage, 0.02,
-            "strand + splat should cover a visible fraction of the frame"
+            "segment fan + splat should cover a visible fraction of the frame"
         )
     }
 }

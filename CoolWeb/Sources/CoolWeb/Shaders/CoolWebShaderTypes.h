@@ -2,7 +2,7 @@
 //  CoolWebShaderTypes.h
 //  CoolWeb
 //
-//  Shared GPU data layout for the web-strand renderer.
+//  Shared GPU data layout for the web-net renderer.
 //  Every member is padded into float4/uint4 lanes so the hand-maintained Swift
 //  mirror in CoolWebShaderABI.swift matches with zero padding surprises.
 //
@@ -12,16 +12,16 @@
 
 #include <metal_stdlib>
 
-#define COOLWEB_MAX_STRANDS 4
-#define COOLWEB_STRAND_PARTICLES 64
-#define COOLWEB_STRAND_SEGMENTS (COOLWEB_STRAND_PARTICLES - 1)
+#define COOLWEB_MAX_SEGMENTS 4096
 #define COOLWEB_MAX_SPLATS 4
 
+// One drawable thread segment. Everything on screen — flying cone threads,
+// cross-links, wall residue, torn dangles — is a list of these.
 typedef struct {
-    metal::float4 color;  // rgb strand color, w = opacity (dissolve fade)
-    metal::float4 params; // x = core radius (m), y = live particle count,
-                          // z = seed, w unused
-} CoolWebStrandGPU;
+    metal::float4 a;      // xyz world endpoint A, w = core radius (m)
+    metal::float4 b;      // xyz world endpoint B, w = tension (0 rest … 1 tearing)
+    metal::float4 params; // x = opacity, y = seed, zw unused
+} CoolWebSegmentGPU;
 
 typedef struct {
     metal::float4 center; // xyz world impact point, w = pattern radius (m)
@@ -32,16 +32,15 @@ typedef struct {
 typedef struct {
     metal::float4x4 viewProj;    // per-eye view-projection
     metal::float4   cameraWorld; // xyz camera position, w = time (s)
-    metal::uint4    counts;      // x = strand slots, y = splat count, zw unused
-    CoolWebStrandGPU strands[COOLWEB_MAX_STRANDS];
-    CoolWebSplatGPU  splats[COOLWEB_MAX_SPLATS];
+    metal::uint4    counts;      // x = segments, y = splats,
+                                 // z = tension heatmap flag, w unused
+    CoolWebSplatGPU splats[COOLWEB_MAX_SPLATS];
 } CoolWebUniforms;
 
-// Particle positions live in a separate buffer:
-// float4[COOLWEB_MAX_STRANDS * COOLWEB_STRAND_PARTICLES], xyz world, w unused.
+// Segments live in a separate buffer: CoolWebSegmentGPU[count].
 enum CoolWebBufferIndex {
     CoolWebUniformIndex = 0,
-    CoolWebParticleIndex = 1,
+    CoolWebSegmentIndex = 1,
 };
 
 #endif /* CoolWebShaderTypes_h */

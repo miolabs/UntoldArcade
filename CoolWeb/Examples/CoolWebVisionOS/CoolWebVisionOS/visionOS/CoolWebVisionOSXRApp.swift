@@ -114,6 +114,7 @@ struct CoolWebVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @State private var immersionStyle: ImmersionStyle = .mixed
     @State private var occlusionEnabled = true
+    @State private var tensionHeatmap = false
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -153,6 +154,14 @@ struct CoolWebVisionOSXRApp: App {
                         .frame(maxWidth: 320)
                         .onChange(of: occlusionEnabled) { _, enabled in
                             setCoolWebOcclusionEnabled(enabled)
+                        }
+
+                    // Debug view from the reference clip: threads shade from
+                    // blue at rest to red right before they tear.
+                    Toggle("Tension heatmap", isOn: $tensionHeatmap)
+                        .frame(maxWidth: 320)
+                        .onChange(of: tensionHeatmap) { _, enabled in
+                            setCoolWebTensionHeatmap(enabled)
                         }
 
                     Divider()
