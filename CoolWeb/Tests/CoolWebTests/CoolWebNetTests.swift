@@ -94,10 +94,11 @@ final class CoolWebNetTests: XCTestCase {
 
         let scene = CoolWebSceneState.shared.state()
         let params = CoolWebNetParams()
-        let threadSegments = params.threadCount * (params.particlesPerThread - 1)
+        let structuralSegments = (params.leaderParticles - 1)
+            + params.branchCount * params.branchParticles
         XCTAssertGreaterThan(
-            scene.segments.count, threadSegments,
-            "attached net should draw thread segments PLUS wall residue"
+            scene.segments.count, structuralSegments,
+            "attached web should draw leader + net segments PLUS wall residue"
         )
         XCTAssertEqual(scene.splats.count, 1)
         shooter.reset()
@@ -115,12 +116,16 @@ final class CoolWebNetTests: XCTestCase {
         run(shooter, from: 0, seconds: 3, hand: handOrigin)
         XCTAssertEqual(net.phase, .attached)
 
-        // Segment midpoints of the (slack) net must dip below the straight
-        // line from hand to wall hit (both at y = 1.5).
+        // The slack leader line must dip below the straight line from hand to
+        // wall hit (both at y = 1.5). Look only away from the wall (z > -1.6)
+        // so wall residue and net threads can't satisfy the check for free.
         var segments: [CoolWebSegmentDesc] = []
         net.appendSegments(into: &segments)
-        let minY = segments.map { min($0.a.y, $0.b.y) }.min() ?? 1.5
-        XCTAssertLessThan(minY, 1.47, "slack threads should sag below their endpoints")
+        let leaderMinY = segments
+            .filter { min($0.a.z, $0.b.z) > -1.6 }
+            .map { min($0.a.y, $0.b.y) }
+            .min() ?? 1.5
+        XCTAssertLessThan(leaderMinY, 1.47, "slack leader should sag below its endpoints")
         shooter.reset()
     }
 

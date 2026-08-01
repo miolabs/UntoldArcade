@@ -18,28 +18,38 @@ struct CoolWebRandom: RandomNumberGenerator {
     }
 }
 
-/// Tuning for one fired web net.
+/// Tuning for one fired web.
 public struct CoolWebNetParams: Sendable, Equatable {
-    /// Threads fanning out from the wrist.
-    public var threadCount: Int
-    /// Particles per thread (roots at the wrist, tips on the wall).
-    public var particlesPerThread: Int
+    /// Particles of the single leader line from the wrist.
+    public var leaderParticles: Int
+    /// Short branch threads the leader blooms into near the surface.
+    public var branchCount: Int
+    /// Particles per branch thread.
+    public var branchParticles: Int
     public var substeps: Int
     public var gravity: SIMD3<Float>
     /// Per-second velocity damping exponent (higher = calmer threads).
     public var damping: Float
-    /// Half-angle of the aim cone the thread rays scatter into (degrees).
-    public var coneHalfAngleDegrees: Float
+    /// Max radius of the net's spread on the surface (m).
+    public var netRadius: Float
+    /// Spread also scales with shot distance: radius = min(netRadius,
+    /// netRadiusFraction * distance).
+    public var netRadiusFraction: Float
     public var webSpeed: Float
     public var maxRange: Float
-    /// Per-thread rest-length slack range (1 = taut; >1 sags).
-    public var slackRange: ClosedRange<Float>
-    /// Random thread-to-thread links, as a fraction of threadCount.
-    public var crossLinksPerThread: Float
+    /// Leader rest-length slack (1 = taut; >1 sags).
+    public var leaderSlack: Float
+    /// Per-branch rest-length slack range.
+    public var branchSlackRange: ClosedRange<Float>
+    /// Cross-links between neighbouring branches, as a fraction of branchCount.
+    public var crossLinksPerBranch: Float
     /// Seconds after attach before cross-links engage (lets threads settle).
     public var crossLinkDelay: Float
     public var threadRadius: Float
-    /// Stretch ratio (length / rest) at which a thread segment snaps.
+    // Per-SEGMENT stretch at the snap point. Like a hanging cable, the
+    // segments at the supports carry ~1.5x the average stretch, so this
+    // needs headroom above the intended end-to-end tear point (~1.9 here
+    // means the whole line tears around 1.3-1.4x end to end).
     public var tearStretch: Float
     /// Random-walk web patches left on the surface around each attach point.
     public var residueWalksPerAttach: Int
@@ -51,41 +61,43 @@ public struct CoolWebNetParams: Sendable, Equatable {
     public var missDissolveDuration: Float
 
     public init(
-        threadCount: Int = 14,
-        particlesPerThread: Int = 16,
+        leaderParticles: Int = 20,
+        branchCount: Int = 8,
+        branchParticles: Int = 5,
         substeps: Int = 8,
         gravity: SIMD3<Float> = SIMD3<Float>(0, -9.81, 0),
         damping: Float = 2.0,
-        coneHalfAngleDegrees: Float = 9,
+        netRadius: Float = 0.22,
+        netRadiusFraction: Float = 0.12,
         webSpeed: Float = 18,
         maxRange: Float = 7,
-        slackRange: ClosedRange<Float> = 1.03 ... 1.16,
-        crossLinksPerThread: Float = 1.4,
+        leaderSlack: Float = 1.05,
+        branchSlackRange: ClosedRange<Float> = 1.02 ... 1.12,
+        crossLinksPerBranch: Float = 0.8,
         crossLinkDelay: Float = 0.2,
-        threadRadius: Float = 0.0018,
-        // Per-SEGMENT stretch at the snap point. Like a hanging cable, the
-        // segments at the supports carry ~1.5x the average stretch, so this
-        // needs headroom above the intended end-to-end tear point (~1.9 here
-        // means the whole thread tears around 1.3-1.4x end to end).
+        threadRadius: Float = 0.0016,
         tearStretch: Float = 1.9,
         residueWalksPerAttach: Int = 2,
-        residueSegmentsPerWalk: Int = 4,
-        residueStepMeters: ClosedRange<Float> = 0.03 ... 0.09,
+        residueSegmentsPerWalk: Int = 3,
+        residueStepMeters: ClosedRange<Float> = 0.015 ... 0.05,
         splatRadius: Float = 0.12,
         danglingDuration: Float = 2.5,
         dissolveDuration: Float = 0.8,
         missDissolveDuration: Float = 0.3
     ) {
-        self.threadCount = max(1, threadCount)
-        self.particlesPerThread = max(2, particlesPerThread)
+        self.leaderParticles = max(4, leaderParticles)
+        self.branchCount = max(1, branchCount)
+        self.branchParticles = max(2, branchParticles)
         self.substeps = max(1, substeps)
         self.gravity = gravity
         self.damping = damping
-        self.coneHalfAngleDegrees = coneHalfAngleDegrees
+        self.netRadius = netRadius
+        self.netRadiusFraction = netRadiusFraction
         self.webSpeed = webSpeed
         self.maxRange = maxRange
-        self.slackRange = slackRange
-        self.crossLinksPerThread = crossLinksPerThread
+        self.leaderSlack = leaderSlack
+        self.branchSlackRange = branchSlackRange
+        self.crossLinksPerBranch = crossLinksPerBranch
         self.crossLinkDelay = crossLinkDelay
         self.threadRadius = threadRadius
         self.tearStretch = max(1.05, tearStretch)
@@ -100,20 +112,21 @@ public struct CoolWebNetParams: Sendable, Equatable {
 }
 
 public enum CoolWebNetPhase: Sendable, Equatable {
-    /// Tips are kinematic, flying from the hand toward their targets.
+    /// The leader tip is kinematic, flying from the hand toward the target;
+    /// near the surface it blooms into the branch net.
     case flying
-    /// Tips pinned to the surface, root cluster follows the hand.
+    /// Branch tips pinned to the surface, leader root follows the hand.
     case attached
-    /// Roots released; the net hangs off the wall before dissolving.
+    /// Root released; the web hangs off the wall before dissolving.
     case dangling
     /// Fading out; removed when opacity reaches zero.
     case dissolving
 }
 
-/// One fired web: a small position-based particle system — threads fanning
-/// from the wrist to scattered surface points, sparse cross-links, per-thread
-/// slack, tension-based tearing, and static residue threads sprayed on the
-/// surface around every attach point.
+/// One fired web: a single leader line from the wrist that blooms into a
+/// small net just before the surface — short branch threads fanning to
+/// scattered attach points around the hit, sparse cross-links, tension-based
+/// tearing, and a modest patch of residue threads on the wall.
 public final class CoolWebNet {
     public let hand: CoolWebHandSide
     public private(set) var phase: CoolWebNetPhase = .flying
@@ -130,7 +143,7 @@ public final class CoolWebNet {
         var tension: Float = 0
         /// Consecutive frames past the tear stretch. Tearing requires the
         /// overstretch to be sustained so a hand-tracking jump (a teleported
-        /// root pin) doesn't shred the net in one transient frame.
+        /// root pin) doesn't shred the web in one transient frame.
         var overstretchedFrames: UInt8 = 0
     }
 
@@ -140,10 +153,15 @@ public final class CoolWebNet {
 
     private let params: CoolWebNetParams
     private let origin: SIMD3<Float>
-    private let threadDirections: [SIMD3<Float>]
-    private let threadTargets: [SIMD3<Float>]
-    private let threadTargetNormals: [SIMD3<Float>?]
-    private let threadSlack: [Float]
+    private let aim: SIMD3<Float>
+    /// Where the leader ends and the net begins (just off the surface).
+    private let branchPoint: SIMD3<Float>
+    private let leaderDistance: Float
+    private let branchTargets: [SIMD3<Float>]
+    private let branchTargetNormals: [SIMD3<Float>?]
+    private let branchSlack: [Float]
+    private let leaderRest: Float
+    private let branchRest: [Float]
 
     private var positions: [SIMD3<Float>]
     private var previous: [SIMD3<Float>]
@@ -152,8 +170,8 @@ public final class CoolWebNet {
     private var crossLinksEngaged = false
 
     private var handPosition: SIMD3<Float>
-    private var rootsPinned = true
-    private var threadAttached: [Bool]
+    private var rootPinned = true
+    private var branchAttached: [Bool]
     private var tipTravel: Float = 0
     private var attachTime: TimeInterval?
     private var phaseChangeTime: TimeInterval
@@ -167,8 +185,6 @@ public final class CoolWebNet {
     public private(set) var tornCrossLinkCount = 0
     public var tornCount: Int { tornThreadCount + tornCrossLinkCount }
 
-    private let particlesPerThread: Int
-
     public init(
         hand: CoolWebHandSide,
         origin: SIMD3<Float>,
@@ -181,7 +197,6 @@ public final class CoolWebNet {
         self.hand = hand
         self.params = params
         self.origin = origin
-        particlesPerThread = params.particlesPerThread
         handPosition = origin
         phaseChangeTime = now
         dissolveDuration = params.dissolveDuration
@@ -189,97 +204,120 @@ public final class CoolWebNet {
         var rng = CoolWebRandom(seed: randomSeed)
         seed = Float.random(in: 0 ..< 100, using: &rng)
 
-        let aim = simd_normalize(direction)
+        aim = simd_normalize(direction)
         centerHit = surfaceQuery(origin, aim, params.maxRange)
 
-        // Scatter thread rays inside the aim cone; ray 0 is the center ray.
-        var basisU = simd_cross(aim, abs(aim.y) < 0.9 ? SIMD3<Float>(0, 1, 0) : SIMD3<Float>(1, 0, 0))
-        basisU = simd_normalize(basisU)
-        let basisV = simd_cross(aim, basisU)
-        let maxAngle = params.coneHalfAngleDegrees * .pi / 180
+        // The net spreads over a small disc around the hit; the leader stops
+        // one net-radius short of the wall and the branches bloom from there.
+        let hitDistance = centerHit?.distance ?? params.maxRange
+        let netRadius = min(params.netRadius, params.netRadiusFraction * hitDistance)
+        let standoff = min(max(netRadius * 1.2, 0.12), hitDistance * 0.5)
+        leaderDistance = hitDistance - standoff
+        branchPoint = origin + aim * leaderDistance
 
-        var directions: [SIMD3<Float>] = []
         var targets: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>?] = []
         var slacks: [Float] = []
-        for thread in 0 ..< params.threadCount {
-            let dir: SIMD3<Float>
-            if thread == 0 {
-                dir = aim
-            } else {
-                let angle = maxAngle * sqrt(Float.random(in: 0.15 ... 1, using: &rng))
-                let azimuth = Float.random(in: 0 ..< 2 * .pi, using: &rng)
-                dir = simd_normalize(
-                    aim * cos(angle)
-                        + (basisU * cos(azimuth) + basisV * sin(azimuth)) * sin(angle)
-                )
-            }
-            directions.append(dir)
+        if let centerHit {
+            var tangent = simd_cross(
+                centerHit.normal,
+                abs(centerHit.normal.y) < 0.9 ? SIMD3<Float>(0, 1, 0) : SIMD3<Float>(1, 0, 0)
+            )
+            tangent = simd_normalize(tangent)
+            let bitangent = simd_cross(centerHit.normal, tangent)
 
-            if let hit = surfaceQuery(origin, dir, params.maxRange) {
-                targets.append(hit.position)
-                normals.append(hit.normal)
-            } else if let centerHit {
-                // Project the ray onto the center hit's plane so stray threads
-                // still land on the wall around the impact.
-                let denom = simd_dot(dir, centerHit.normal)
-                let toPlane = simd_dot(centerHit.position - origin, centerHit.normal)
-                if abs(denom) > 1e-4, toPlane / denom > 0 {
-                    let t = min(toPlane / denom, params.maxRange * 1.3)
-                    targets.append(origin + dir * t)
-                    normals.append(centerHit.normal)
+            for branch in 0 ..< params.branchCount {
+                // Even angular spread with jitter, radius biased outward.
+                let angle = (Float(branch) + Float.random(in: -0.3 ... 0.3, using: &rng))
+                    / Float(params.branchCount) * 2 * .pi
+                let radius = netRadius * sqrt(Float.random(in: 0.25 ... 1, using: &rng))
+                let sample = centerHit.position
+                    + (tangent * cos(angle) + bitangent * sin(angle)) * radius
+
+                // Raycast from the branch point at the sampled spot so the
+                // net hugs real geometry; fall back to the hit plane.
+                let toSample = sample - branchPoint
+                let sampleDistance = simd_length(toSample)
+                if sampleDistance > 1e-4,
+                   let hit = surfaceQuery(
+                       branchPoint,
+                       toSample / sampleDistance,
+                       sampleDistance + 0.5
+                   ) {
+                    targets.append(hit.position)
+                    normals.append(hit.normal)
                 } else {
-                    targets.append(origin + dir * params.maxRange)
-                    normals.append(nil)
+                    targets.append(sample)
+                    normals.append(centerHit.normal)
                 }
-            } else {
-                targets.append(origin + dir * params.maxRange)
-                normals.append(nil)
+                slacks.append(Float.random(in: params.branchSlackRange, using: &rng))
             }
-            slacks.append(Float.random(in: params.slackRange, using: &rng))
+        } else {
+            // Whole shot misses: no net, the leader just flies out and fades.
+            for _ in 0 ..< params.branchCount {
+                targets.append(origin + aim * params.maxRange)
+                normals.append(nil)
+                slacks.append(1)
+            }
+            dissolveDuration = params.missDissolveDuration
         }
-        threadDirections = directions
-        threadTargets = targets
-        threadTargetNormals = normals
-        threadSlack = slacks
-        threadAttached = Array(repeating: false, count: params.threadCount)
+        branchTargets = targets
+        branchTargetNormals = normals
+        branchSlack = slacks
+        branchAttached = Array(repeating: false, count: params.branchCount)
 
-        let particleCount = params.threadCount * params.particlesPerThread
+        leaderRest = max(leaderDistance, 0.05) * params.leaderSlack
+            / Float(params.leaderParticles - 1)
+        let bloomOrigin = origin + aim * leaderDistance
+        var rests: [Float] = []
+        for branch in 0 ..< params.branchCount {
+            rests.append(
+                simd_length(targets[branch] - bloomOrigin) * slacks[branch]
+                    / Float(params.branchParticles)
+            )
+        }
+        branchRest = rests
+
+        // Particles: leader chain first, then each branch's own particles.
+        // A branch's first constraint hooks onto the leader's tip particle,
+        // forming the knot where the line blooms into the net.
+        let particleCount = params.leaderParticles
+            + params.branchCount * params.branchParticles
         positions = Array(repeating: origin, count: particleCount)
         previous = positions
 
-        // Thread segments: one distance constraint per consecutive pair.
         var built: [Constraint] = []
-        for thread in 0 ..< params.threadCount {
-            let base = thread * params.particlesPerThread
-            for i in 0 ..< (params.particlesPerThread - 1) {
+        for i in 0 ..< (params.leaderParticles - 1) {
+            built.append(Constraint(i: i, j: i + 1, rest: 0, isCrossLink: false))
+        }
+        let leaderTip = params.leaderParticles - 1
+        for branch in 0 ..< params.branchCount {
+            let base = params.leaderParticles + branch * params.branchParticles
+            built.append(Constraint(i: leaderTip, j: base, rest: 0, isCrossLink: false))
+            for i in 0 ..< (params.branchParticles - 1) {
                 built.append(Constraint(i: base + i, j: base + i + 1, rest: 0, isCrossLink: false))
             }
         }
         constraints = built
 
-        // Sparse cross-links between neighbouring threads at random depths
+        // Sparse cross-links between neighbouring branches at mid depth
         // (activated after attach, once rest distances are meaningful).
         var pairs: [(Int, Int)] = []
-        let crossLinkCount = Int(Float(params.threadCount) * params.crossLinksPerThread)
-        for _ in 0 ..< crossLinkCount {
-            let threadA = Int.random(in: 0 ..< params.threadCount, using: &rng)
-            var threadB = Int.random(in: 0 ..< params.threadCount, using: &rng)
-            if threadB == threadA { threadB = (threadB + 1) % params.threadCount }
+        let crossLinkCount = Int(Float(params.branchCount) * params.crossLinksPerBranch)
+        for link in 0 ..< crossLinkCount {
+            let branchA = link % params.branchCount
+            let branchB = (branchA + 1) % params.branchCount
+            guard branchA != branchB else { continue }
             let depth = Int.random(
-                in: (params.particlesPerThread / 4) ..< (params.particlesPerThread - 1),
+                in: (params.branchParticles / 2) ..< params.branchParticles,
                 using: &rng
             )
             pairs.append((
-                threadA * params.particlesPerThread + depth,
-                threadB * params.particlesPerThread + depth
+                params.leaderParticles + branchA * params.branchParticles + depth,
+                params.leaderParticles + branchB * params.branchParticles + depth
             ))
         }
         crossLinkPairs = pairs
-
-        if centerHit == nil {
-            dissolveDuration = params.missDissolveDuration
-        }
     }
 
     public var isDead: Bool { opacity <= 0 }
@@ -293,11 +331,11 @@ public final class CoolWebNet {
         handPosition = position
     }
 
-    /// Lets go of the roots: the net stays on the wall and dangles.
+    /// Lets go of the root: the web stays on the wall and dangles.
     public func release(now: TimeInterval) {
         guard isHeld else { return }
         if phase == .attached {
-            rootsPinned = false
+            rootPinned = false
             transition(to: .dangling, now: now)
         } else {
             dissolveDuration = params.missDissolveDuration
@@ -334,29 +372,32 @@ public final class CoolWebNet {
 
     private func updateFlying(now: TimeInterval, dt: Float) {
         tipTravel += params.webSpeed * dt
-        var allDone = true
-        for thread in 0 ..< threadDirections.count {
-            guard !threadAttached[thread] else { continue }
-            let targetDistance = simd_length(threadTargets[thread] - origin)
-            if tipTravel >= targetDistance {
-                threadAttached[thread] = true
-            } else {
-                allDone = false
+
+        guard centerHit != nil else {
+            if tipTravel >= params.maxRange {
+                transition(to: .dissolving, now: now)
             }
+            return
         }
 
-        if centerHit != nil, threadAttached[0], attachTime == nil {
-            attachTime = now
+        // Past the branch point the tips fan out; each branch pins on arrival.
+        var allDone = tipTravel >= leaderDistance
+        if tipTravel >= leaderDistance {
+            let bloomTravel = tipTravel - leaderDistance
+            for branch in 0 ..< branchTargets.count where !branchAttached[branch] {
+                let reach = simd_length(branchTargets[branch] - branchPoint)
+                if bloomTravel >= reach {
+                    branchAttached[branch] = true
+                } else {
+                    allDone = false
+                }
+            }
         }
 
         if allDone {
-            if centerHit != nil {
-                spawnResidue()
-                transition(to: .attached, now: now)
-                if attachTime == nil { attachTime = now }
-            } else {
-                transition(to: .dissolving, now: now)
-            }
+            spawnResidue()
+            attachTime = now
+            transition(to: .attached, now: now)
         }
     }
 
@@ -369,24 +410,7 @@ public final class CoolWebNet {
         let dampingFactor = exp(-params.damping * substepDt)
         let gravityStep = params.gravity * (substepDt * substepDt)
 
-        // Update rest lengths: taut behind the flying tips, slack once attached.
-        // Thread constraints occupy the first threadCount * (P-1) slots; the
-        // cross-links appended later keep their attach-time rest.
-        for thread in 0 ..< threadDirections.count {
-            let segments = Float(particlesPerThread - 1)
-            let rest: Float
-            if phase == .flying, !threadAttached[thread] {
-                let tip = tipPosition(thread: thread)
-                rest = simd_length(tip - handPosition) / segments
-            } else {
-                rest = simd_length(threadTargets[thread] - origin)
-                    * threadSlack[thread] / segments
-            }
-            let firstConstraint = thread * (particlesPerThread - 1)
-            for i in 0 ..< (particlesPerThread - 1) {
-                constraints[firstConstraint + i].rest = rest
-            }
-        }
+        updateRestLengths()
 
         for _ in 0 ..< params.substeps {
             applyPins()
@@ -397,8 +421,7 @@ public final class CoolWebNet {
             }
             // Several forward+backward sweeps per substep: a taut chain
             // between two pins needs the extra iterations or the residual
-            // stretch concentrates at the pinned ends and fakes local tension
-            // spikes (observed: 1.5x local stretch at 1.23x average).
+            // stretch concentrates at the pinned ends.
             for _ in 0 ..< 4 {
                 solveConstraints(forward: true)
                 solveConstraints(forward: false)
@@ -407,36 +430,86 @@ public final class CoolWebNet {
         }
     }
 
-    private func tipPosition(thread: Int) -> SIMD3<Float> {
-        if threadAttached[thread] {
-            return threadTargets[thread]
+    private func updateRestLengths() {
+        // Leader: taut behind the flying tip, slack once the net attaches.
+        // Leader constraints occupy the first leaderParticles-1 slots; the
+        // branch constraints after them keep their build-time layout and the
+        // cross-links appended last keep their attach-time rest.
+        let leaderSegments = Float(params.leaderParticles - 1)
+        let flyingRest: Float
+        if phase == .flying {
+            let tip = leaderTipPosition()
+            flyingRest = simd_length(tip - handPosition) / leaderSegments
+        } else {
+            flyingRest = leaderRest
         }
-        let target = threadTargets[thread]
-        let distance = simd_length(target - origin)
-        let t = min(tipTravel / max(distance, 1e-4), 1)
-        return origin + threadDirections[thread] * (distance * t)
+        for i in 0 ..< (params.leaderParticles - 1) {
+            constraints[i].rest = flyingRest
+        }
+
+        var index = params.leaderParticles - 1
+        for branch in 0 ..< branchTargets.count {
+            // Connector + branch internals share the branch's rest spacing.
+            for _ in 0 ..< params.branchParticles {
+                constraints[index].rest = branchRest[branch]
+                index += 1
+            }
+        }
+    }
+
+    private func leaderTipPosition() -> SIMD3<Float> {
+        guard phase == .flying else { return positions[params.leaderParticles - 1] }
+        if centerHit == nil {
+            return origin + aim * min(tipTravel, params.maxRange)
+        }
+        return origin + aim * min(tipTravel, leaderDistance)
+    }
+
+    private func branchTipPosition(branch: Int) -> SIMD3<Float> {
+        if branchAttached[branch] {
+            return branchTargets[branch]
+        }
+        // Before the bloom the branch tips ride on the leader tip; afterwards
+        // they fly from the branch point toward their own targets.
+        let bloomTravel = tipTravel - leaderDistance
+        guard phase == .flying, bloomTravel > 0 else { return leaderTipPosition() }
+        let target = branchTargets[branch]
+        let reach = simd_length(target - branchPoint)
+        guard reach > 1e-4 else { return target }
+        let t = min(bloomTravel / reach, 1)
+        return branchPoint + (target - branchPoint) * t
     }
 
     private func isPinned(_ index: Int) -> Bool {
-        let inThread = index % particlesPerThread
-        if inThread == 0 { return rootsPinned }
-        if inThread == particlesPerThread - 1 {
-            let thread = index / particlesPerThread
-            return phase == .flying || threadAttached[thread]
+        if index == 0 { return rootPinned }
+        if phase == .flying, index == params.leaderParticles - 1, centerHit != nil {
+            return true
+        }
+        if index >= params.leaderParticles {
+            let branchIndex = index - params.leaderParticles
+            if (branchIndex + 1) % params.branchParticles == 0 {
+                let branch = branchIndex / params.branchParticles
+                return phase == .flying || branchAttached[branch]
+            }
         }
         return false
     }
 
     private func applyPins() {
-        for thread in 0 ..< threadDirections.count {
-            let base = thread * particlesPerThread
-            if rootsPinned {
-                positions[base] = handPosition
-                previous[base] = handPosition
-            }
-            let tipIndex = base + particlesPerThread - 1
-            if phase == .flying || threadAttached[thread] {
-                let tip = tipPosition(thread: thread)
+        if rootPinned {
+            positions[0] = handPosition
+            previous[0] = handPosition
+        }
+        if phase == .flying, centerHit != nil {
+            let tip = leaderTipPosition()
+            positions[params.leaderParticles - 1] = tip
+            previous[params.leaderParticles - 1] = tip
+        }
+        for branch in 0 ..< branchTargets.count {
+            let tipIndex = params.leaderParticles
+                + branch * params.branchParticles + params.branchParticles - 1
+            if phase == .flying || branchAttached[branch] {
+                let tip = branchTipPosition(branch: branch)
                 positions[tipIndex] = tip
                 previous[tipIndex] = tip
             }
@@ -487,7 +560,7 @@ public final class CoolWebNet {
 
     private func tearOverstretched() {
         // At most one segment snaps per frame — the worst offender — so the
-        // relief propagates through the net before anything else tears.
+        // relief propagates through the web before anything else tears.
         // Threads then snap one by one on a hard pull instead of shredding,
         // and a local stress spike can't take a healthy thread with it.
         var worstIndex = -1
@@ -500,8 +573,7 @@ public final class CoolWebNet {
             let stretch = length / constraints[index].rest
             // Cross-links are deliberately the weakest link: snapping them
             // first relieves stress concentration so the main threads only
-            // tear on a genuine hard pull (matches the reference look, where
-            // the connector threads go first).
+            // tear on a genuine hard pull.
             let tearStretch = constraints[index].isCrossLink
                 ? params.tearStretch * 0.9
                 : params.tearStretch
@@ -530,20 +602,20 @@ public final class CoolWebNet {
         }
     }
 
-    /// Static web patches sprayed on the surface around every attach point —
-    /// the messy wall coverage from the reference clip. Generated once at
-    /// attach; drawn with the net's opacity but never simulated.
+    /// A modest patch of static web threads sprayed on the surface around
+    /// each attach point — sized to the net, not the room. Generated once at
+    /// attach; drawn with the web's opacity but never simulated.
     private func spawnResidue() {
         var rng = CoolWebRandom(seed: UInt64(bitPattern: Int64(seed * 1e6)) | 1)
-        for thread in 0 ..< threadTargets.count {
-            guard let normal = threadTargetNormals[thread] else { continue }
+        for branch in 0 ..< branchTargets.count {
+            guard let normal = branchTargetNormals[branch] else { continue }
             var tangent = simd_cross(
                 normal,
                 abs(normal.y) < 0.9 ? SIMD3<Float>(0, 1, 0) : SIMD3<Float>(1, 0, 0)
             )
             tangent = simd_normalize(tangent)
             let bitangent = simd_cross(normal, tangent)
-            let anchor = threadTargets[thread] + normal * 0.0015
+            let anchor = branchTargets[branch] + normal * 0.0015
 
             for _ in 0 ..< params.residueWalksPerAttach {
                 var point = anchor
@@ -577,6 +649,12 @@ public final class CoolWebNet {
 
     public func appendSegments(into segments: inout [CoolWebSegmentDesc]) {
         for constraint in constraints where constraint.active {
+            // While the shot misses everything, only the leader line shows —
+            // the branch threads stay collapsed on the tip.
+            if centerHit == nil, constraint.i >= params.leaderParticles - 1,
+               constraint.j >= params.leaderParticles {
+                continue
+            }
             segments.append(CoolWebSegmentDesc(
                 a: positions[constraint.i],
                 b: positions[constraint.j],
