@@ -77,8 +77,9 @@ public enum CoolWebGestureEvent: Sendable, Equatable {
     /// The web-shooter pose (thumb + index + little extended, middle + ring
     /// curled) was just struck: fire a web along the aim ray.
     case webShooterFired(origin: SIMD3<Float>, direction: SIMD3<Float>)
-    /// A fist was just clenched: release the held web.
-    case fistClenched
+    /// The palm was held fully open: let go of the held web. A closed fist
+    /// deliberately does nothing — the web stays tied to the fist.
+    case palmOpened
 }
 
 /// Thresholds and debounce for the pose classifier. Enter thresholds are
@@ -98,9 +99,11 @@ public struct CoolWebGestureConfig: Sendable, Equatable {
     public var onsetFrames = 3
     /// Consecutive frames out of pose before the classifier re-arms.
     public var releaseFrames = 6
-    /// All four fingers below this extension = fist.
-    public var fistEnter: Float = 0.55
-    public var fistFrames = 3
+    /// All four fingers above this extension = open palm.
+    public var palmOpenEnter: Float = 0.72
+    /// Consecutive open-palm frames before the web lets go (~0.2 s at 90 Hz)
+    /// so a passing hand pose can't drop the web by accident.
+    public var palmOpenFrames = 20
 
     public init() {}
 }
@@ -118,8 +121,8 @@ public final class CoolWebGestureClassifier {
     private var poseState = PoseState.idle
     private var poseFrames = 0
     private var outOfPoseFrames = 0
-    private var fistFrames = 0
-    private var fistLatched = false
+    private var openPalmFrames = 0
+    private var openPalmLatched = false
     public private(set) var lastExtensions: [Float] = [0, 0, 0, 0, 0]
 
     public init(config: CoolWebGestureConfig = CoolWebGestureConfig()) {
@@ -130,8 +133,8 @@ public final class CoolWebGestureClassifier {
         poseState = .idle
         poseFrames = 0
         outOfPoseFrames = 0
-        fistFrames = 0
-        fistLatched = false
+        openPalmFrames = 0
+        openPalmLatched = false
     }
 
     public func update(pose: CoolWebHandPose) -> CoolWebGestureEvent? {
@@ -143,21 +146,25 @@ public final class CoolWebGestureClassifier {
         lastExtensions = ext
         let (thumb, index, middle, ring, little) = (ext[0], ext[1], ext[2], ext[3], ext[4])
 
-        // Fist first: it overrides everything and re-arms the shooter pose.
-        let isFist = index < config.fistEnter && middle < config.fistEnter
-            && ring < config.fistEnter && little < config.fistEnter
-        if isFist {
-            fistFrames += 1
+        // Open palm first: all four fingers held straight lets the web go.
+        // A closed fist is deliberately NOT a release — the web stays tied
+        // to the fist; only a sustained open hand detaches it.
+        let isOpenPalm = index > config.palmOpenEnter
+            && middle > config.palmOpenEnter
+            && ring > config.palmOpenEnter
+            && little > config.palmOpenEnter
+        if isOpenPalm {
+            openPalmFrames += 1
             poseState = .idle
             poseFrames = 0
-            if fistFrames >= config.fistFrames, !fistLatched {
-                fistLatched = true
-                return .fistClenched
+            if openPalmFrames >= config.palmOpenFrames, !openPalmLatched {
+                openPalmLatched = true
+                return .palmOpened
             }
             return nil
         }
-        fistFrames = 0
-        fistLatched = false
+        openPalmFrames = 0
+        openPalmLatched = false
 
         switch poseState {
         case .idle:

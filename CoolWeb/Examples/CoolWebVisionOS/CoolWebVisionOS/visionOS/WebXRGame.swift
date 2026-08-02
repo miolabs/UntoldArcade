@@ -99,7 +99,7 @@ final class WebXRGame: @unchecked Sendable {
             case let .webShooterFired(origin, direction):
                 shooter.fire(hand: side, origin: origin, direction: direction, now: now)
                 print("CoolWeb: \(side == .left ? "left" : "right") hand fired")
-            case .fistClenched:
+            case .palmOpened:
                 shooter.release(hand: side, now: now)
             case nil:
                 break

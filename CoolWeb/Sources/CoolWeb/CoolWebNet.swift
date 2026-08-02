@@ -81,8 +81,9 @@ public struct CoolWebNetParams: Sendable, Equatable {
         residueSegmentsPerWalk: Int = 3,
         residueStepMeters: ClosedRange<Float> = 0.015 ... 0.05,
         splatRadius: Float = 0.12,
-        danglingDuration: Float = 2.5,
-        dissolveDuration: Float = 0.8,
+        // A let-go web should linger on the wall for a while before fading.
+        danglingDuration: Float = 6,
+        dissolveDuration: Float = 1.5,
         missDissolveDuration: Float = 0.3
     ) {
         self.leaderParticles = max(4, leaderParticles)

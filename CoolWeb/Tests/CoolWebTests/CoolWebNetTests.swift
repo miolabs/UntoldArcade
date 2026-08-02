@@ -202,7 +202,12 @@ final class CoolWebNetTests: XCTestCase {
     }
 
     func testReleaseDanglesThenDissolves() throws {
+        // Short lifecycle so the test doesn't track the cosmetic defaults.
+        var params = CoolWebNetParams()
+        params.danglingDuration = 1
+        params.dissolveDuration = 0.3
         let shooter = makeShooter()
+        shooter.params = params
         let net = try XCTUnwrap(shooter.fire(
             hand: .right,
             origin: handOrigin,

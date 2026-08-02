@@ -104,12 +104,13 @@ final class CoolWebGestureTests: XCTestCase {
         XCTAssertEqual(simd_length(direction), 1, accuracy: 1e-4)
     }
 
-    func testOpenHandAndPartialPosesDoNotFire() {
+    func testPartialPosesNeverFireAWeb() {
         let classifier = CoolWebGestureClassifier()
         let almost = makePose(thumb: true, index: true, middle: true, ring: false, little: true)
-        for _ in 0 ..< 20 {
-            XCTAssertNil(classifier.update(pose: openHand))
-            XCTAssertNil(classifier.update(pose: almost))
+        for _ in 0 ..< 40 {
+            if case .webShooterFired = classifier.update(pose: almost) {
+                XCTFail("a partial pose must not fire")
+            }
         }
     }
 
@@ -138,15 +139,36 @@ final class CoolWebGestureTests: XCTestCase {
         XCTAssertEqual(fires, 2)
     }
 
-    func testFistFiresOnceAndOverridesThePose() {
+    func testFistDoesNothingTheWebStaysTied() {
+        let classifier = CoolWebGestureClassifier()
+        for _ in 0 ..< 60 {
+            XCTAssertNil(
+                classifier.update(pose: fist),
+                "a closed fist must not release (nor fire) — the web stays tied"
+            )
+        }
+    }
+
+    func testSustainedOpenPalmReleasesExactlyOnce() {
         let classifier = CoolWebGestureClassifier()
         var events: [CoolWebGestureEvent] = []
-        for _ in 0 ..< 10 {
-            if let event = classifier.update(pose: fist) {
+        for _ in 0 ..< 60 {
+            if let event = classifier.update(pose: openHand) {
                 events.append(event)
             }
         }
-        XCTAssertEqual(events, [.fistClenched])
+        XCTAssertEqual(events, [.palmOpened], "held-open palm releases once")
+    }
+
+    func testBriefOpenPalmDoesNotRelease() {
+        let classifier = CoolWebGestureClassifier()
+        // A pass through the open pose shorter than the debounce is ignored.
+        for _ in 0 ..< 3 {
+            for _ in 0 ..< 10 {
+                XCTAssertNil(classifier.update(pose: openHand))
+            }
+            XCTAssertNil(classifier.update(pose: fist)) // resets the count
+        }
     }
 
     func testTrackingLossResetsTheClassifier() {

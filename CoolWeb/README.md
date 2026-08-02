@@ -3,8 +3,9 @@
 A Spider-Man web-shooter demo for [Untold Engine](https://github.com/untoldengine/UntoldEngine),
 built as a Rendering Extension plugin. Strike the classic web-shooter pose on
 Apple Vision Pro — thumb, index and pinky extended, middle and ring curled —
-and a web strand fires from your wrist, sticks to the real surface it hits,
-and stays tethered to your hand. Clench a fist to let go.
+and a web line fires from your wrist, blooms into a small net near the
+surface it hits, and stays tethered to your hand (a closed fist keeps
+holding it). Open your palm to let it go.
 
 ## How it works
 

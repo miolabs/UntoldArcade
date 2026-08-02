@@ -121,7 +121,7 @@ struct CoolWebVisionOSXRApp: App {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Web").font(.extraLargeTitle).fontWeight(.bold)
-                    Text("Strike the web-shooter pose — thumb, index and pinky out,\nmiddle and ring curled — to fire a web at a real surface.\nClench a fist to let go.")
+                    Text("Strike the web-shooter pose — thumb, index and pinky out,\nmiddle and ring curled — to fire a web at a real surface.\nThe web stays tied to your hand, even in a fist.\nOpen your palm to let it go.")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Button {
