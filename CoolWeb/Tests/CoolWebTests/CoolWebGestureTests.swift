@@ -163,8 +163,9 @@ final class CoolWebGestureTests: XCTestCase {
     func testBriefOpenPalmDoesNotRelease() {
         let classifier = CoolWebGestureClassifier()
         // A pass through the open pose shorter than the debounce is ignored.
+        let briefFrames = classifier.config.palmOpenFrames - 2
         for _ in 0 ..< 3 {
-            for _ in 0 ..< 10 {
+            for _ in 0 ..< briefFrames {
                 XCTAssertNil(classifier.update(pose: openHand))
             }
             XCTAssertNil(classifier.update(pose: fist)) // resets the count

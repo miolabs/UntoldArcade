@@ -77,6 +77,8 @@ final class CoolWebNetTests: XCTestCase {
     }
 
     func testFireFliesAndAttachesTheWholeCone() throws {
+        setCoolWebSplatsEnabled(true)
+        defer { setCoolWebSplatsEnabled(false) }
         let shooter = makeShooter()
         let net = shooter.fire(
             hand: .right,

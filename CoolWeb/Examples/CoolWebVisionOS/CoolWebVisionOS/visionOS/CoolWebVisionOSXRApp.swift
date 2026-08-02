@@ -115,6 +115,7 @@ struct CoolWebVisionOSXRApp: App {
     @State private var immersionStyle: ImmersionStyle = .mixed
     @State private var occlusionEnabled = true
     @State private var tensionHeatmap = false
+    @State private var impactSplat = false
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -162,6 +163,14 @@ struct CoolWebVisionOSXRApp: App {
                         .frame(maxWidth: 320)
                         .onChange(of: tensionHeatmap) { _, enabled in
                             setCoolWebTensionHeatmap(enabled)
+                        }
+
+                    // The flat decal at the impact point — off by default
+                    // (read as a sticker on device), kept for comparison.
+                    Toggle("Impact splat decal", isOn: $impactSplat)
+                        .frame(maxWidth: 320)
+                        .onChange(of: impactSplat) { _, enabled in
+                            setCoolWebSplatsEnabled(enabled)
                         }
 
                     Divider()

@@ -40,6 +40,8 @@ final class CoolWebPluginTests: XCTestCase {
     func testSceneStateSanitizesInput() {
         let state = CoolWebSceneState.shared
         state.clear()
+        setCoolWebSplatsEnabled(true)
+        defer { setCoolWebSplatsEnabled(false) }
 
         setCoolWebScene(
             segments: [
@@ -63,6 +65,8 @@ final class CoolWebPluginTests: XCTestCase {
     }
 
     func testSceneStateCapsCountsAtShaderLimits() {
+        setCoolWebSplatsEnabled(true)
+        defer { setCoolWebSplatsEnabled(false) }
         let manySegments = (0 ..< CoolWebShaderLimits.maxSegments + 100).map { i in
             CoolWebSegmentDesc(
                 a: SIMD3<Float>(Float(i), 0, 0),
@@ -76,6 +80,19 @@ final class CoolWebPluginTests: XCTestCase {
         let snapshot = CoolWebSceneState.shared.state()
         XCTAssertLessThanOrEqual(snapshot.segments.count, CoolWebShaderLimits.maxSegments)
         XCTAssertLessThanOrEqual(snapshot.splats.count, CoolWebShaderLimits.maxSplats)
+        clearCoolWebScene()
+    }
+
+    func testSplatsAreDroppedWhileDisabled() {
+        setCoolWebSplatsEnabled(false)
+        setCoolWebScene(
+            segments: [CoolWebSegmentDesc(a: .zero, b: SIMD3<Float>(0, 1, 0))],
+            splats: [CoolWebSplatDesc(center: .zero, normal: SIMD3<Float>(0, 0, 1))]
+        )
+        XCTAssertTrue(
+            CoolWebSceneState.shared.state().splats.isEmpty,
+            "disabled impact splats must not reach the renderer"
+        )
         clearCoolWebScene()
     }
 

@@ -101,9 +101,9 @@ public struct CoolWebGestureConfig: Sendable, Equatable {
     public var releaseFrames = 6
     /// All four fingers above this extension = open palm.
     public var palmOpenEnter: Float = 0.72
-    /// Consecutive open-palm frames before the web lets go (~0.2 s at 90 Hz)
+    /// Consecutive open-palm frames before the web lets go (~0.09 s at 90 Hz)
     /// so a passing hand pose can't drop the web by accident.
-    public var palmOpenFrames = 20
+    public var palmOpenFrames = 8
 
     public init() {}
 }

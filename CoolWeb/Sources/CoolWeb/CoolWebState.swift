@@ -64,6 +64,9 @@ final class CoolWebSceneState: @unchecked Sendable {
         var segments: [CoolWebSegmentDesc] = []
         var splats: [CoolWebSplatDesc] = []
         var tensionHeatmap = false
+        /// The flat web-pattern decal at the impact point read as a sticker
+        /// on device — off by default, toggleable for comparison.
+        var splatsEnabled = false
     }
 
     private let lock = NSLock()
@@ -82,7 +85,7 @@ final class CoolWebSceneState: @unchecked Sendable {
             .compactMap { Self.sanitize($0) }
         lock.withLock {
             current.segments = sanitizedSegments
-            current.splats = sanitizedSplats
+            current.splats = current.splatsEnabled ? sanitizedSplats : []
         }
     }
 
@@ -90,11 +93,20 @@ final class CoolWebSceneState: @unchecked Sendable {
         lock.withLock { current.tensionHeatmap = enabled }
     }
 
+    func setSplatsEnabled(_ enabled: Bool) {
+        lock.withLock {
+            current.splatsEnabled = enabled
+            if !enabled { current.splats = [] }
+        }
+    }
+
     func clear() {
         lock.withLock {
             let heatmap = current.tensionHeatmap
+            let splatsEnabled = current.splatsEnabled
             current = State()
             current.tensionHeatmap = heatmap
+            current.splatsEnabled = splatsEnabled
         }
     }
 
@@ -140,6 +152,12 @@ public func setCoolWebScene(
 /// before tearing) instead of silk white.
 public func setCoolWebTensionHeatmap(_ enabled: Bool) {
     CoolWebSceneState.shared.setTensionHeatmap(enabled)
+}
+
+/// Shows/hides the flat web-pattern decal at the impact point (default off —
+/// it read as a sticker on device; the residue threads carry the wall look).
+public func setCoolWebSplatsEnabled(_ enabled: Bool) {
+    CoolWebSceneState.shared.setSplatsEnabled(enabled)
 }
 
 /// Hides all segments and splats (e.g. on session teardown).
