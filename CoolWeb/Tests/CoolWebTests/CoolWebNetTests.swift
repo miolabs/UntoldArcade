@@ -88,11 +88,12 @@ final class CoolWebNetTests: XCTestCase {
         run(shooter, from: 0, seconds: 1, hand: handOrigin)
         XCTAssertEqual(net?.phase, .attached)
 
-        // A "fist" sphere sits right on the strand's path in front of the
-        // hand. With the collider fed every frame, the settled rope must not
-        // leave any free segment endpoint meaningfully inside it.
+        // A "fist" sphere sits on the strand's path, beyond the root-exempt
+        // stretch (the first few particles may lie on the glove they are
+        // tied to). With the collider fed every frame, the settled rope must
+        // not cut through it.
         let fist = CoolWebCollisionSphere(
-            center: handOrigin + SIMD3<Float>(0, 0, -0.15), radius: 0.05
+            center: handOrigin + SIMD3<Float>(0, 0, -0.6), radius: 0.05
         )
         var now: TimeInterval = 1
         let dt: Float = 1 / 90
@@ -104,14 +105,13 @@ final class CoolWebNetTests: XCTestCase {
         var segments: [CoolWebSegmentDesc] = []
         net?.appendSegments(into: &segments)
         XCTAssertFalse(segments.isEmpty)
-        // The pinned root may sit wherever the hand is; every other SEGMENT
-        // (closest point, not just endpoints — leader particles are far
-        // apart and a fist fits between them) must sit at (near) the sphere
-        // surface or outside.
+        // Outside the root-exempt stretch, every SEGMENT (closest point, not
+        // just endpoints — leader particles are far apart and a fist fits
+        // between them) must sit at (near) the sphere surface or outside.
         let tolerance: Float = 0.008
         for segment in segments
-        where simd_length(segment.a - handOrigin) > 1e-4
-            || simd_length(segment.b - handOrigin) > 1e-4 {
+        where simd_length(segment.a - handOrigin) > 0.35
+            && simd_length(segment.b - handOrigin) > 0.35 {
             let ab = segment.b - segment.a
             let abLengthSq = simd_length_squared(ab)
             guard abLengthSq > 1e-10 else { continue }

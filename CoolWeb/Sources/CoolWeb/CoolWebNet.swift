@@ -449,13 +449,24 @@ public final class CoolWebNet {
         }
     }
 
+    /// Leader particles this close to the root ignore the hand colliders:
+    /// the strand is tied to the wrist shooter, so its first stretch is
+    /// SUPPOSED to lie on the glove — pushing it away bends it into
+    /// unnatural kinks right at the hand.
+    private static let rootCollisionExemptParticles = 3
+
+    private func isCollisionExempt(_ index: Int) -> Bool {
+        index < Self.rootCollisionExemptParticles
+    }
+
     private func resolveCollisions() {
         guard !collisionSpheres.isEmpty else { return }
         for sphere in collisionSpheres {
             let radiusSq = sphere.radius * sphere.radius
 
             // Particle pushout keeps endpoints out…
-            for i in 0 ..< positions.count where !isPinned(i) {
+            for i in 0 ..< positions.count
+            where !isPinned(i) && !isCollisionExempt(i) {
                 let delta = positions[i] - sphere.center
                 let distanceSq = simd_length_squared(delta)
                 guard distanceSq < radiusSq, distanceSq > 1e-10 else { continue }
@@ -470,6 +481,7 @@ public final class CoolWebNet {
             for constraint in constraints where constraint.active {
                 let i = constraint.i
                 let j = constraint.j
+                if isCollisionExempt(i) || isCollisionExempt(j) { continue }
                 let a = positions[i]
                 let b = positions[j]
                 let ab = b - a

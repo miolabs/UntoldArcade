@@ -144,10 +144,13 @@ final class WebXRGame: @unchecked Sendable {
             let tipCenter = tips.isEmpty
                 ? knuckleCenter
                 : tips.reduce(.zero, +) / Float(tips.count)
+            let palmCenter2 = (pose.wrist + knuckleCenter) * 0.5
             shooter.updateHand(side, position: muzzle, collision: [
-                CoolWebCollisionSphere(center: knuckleCenter, radius: 0.055),
-                CoolWebCollisionSphere(center: midCenter, radius: 0.05),
-                CoolWebCollisionSphere(center: tipCenter, radius: 0.045),
+                CoolWebCollisionSphere(center: pose.wrist, radius: 0.042),
+                CoolWebCollisionSphere(center: palmCenter2, radius: 0.05),
+                CoolWebCollisionSphere(center: knuckleCenter, radius: 0.05),
+                CoolWebCollisionSphere(center: midCenter, radius: 0.046),
+                CoolWebCollisionSphere(center: tipCenter, radius: 0.042),
             ])
 
             switch classifiers[side]?.update(pose: pose) {
