@@ -103,6 +103,7 @@ final class WebXRGame: @unchecked Sendable {
             guard let pose = session.predictedHandPose(side, at: now + 0.05) else {
                 holder.setHandDiagnostics(side, tracked: false, extensions: nil)
                 updateCoolWebGlove(side: side, pose: nil, now: now)
+                shooter.clearHandColliders(side)
                 continue
             }
             // Rebuild the Spider-Man glove over this hand. The suit-up only
@@ -144,9 +145,9 @@ final class WebXRGame: @unchecked Sendable {
                 ? knuckleCenter
                 : tips.reduce(.zero, +) / Float(tips.count)
             shooter.updateHand(side, position: muzzle, collision: [
-                CoolWebCollisionSphere(center: knuckleCenter, radius: 0.048),
-                CoolWebCollisionSphere(center: midCenter, radius: 0.042),
-                CoolWebCollisionSphere(center: tipCenter, radius: 0.038),
+                CoolWebCollisionSphere(center: knuckleCenter, radius: 0.055),
+                CoolWebCollisionSphere(center: midCenter, radius: 0.05),
+                CoolWebCollisionSphere(center: tipCenter, radius: 0.045),
             ])
 
             switch classifiers[side]?.update(pose: pose) {

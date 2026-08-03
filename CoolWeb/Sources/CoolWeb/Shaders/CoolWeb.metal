@@ -335,7 +335,10 @@ fragment float4 coolWebGloveFragment(
         const float3 albedo = mix(red, silver, web);
 
         // Lighting on the bumped normal sells the relief; baked AO darkens
-        // the finger crotches and the knuckle crease.
+        // the finger crotches and the knuckle crease. Hemispheric ambient
+        // (brighter looking up than down) keeps the shape readable where
+        // neither key nor fill reaches.
+        const float hemi = mix(0.18, 0.34, bumped.y * 0.5 + 0.5);
         const float diffuse = saturate(dot(bumped, key) * 0.5 + 0.5);
         const float fill = saturate(dot(bumped, view)) * 0.20;
         const float3 half_ = normalize(key + view);
@@ -345,7 +348,7 @@ fragment float4 coolWebGloveFragment(
             * specStrength;
         const float rim = pow(1.0 - saturate(dot(bumped, view)), 3.0)
             * mix(0.08, 0.18, web);
-        color = albedo * in.ao * (0.26 + 0.74 * diffuse + fill)
+        color = albedo * in.ao * (hemi + 0.70 * diffuse + fill)
             + (spec + rim) * mix(float3(0.5, 0.12, 0.10), float3(1.0, 1.0, 1.05), web);
     }
     // Hot ember edge where the suit is materializing — HDR lift so the

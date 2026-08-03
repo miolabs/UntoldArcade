@@ -246,7 +246,8 @@ public enum CoolWebGloveBuilder {
                 coverage: abs(v - config.cuffLength),
                 material: CoolWebGloveMaterial.fabric,
                 sides: config.radialSides,
-                web: palmWeb
+                web: palmWeb,
+                shapeExponent: 3.2
             )
             palmRings.append(ring)
             if i == 0 { firstRingInfo = (center, (halfWidth + halfThickness) * 0.5) }
@@ -413,19 +414,30 @@ private struct GloveMeshAccumulator {
         web: GloveWebFrame,
         ao: Float = 1,
         leanAxis: SIMD3<Float> = .zero,
-        axialLean: Float = 0
+        axialLean: Float = 0,
+        shapeExponent: Float = 2
     ) -> Int {
         let base = vertices.count
         let meanRadius = (sRadius + tRadius) * 0.5
         maxCoverage = max(maxCoverage, coverage)
+        let n = max(shapeExponent, 2)
         for k in 0 ..< sides {
             let theta = 2 * Float.pi * Float(k) / Float(sides)
             let c = cos(theta)
             let s = sin(theta)
-            let position = center + sAxis * (c * sRadius) + tAxis * (s * tRadius)
-            // Ellipse normal ∝ (cos/a, sin/b), then optionally leaned axially.
+            // Superellipse |x/a|ⁿ + |y/b|ⁿ = 1: n = 2 is the plain ellipse,
+            // higher n flattens the faces into a slab with rounded sides —
+            // a palm is a slab, not a lens.
+            let px = Float(signOf: c, magnitudeOf: pow(abs(c), 2 / n))
+            let py = Float(signOf: s, magnitudeOf: pow(abs(s), 2 / n))
+            let position = center + sAxis * (px * sRadius) + tAxis * (py * tRadius)
+            // Implicit-gradient normal, then optionally leaned axially.
+            let gx = Float(signOf: px, magnitudeOf: pow(abs(px), n - 1))
+                / max(sRadius, 1e-5)
+            let gy = Float(signOf: py, magnitudeOf: pow(abs(py), n - 1))
+                / max(tRadius, 1e-5)
             var normal = safeNormalize(
-                sAxis * (c / max(sRadius, 1e-5)) + tAxis * (s / max(tRadius, 1e-5)),
+                sAxis * gx + tAxis * gy,
                 fallback: sAxis
             )
             if axialLean > 0 {

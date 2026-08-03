@@ -453,12 +453,51 @@ public final class CoolWebNet {
         guard !collisionSpheres.isEmpty else { return }
         for sphere in collisionSpheres {
             let radiusSq = sphere.radius * sphere.radius
+
+            // Particle pushout keeps endpoints out…
             for i in 0 ..< positions.count where !isPinned(i) {
                 let delta = positions[i] - sphere.center
                 let distanceSq = simd_length_squared(delta)
                 guard distanceSq < radiusSq, distanceSq > 1e-10 else { continue }
                 let distance = sqrt(distanceSq)
                 positions[i] = sphere.center + delta * (sphere.radius / distance)
+            }
+
+            // …but leader particles sit ~15 cm apart on a long shot, so a
+            // fist-sized sphere passes clean between them: the SEGMENTS must
+            // collide too, pushing both endpoints by the closest-point
+            // penetration (weighted, pinned ends exempt).
+            for constraint in constraints where constraint.active {
+                let i = constraint.i
+                let j = constraint.j
+                let a = positions[i]
+                let b = positions[j]
+                let ab = b - a
+                let abLengthSq = simd_length_squared(ab)
+                guard abLengthSq > 1e-10 else { continue }
+                let t = min(max(
+                    simd_dot(sphere.center - a, ab) / abLengthSq, 0
+                ), 1)
+                let closest = a + ab * t
+                let delta = closest - sphere.center
+                let distanceSq = simd_length_squared(delta)
+                guard distanceSq < radiusSq, distanceSq > 1e-10 else { continue }
+                let distance = sqrt(distanceSq)
+                let push = delta * ((sphere.radius - distance) / distance)
+
+                let iPinned = isPinned(i)
+                let jPinned = isPinned(j)
+                switch (iPinned, jPinned) {
+                case (true, true):
+                    continue
+                case (true, false):
+                    positions[j] += push
+                case (false, true):
+                    positions[i] += push
+                case (false, false):
+                    positions[i] += push * (1 - t)
+                    positions[j] += push * t
+                }
             }
         }
     }

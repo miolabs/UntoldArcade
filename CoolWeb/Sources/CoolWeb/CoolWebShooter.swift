@@ -90,22 +90,31 @@ public final class CoolWebShooter {
         for net in nets { net.release(now: now) }
     }
 
-    /// Moves the root anchors of the held nets with the tracked hands.
-    /// `collision` approximates the hand (a few spheres) so the held strand
-    /// drapes over a closed fist instead of clipping through the glove.
+    private var handColliders: [CoolWebHandSide: [CoolWebCollisionSphere]] = [:]
+
+    /// Moves the root anchor of the held net with the tracked hand.
+    /// `collision` approximates the hand (a few spheres); the colliders of
+    /// BOTH hands push on EVERY net each step, so a closed fist gathers its
+    /// own strand and the free hand can swat or press any web.
     public func updateHand(
         _ hand: CoolWebHandSide,
         position: SIMD3<Float>,
         collision: [CoolWebCollisionSphere] = []
     ) {
-        guard let net = heldNet(for: hand) else { return }
-        net.updateHand(position)
-        net.collisionSpheres = collision
+        handColliders[hand] = collision
+        heldNet(for: hand)?.updateHand(position)
+    }
+
+    /// Drops a hand's colliders (tracking lost).
+    public func clearHandColliders(_ hand: CoolWebHandSide) {
+        handColliders[hand] = nil
     }
 
     /// Steps every net and publishes the frame's drawable scene.
     public func step(now: TimeInterval, dt: Float) {
+        let colliders = handColliders.values.flatMap { $0 }
         for net in nets {
+            net.collisionSpheres = colliders
             net.update(now: now, dt: dt)
         }
 
@@ -142,6 +151,7 @@ public final class CoolWebShooter {
     public func reset() {
         nets.removeAll()
         attachAnnounced.removeAll()
+        handColliders.removeAll()
         clearCoolWebScene()
     }
 }

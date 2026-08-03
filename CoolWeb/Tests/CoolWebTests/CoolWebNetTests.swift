@@ -104,17 +104,25 @@ final class CoolWebNetTests: XCTestCase {
         var segments: [CoolWebSegmentDesc] = []
         net?.appendSegments(into: &segments)
         XCTAssertFalse(segments.isEmpty)
-        // The pinned root may sit wherever the hand is; everything else must
-        // have been pushed out to (near) the sphere surface.
-        let tolerance: Float = 0.005
-        for segment in segments {
-            for point in [segment.a, segment.b]
-            where simd_length(point - handOrigin) > 1e-4 {
-                XCTAssertGreaterThan(
-                    simd_length(point - fist.center),
-                    fist.radius - tolerance
-                )
-            }
+        // The pinned root may sit wherever the hand is; every other SEGMENT
+        // (closest point, not just endpoints — leader particles are far
+        // apart and a fist fits between them) must sit at (near) the sphere
+        // surface or outside.
+        let tolerance: Float = 0.008
+        for segment in segments
+        where simd_length(segment.a - handOrigin) > 1e-4
+            || simd_length(segment.b - handOrigin) > 1e-4 {
+            let ab = segment.b - segment.a
+            let abLengthSq = simd_length_squared(ab)
+            guard abLengthSq > 1e-10 else { continue }
+            let t = min(max(
+                simd_dot(fist.center - segment.a, ab) / abLengthSq, 0
+            ), 1)
+            let closest = segment.a + ab * t
+            XCTAssertGreaterThan(
+                simd_length(closest - fist.center),
+                fist.radius - tolerance
+            )
         }
     }
 
