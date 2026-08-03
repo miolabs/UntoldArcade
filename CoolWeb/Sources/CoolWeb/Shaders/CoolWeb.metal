@@ -248,8 +248,8 @@ vertex GloveVertexOut coolWebGloveVertex(
 static float gloveWebLineDist(float material, float2 wc) {
     constexpr float twoPi = 6.28318530718;
     if (material > 1.5) {
-        // Finger: rings every 9.5 mm along the tube.
-        const float spacing = 0.0095;
+        // Finger: rings every 11.5 mm along the tube.
+        const float spacing = 0.0115;
         const float phase = fract(wc.y / spacing);
         return min(phase, 1.0 - phase) * spacing;
     }
@@ -305,13 +305,13 @@ fragment float4 coolWebGloveFragment(
         // THICK RAISED SILVER web cord. The cord gets a height bump so it
         // catches light three-dimensionally instead of reading as a print.
         const float lineDist = gloveWebLineDist(in.matAndRadius.x, in.webCoord);
-        const float lineWidth = in.matAndRadius.x > 1.5 ? 0.0021 : 0.0025;
+        const float lineWidth = in.matAndRadius.x > 1.5 ? 0.0013 : 0.0019;
         const float aa = max(fwidth(lineDist), 0.0002);
         float web = 1.0 - smoothstep(lineWidth - aa, lineWidth + aa, lineDist);
         if (in.matAndRadius.x < 0.5) {
-            // Solid hub where the spokes converge, like the sewn center.
+            // Small solid hub where the spokes converge, like the sewn center.
             const float r = length(in.webCoord);
-            web = max(web, 1.0 - smoothstep(0.005, 0.009, r));
+            web = max(web, 1.0 - smoothstep(0.003, 0.0055, r));
         }
 
         // Height-field bump: the cord stands ~1.5 mm proud of the cloth.
@@ -326,10 +326,12 @@ fragment float4 coolWebGloveFragment(
         const float3 bumped = normalize(abs(det) * normal - surfGrad * 1.6);
 
         // Red cloth with a faint honeycomb weave (the reference fabric).
+        // The cord is a muted pewter — bright silver read as white stripes
+        // on device.
         const float2 hp = in.webCoord / 0.0028;
         const float honey = sin(hp.x * 3.14159) * sin(hp.y * 3.14159);
         const float3 red = float3(0.52, 0.035, 0.05) * (0.94 + 0.06 * honey);
-        const float3 silver = float3(0.46, 0.46, 0.49);
+        const float3 silver = float3(0.33, 0.33, 0.36);
         const float3 albedo = mix(red, silver, web);
 
         // Lighting on the bumped normal sells the relief; baked AO darkens
@@ -338,11 +340,11 @@ fragment float4 coolWebGloveFragment(
         const float fill = saturate(dot(bumped, view)) * 0.20;
         const float3 half_ = normalize(key + view);
         const float shininess = mix(20.0, 64.0, web);
-        const float specStrength = mix(0.06, 0.85, web);
+        const float specStrength = mix(0.06, 0.55, web);
         const float spec = pow(saturate(dot(bumped, half_)), shininess)
             * specStrength;
         const float rim = pow(1.0 - saturate(dot(bumped, view)), 3.0)
-            * mix(0.08, 0.30, web);
+            * mix(0.08, 0.18, web);
         color = albedo * in.ao * (0.26 + 0.74 * diffuse + fill)
             + (spec + rim) * mix(float3(0.5, 0.12, 0.10), float3(1.0, 1.0, 1.05), web);
     }

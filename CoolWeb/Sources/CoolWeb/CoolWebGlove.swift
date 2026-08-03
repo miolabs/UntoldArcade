@@ -22,12 +22,12 @@ public struct CoolWebGloveConfig: Sendable, Equatable {
     /// Radial vertices per tube ring.
     public var radialSides = 12
     /// Base finger radii, ordered thumb, index, middle, ring, little.
-    public var fingerRadii: [Float] = [0.0105, 0.0095, 0.0095, 0.009, 0.0082]
+    public var fingerRadii: [Float] = [0.0115, 0.0102, 0.0102, 0.0096, 0.0088]
     /// Extra radius so the glove sits over the real finger, not inside it.
-    public var fabricPadding: Float = 0.0015
+    public var fabricPadding: Float = 0.002
     /// Palm half-thickness at the wrist end / at the knuckle end.
-    public var palmHalfThicknessWrist: Float = 0.015
-    public var palmHalfThicknessKnuckles: Float = 0.012
+    public var palmHalfThicknessWrist: Float = 0.018
+    public var palmHalfThicknessKnuckles: Float = 0.0145
     /// How far the cuff extends behind the wrist toward the forearm.
     public var cuffLength: Float = 0.055
     /// Whether the metal web-shooter barrel is added on the inner wrist.
@@ -174,8 +174,8 @@ public enum CoolWebGloveBuilder {
         // MARK: cuff → palm loft (one flattened elliptical tube)
         let knuckleSpan = simd_length(pose.little.points[1] - pose.index.points[1])
         let knuckleHalfWidth = knuckleSpan * 0.5
-            + (config.fingerRadii[1] + config.fabricPadding) * 1.35
-        let wristHalfWidth = knuckleHalfWidth * 0.80
+            + (config.fingerRadii[1] + config.fabricPadding) * 1.55
+        let wristHalfWidth = knuckleHalfWidth * 0.86
         let palmLength = simd_length(knuckleCenter - wrist)
 
         var palmRings: [Int] = []
@@ -252,16 +252,20 @@ public enum CoolWebGloveBuilder {
         // MARK: fingers
         // Taper multipliers root → tip; the root station sits back along the
         // metacarpal so the tube disappears into the palm loft with no gap.
-        let taper: [Float] = [1.18, 1.08, 1.0, 0.93, 0.85]
+        // The thumb gets a much fatter root to cover the thenar mound.
+        let fingerTaper: [Float] = [1.30, 1.10, 1.0, 0.93, 0.86]
+        let thumbTaper: [Float] = [1.65, 1.25, 1.05, 0.95, 0.86]
         let chains = [pose.thumb, pose.index, pose.middle, pose.ring, pose.little]
         for (fingerIndex, chain) in chains.enumerated() {
+            let taper = fingerIndex == 0 ? thumbTaper : fingerTaper
             let baseRadius = config.fingerRadii[
                 min(fingerIndex, config.fingerRadii.count - 1)
             ] + config.fabricPadding
             let points = chain.points
             // Thumb chain starts at the wrist; sink its root deeper so the
-            // fat thumb base blends into the palm side.
-            let rootBias: Float = fingerIndex == 0 ? 0.30 : 0.55
+            // fat thumb base blends into the palm side. Finger roots reach
+            // well into the palm loft so no knuckle skin peeks through.
+            let rootBias: Float = fingerIndex == 0 ? 0.20 : 0.35
             var stations = [mix(points[0], points[1], t: rootBias)]
             stations.append(contentsOf: points[1...4])
             let radii = taper.map { $0 * baseRadius }

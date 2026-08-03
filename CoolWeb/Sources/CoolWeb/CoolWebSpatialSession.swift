@@ -16,6 +16,9 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
     private var occlusionMeshesByID: [UUID: CoolWebOcclusionMesh] = [:]
     /// Head pose source for the gaze-triggered glove suit-up.
     private var worldTracking: WorldTrackingProvider?
+    /// Kept for `handAnchors(at:)` pose prediction — the anchor update
+    /// stream alone lags visibly when the hand moves fast.
+    private var handTrackingProvider: HandTrackingProvider?
 
     public init() {}
 
@@ -36,6 +39,7 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
                 let sceneReconstruction = SceneReconstructionProvider()
                 var providers: [any DataProvider] = []
                 if HandTrackingProvider.isSupported {
+                    self.lock.withLock { self.handTrackingProvider = handTracking }
                     providers.append(handTracking)
                 }
                 if SceneReconstructionProvider.isSupported {
@@ -87,6 +91,7 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
             poses.removeAll()
             occlusionMeshesByID.removeAll()
             worldTracking = nil
+            handTrackingProvider = nil
             return task
         }
         task?.cancel()
@@ -98,6 +103,25 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
     /// Latest world-space pose for a hand, or nil before first tracking.
     public func handPose(_ side: CoolWebHandSide) -> CoolWebHandPose? {
         lock.withLock { poses[side] }
+    }
+
+    /// Pose predicted for `timestamp` (systemUptime timebase) via
+    /// `handAnchors(at:)` — much lower perceived latency than the anchor
+    /// stream, which is what keeps the glove glued to a moving hand. Falls
+    /// back to the latest streamed pose when prediction is unavailable.
+    public func predictedHandPose(
+        _ side: CoolWebHandSide,
+        at timestamp: TimeInterval
+    ) -> CoolWebHandPose? {
+        let provider = lock.withLock { handTrackingProvider }
+        if let provider, provider.state == .running {
+            let anchors = provider.handAnchors(at: timestamp)
+            let anchor = side == .left ? anchors.0 : anchors.1
+            if let anchor, let pose = Self.makePose(from: anchor) {
+                return pose
+            }
+        }
+        return handPose(side)
     }
 
     /// Current head (device) transform in the world frame, or nil until

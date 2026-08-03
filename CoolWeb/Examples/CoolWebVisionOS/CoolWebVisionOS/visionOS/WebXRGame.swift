@@ -98,7 +98,9 @@ final class WebXRGame: @unchecked Sendable {
         let head = session.headTransform()
 
         for side in CoolWebHandSide.allCases {
-            guard let pose = session.handPose(side) else {
+            // Predicted pose ~50 ms ahead: keeps the glove glued to a moving
+            // hand instead of trailing it by the anchor-stream latency.
+            guard let pose = session.predictedHandPose(side, at: now + 0.05) else {
                 holder.setHandDiagnostics(side, tracked: false, extensions: nil)
                 updateCoolWebGlove(side: side, pose: nil, now: now)
                 continue

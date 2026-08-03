@@ -117,7 +117,6 @@ struct CoolWebVisionOSXRApp: App {
     @State private var tensionHeatmap = false
     @State private var impactSplat = false
     @State private var suitUp = false
-    @State private var limbsHidden = false
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -208,14 +207,6 @@ struct CoolWebVisionOSXRApp: App {
                 }
                 .padding(48)
             }
-            // Passthrough hands stay visible until a glove is actually
-            // building (>10 % progress), so the user watches their real hand
-            // get covered; on retract they return as the fabric leaves.
-            .onReceive(
-                Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
-            ) { _ in
-                limbsHidden = coolWebGloveMaxProgress() > 0.1
-            }
         }
         .windowStyle(.plain)
         .defaultSize(width: 640, height: 560)
@@ -270,10 +261,11 @@ struct CoolWebVisionOSXRApp: App {
             }
         }
         .immersionStyle(selection: $immersionStyle, in: .mixed)
-        // While a glove is on (or building), the system must not composite
-        // the real passthrough hands over our render — the glove replaces
-        // them. Driven by live suit-up progress, not just the toggle.
-        .upperLimbVisibility(limbsHidden ? .hidden : .automatic)
+        // With Suit-Up on, the system must not composite the real
+        // passthrough hands over our render — the glove replaces them.
+        // Driven directly by the toggle: a timer-based progress poll dies
+        // with the control window and left the real hands visible on device.
+        .upperLimbVisibility(suitUp ? .hidden : .automatic)
     }
 
     @ViewBuilder
