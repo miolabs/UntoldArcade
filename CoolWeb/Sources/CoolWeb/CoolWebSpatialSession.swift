@@ -14,6 +14,8 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
     private var updateTask: Task<Void, Never>?
     private var poses: [CoolWebHandSide: CoolWebHandPose] = [:]
     private var occlusionMeshesByID: [UUID: CoolWebOcclusionMesh] = [:]
+    /// Head pose source for the gaze-triggered glove suit-up.
+    private var worldTracking: WorldTrackingProvider?
 
     public init() {}
 
@@ -38,6 +40,11 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
                 }
                 if SceneReconstructionProvider.isSupported {
                     providers.append(sceneReconstruction)
+                }
+                if WorldTrackingProvider.isSupported {
+                    let worldTracking = WorldTrackingProvider()
+                    self.lock.withLock { self.worldTracking = worldTracking }
+                    providers.append(worldTracking)
                 }
                 guard !providers.isEmpty else {
                     self.clearTask()
@@ -79,6 +86,7 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
             updateTask = nil
             poses.removeAll()
             occlusionMeshesByID.removeAll()
+            worldTracking = nil
             return task
         }
         task?.cancel()
@@ -90,6 +98,16 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
     /// Latest world-space pose for a hand, or nil before first tracking.
     public func handPose(_ side: CoolWebHandSide) -> CoolWebHandPose? {
         lock.withLock { poses[side] }
+    }
+
+    /// Current head (device) transform in the world frame, or nil until
+    /// world tracking runs. Drives the gaze-triggered glove suit-up.
+    public func headTransform() -> simd_float4x4? {
+        let provider = lock.withLock { worldTracking }
+        guard let provider, provider.state == .running else { return nil }
+        return provider.queryDeviceAnchor(
+            atTimestamp: ProcessInfo.processInfo.systemUptime
+        )?.originFromAnchorTransform
     }
 
     // MARK: - Hand anchors

@@ -116,7 +116,8 @@ struct CoolWebVisionOSXRApp: App {
     @State private var occlusionEnabled = true
     @State private var tensionHeatmap = false
     @State private var impactSplat = false
-    @State private var spiderGlove = true
+    @State private var suitUp = false
+    @State private var limbsHidden = false
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -152,22 +153,15 @@ struct CoolWebVisionOSXRApp: App {
                         .buttonStyle(.bordered)
                     }
 
-                    // The Spider-Man glove drawn over the tracked hand. The
-                    // immersive space hides the passthrough hands while it is
-                    // on, so the glove replaces them instead of overlapping.
-                    Toggle("Spider glove", isOn: $spiderGlove)
+                    // Suit-Up: flip it, then look at a hand — after a short
+                    // focus delay the glove weaves over it (each hand
+                    // triggers on its own gaze). Flip it off and the fabric
+                    // retracts in reverse back into the wrist.
+                    Toggle("Suit-Up", isOn: $suitUp)
                         .frame(maxWidth: 320)
-                        .onChange(of: spiderGlove) { _, enabled in
-                            setCoolWebGloveEnabled(enabled)
+                        .onChange(of: suitUp) { _, up in
+                            setCoolWebGloveSuitUp(up)
                         }
-
-                    // Re-runs the wrist→fingertips suit-up sweep on the
-                    // gloves currently on screen.
-                    Button("Replay glove suit-up") {
-                        replayCoolWebGloveBuild()
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!spiderGlove)
 
                     Toggle("Real-room occlusion", isOn: $occlusionEnabled)
                         .frame(maxWidth: 320)
@@ -214,6 +208,14 @@ struct CoolWebVisionOSXRApp: App {
                 }
                 .padding(48)
             }
+            // Passthrough hands stay visible until a glove is actually
+            // building (>10 % progress), so the user watches their real hand
+            // get covered; on retract they return as the fabric leaves.
+            .onReceive(
+                Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
+            ) { _ in
+                limbsHidden = coolWebGloveMaxProgress() > 0.1
+            }
         }
         .windowStyle(.plain)
         .defaultSize(width: 640, height: 560)
@@ -225,7 +227,8 @@ struct CoolWebVisionOSXRApp: App {
                     return
                 }
                 guard installCoolWeb() else { return }
-                setCoolWebGloveEnabled(spiderGlove)
+                setCoolWebGloveEnabled(true)
+                setCoolWebGloveSuitUp(suitUp)
 
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 WebXRHolder.shared.xr = xr
@@ -267,9 +270,10 @@ struct CoolWebVisionOSXRApp: App {
             }
         }
         .immersionStyle(selection: $immersionStyle, in: .mixed)
-        // With the glove on, the system must not composite the real
-        // passthrough hands over our render — the glove replaces them.
-        .upperLimbVisibility(spiderGlove ? .hidden : .automatic)
+        // While a glove is on (or building), the system must not composite
+        // the real passthrough hands over our render — the glove replaces
+        // them. Driven by live suit-up progress, not just the toggle.
+        .upperLimbVisibility(limbsHidden ? .hidden : .automatic)
     }
 
     @ViewBuilder

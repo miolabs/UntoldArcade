@@ -35,11 +35,16 @@ public struct CoolWebSegmentGPU: Sendable, Equatable {
 public struct CoolWebGloveVertexGPU: Sendable, Equatable {
     public var position = SIMD4<Float>.zero // xyz world, w = u (0…1 around the limb)
     public var normal = SIMD4<Float>.zero   // xyz world normal, w = v (m along the limb)
-    /// x material (0 red fabric + webbing, 1 metal shooter),
-    /// y ring radius (m — converts u to meters for the web pattern),
+    /// x material (0 palm fabric — radial web, 1 metal shooter,
+    ///   2 finger fabric — ring stripes),
+    /// y ring radius (m),
     /// z coverage distance from the wrist (m — suit-up animation coordinate),
     /// w build front (m): fragments beyond it dissolve; huge = fully covered.
     public var params = SIMD4<Float>.zero
+    /// xy web-pattern coordinates (m): palm = planar offset from the
+    /// back-of-hand web center, finger = (around, along) unrolled;
+    /// z baked ambient occlusion (0 dark … 1 open), w unused.
+    public var extra = SIMD4<Float>(0, 0, 1, 0)
 
     public init() {}
 }

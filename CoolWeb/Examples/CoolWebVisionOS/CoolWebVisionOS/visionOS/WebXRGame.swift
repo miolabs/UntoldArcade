@@ -74,20 +74,46 @@ final class WebXRGame: @unchecked Sendable {
         clearCoolWebGloves()
     }
 
+    /// True when the user's head is oriented at `point` (within ~23°) — the
+    /// gaze gate for the suit-up. With no head data yet, don't block.
+    private func isLookingAt(_ point: SIMD3<Float>, head: simd_float4x4?) -> Bool {
+        guard let head else { return true }
+        let headPosition = SIMD3<Float>(
+            head.columns.3.x, head.columns.3.y, head.columns.3.z
+        )
+        // ARKit device anchor looks along -Z.
+        let forward = -SIMD3<Float>(
+            head.columns.2.x, head.columns.2.y, head.columns.2.z
+        )
+        let toPoint = point - headPosition
+        let distance = simd_length(toPoint)
+        guard distance > 0.05 else { return true }
+        return simd_dot(toPoint / distance, simd_normalize(forward)) > 0.92
+    }
+
     /// Called by the engine once per frame on the XR render thread.
     func update(deltaTime: Float) {
         let now = ProcessInfo.processInfo.systemUptime
         let holder = WebXRHolder.shared
+        let head = session.headTransform()
 
         for side in CoolWebHandSide.allCases {
             guard let pose = session.handPose(side) else {
                 holder.setHandDiagnostics(side, tracked: false, extensions: nil)
-                updateCoolWebGlove(side: side, pose: nil)
+                updateCoolWebGlove(side: side, pose: nil, now: now)
                 continue
             }
-            // Rebuild the Spider-Man glove over this hand (no-op while the
-            // glove option is off; hides the glove while tracking is lost).
-            updateCoolWebGlove(side: side, pose: pose)
+            // Rebuild the Spider-Man glove over this hand. The suit-up only
+            // starts once the user actually looks at the hand (gaze gate on
+            // the palm center).
+            let palmCenter = (pose.wrist
+                + (pose.index.points[1] + pose.little.points[1]) * 0.5) * 0.5
+            updateCoolWebGlove(
+                side: side,
+                pose: pose,
+                lookedAt: isLookingAt(palmCenter, head: head),
+                now: now
+            )
             holder.setHandDiagnostics(
                 side,
                 tracked: pose.isTracked,
@@ -98,11 +124,15 @@ final class WebXRGame: @unchecked Sendable {
                 continue
             }
 
-            shooter.updateHand(side, position: pose.wrist)
+            // The strand roots at (and fires from) the gray web-shooter
+            // barrel on the inner wrist, matching the drawn glove geometry.
+            let muzzle = CoolWebGloveBuilder.webShooterMuzzle(pose: pose, side: side)
+                ?? pose.wrist
+            shooter.updateHand(side, position: muzzle)
 
             switch classifiers[side]?.update(pose: pose) {
-            case let .webShooterFired(origin, direction):
-                shooter.fire(hand: side, origin: origin, direction: direction, now: now)
+            case let .webShooterFired(_, direction):
+                shooter.fire(hand: side, origin: muzzle, direction: direction, now: now)
                 print("CoolWeb: \(side == .left ? "left" : "right") hand fired")
             case .palmOpened:
                 shooter.release(hand: side, now: now)

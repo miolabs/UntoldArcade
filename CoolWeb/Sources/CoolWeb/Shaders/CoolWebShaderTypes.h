@@ -33,10 +33,11 @@ typedef struct {
 typedef struct {
     metal::float4 position; // xyz world, w = u (0…1 around the limb)
     metal::float4 normal;   // xyz world normal, w = v (m along the limb)
-    metal::float4 params;   // x = material (0 fabric, 1 metal),
+    metal::float4 params;   // x = material (0 palm fabric, 1 metal, 2 finger fabric),
                             // y = ring radius (m),
                             // z = coverage distance from wrist (m),
                             // w = suit-up front (m); huge = fully covered
+    metal::float4 extra;    // xy = web-pattern coords (m), z = baked AO, w unused
 } CoolWebGloveVertexGPU;
 
 typedef struct {

@@ -88,11 +88,32 @@ final class CoolWebGloveTests: XCTestCase {
         }
     }
 
+    func testWebShooterMuzzleSitsOffThePalmSideOfTheWrist() {
+        let pose = makeHand()
+        guard let muzzle = CoolWebGloveBuilder.webShooterMuzzle(
+            pose: pose, side: .right
+        ) else { return XCTFail("no muzzle for a valid pose") }
+        // Close to the wrist but clearly offset from it, and ahead of it
+        // along the aim so the strand exits the barrel's front.
+        let offset = muzzle - pose.wrist
+        XCTAssertGreaterThan(simd_length(offset), 0.015)
+        XCTAssertLessThan(simd_length(offset), 0.07)
+        XCTAssertGreaterThan(simd_dot(offset, pose.aimDirection), 0.01)
+        // And it matches a metal vertex of the built glove (the barrel).
+        let mesh = CoolWebGloveBuilder.build(pose: pose, side: .right)
+        let nearestMetal = mesh.vertices
+            .filter { $0.params.x == CoolWebGloveMaterial.metal }
+            .map { simd_length(SIMD3($0.position.x, $0.position.y, $0.position.z) - muzzle) }
+            .min() ?? .infinity
+        XCTAssertLessThan(nearestMetal, 0.02)
+    }
+
     func testBuildContainsBothMaterials() {
         let mesh = CoolWebGloveBuilder.build(pose: makeHand(), side: .right)
         let materials = Set(mesh.vertices.map { $0.params.x })
         XCTAssertTrue(materials.contains(CoolWebGloveMaterial.fabric))
         XCTAssertTrue(materials.contains(CoolWebGloveMaterial.metal))
+        XCTAssertTrue(materials.contains(CoolWebGloveMaterial.fingerFabric))
 
         var noShooter = CoolWebGloveConfig()
         noShooter.showWebShooter = false
@@ -131,62 +152,118 @@ final class CoolWebGloveTests: XCTestCase {
         XCTAssertGreaterThan(tipVertex!.params.z, mesh.coverageExtent * 0.75)
     }
 
-    func testSuitUpAnimationSweepsTheFront() {
-        let state = CoolWebGloveState.shared
-        state.clear()
-        setCoolWebGloveEnabled(true)
-        defer {
-            setCoolWebGloveEnabled(false)
-            state.clear()
+    /// Pumps per-frame glove updates for one hand at the given times.
+    private func pump(
+        _ side: CoolWebHandSide,
+        at times: [TimeInterval],
+        lookedAt: Bool = true
+    ) {
+        for t in times {
+            updateCoolWebGlove(
+                side: side, pose: makeHand(), lookedAt: lookedAt, now: t
+            )
         }
-        var config = CoolWebGloveConfig()
-        config.buildDuration = 1.0
-        let t0: TimeInterval = 1000
-
-        updateCoolWebGlove(side: .right, pose: makeHand(), config: config, now: t0)
-        let extent = CoolWebGloveBuilder
-            .build(pose: makeHand(), side: .right, config: config)
-            .coverageExtent
-
-        // Early: the front hugs the wrist.
-        let early = state.snapshot(now: t0 + 0.05).vertices
-        XCTAssertFalse(early.isEmpty)
-        XCTAssertLessThan(early[0].params.w, extent * 0.25)
-        // Midway: swept out but not done.
-        let mid = state.snapshot(now: t0 + 0.5).vertices
-        XCTAssertGreaterThan(mid[0].params.w, early[0].params.w)
-        XCTAssertLessThan(mid[0].params.w, extent)
-        // Finished: back to the covered sentinel, untouched vertices.
-        let done = state.snapshot(now: t0 + 1.5).vertices
-        XCTAssertEqual(done[0].params.w, CoolWebGloveBuild.coveredFront)
-
-        // Replay rewinds the front to the wrist.
-        replayCoolWebGloveBuild(now: t0 + 2)
-        let replayed = state.snapshot(now: t0 + 2.05).vertices
-        XCTAssertLessThan(replayed[0].params.w, extent * 0.25)
     }
 
-    func testTrackingBlipDoesNotReplaySuitUp() {
+    /// Suits one hand fully up (gaze + build time). Default config: gaze
+    /// delay 0.35 s, build 0.9 s.
+    private func suitUpFully(_ side: CoolWebHandSide, from t0: TimeInterval) {
+        pump(side, at: [t0, t0 + 0.4, t0 + 2.0])
+    }
+
+    func testSuitUpBuildsThenReversesFromAnywhere() {
         let state = CoolWebGloveState.shared
         state.clear()
         setCoolWebGloveEnabled(true)
+        setCoolWebGloveSuitUp(true)
         defer {
+            setCoolWebGloveSuitUp(false)
             setCoolWebGloveEnabled(false)
             state.clear()
         }
-        let t0: TimeInterval = 2000
-        updateCoolWebGlove(side: .left, pose: makeHand(), now: t0)
-        // Tracking blip: gone for 0.2 s, then back — no second suit-up.
-        updateCoolWebGlove(side: .left, pose: nil, now: t0 + 2)
-        updateCoolWebGlove(side: .left, pose: makeHand(), now: t0 + 2.2)
-        let after = state.snapshot(now: t0 + 2.25).vertices
-        XCTAssertEqual(after[0].params.w, CoolWebGloveBuild.coveredFront)
+        let extent = CoolWebGloveBuilder
+            .build(pose: makeHand(), side: .right).coverageExtent
 
-        // A long absence replays the animation.
-        updateCoolWebGlove(side: .left, pose: nil, now: t0 + 3)
-        updateCoolWebGlove(side: .left, pose: makeHand(), now: t0 + 5)
-        let reappeared = state.snapshot(now: t0 + 5.05).vertices
-        XCTAssertLessThan(reappeared[0].params.w, 0.1)
+        // Gaze satisfied at 0.4 (delay 0.35), then the front sweeps out.
+        pump(.right, at: [0, 0.4, 0.5])
+        let building = state.snapshot().vertices
+        XCTAssertFalse(building.isEmpty)
+        XCTAssertGreaterThan(building[0].params.w, 0)
+        XCTAssertLessThan(building[0].params.w, extent)
+
+        pump(.right, at: [2.5])
+        XCTAssertEqual(
+            state.snapshot().vertices[0].params.w,
+            CoolWebGloveBuild.coveredFront
+        )
+
+        // Toggle off: the animation reverses from covered…
+        setCoolWebGloveSuitUp(false)
+        pump(.right, at: [2.7])
+        let reversing = state.snapshot().vertices
+        XCTAssertGreaterThan(reversing[0].params.w, 0)
+        XCTAssertLessThan(reversing[0].params.w, extent + 0.02)
+        // …down to a bare (invisible) hand.
+        pump(.right, at: [5])
+        XCTAssertTrue(state.snapshot().vertices.isEmpty)
+        XCTAssertEqual(coolWebGloveMaxProgress(), 0)
+
+        // Toggling back on mid-bare requires the gaze again, then rebuilds.
+        setCoolWebGloveSuitUp(true)
+        pump(.right, at: [5.1, 5.5, 5.6])
+        XCTAssertFalse(state.snapshot().vertices.isEmpty)
+    }
+
+    func testGazeGateBlocksTheBuildUntilLookedAt() {
+        let state = CoolWebGloveState.shared
+        state.clear()
+        setCoolWebGloveEnabled(true)
+        setCoolWebGloveSuitUp(true)
+        defer {
+            setCoolWebGloveSuitUp(false)
+            setCoolWebGloveEnabled(false)
+            state.clear()
+        }
+        // Not looking: nothing builds, no matter how long.
+        pump(.right, at: [0, 1, 2], lookedAt: false)
+        XCTAssertTrue(state.snapshot().vertices.isEmpty)
+
+        // Looking, but shorter than the focus delay: still bare.
+        pump(.right, at: [2.1, 2.2])
+        XCTAssertTrue(state.snapshot().vertices.isEmpty)
+
+        // Held past the delay: the build starts.
+        pump(.right, at: [2.5, 2.6])
+        XCTAssertFalse(state.snapshot().vertices.isEmpty)
+
+        // Looking away mid-build does NOT pause the animation.
+        pump(.right, at: [2.7], lookedAt: false)
+        XCTAssertFalse(state.snapshot().vertices.isEmpty)
+    }
+
+    func testTrackingBlipKeepsSuitUpProgress() {
+        let state = CoolWebGloveState.shared
+        state.clear()
+        setCoolWebGloveEnabled(true)
+        setCoolWebGloveSuitUp(true)
+        defer {
+            setCoolWebGloveSuitUp(false)
+            setCoolWebGloveEnabled(false)
+            state.clear()
+        }
+        suitUpFully(.left, from: 0)
+        // Blip: gone 0.2 s, back — still covered, no second animation.
+        updateCoolWebGlove(side: .left, pose: nil, now: 3)
+        pump(.left, at: [3.2, 3.25])
+        XCTAssertEqual(
+            state.snapshot().vertices[0].params.w,
+            CoolWebGloveBuild.coveredFront
+        )
+
+        // Long absence: back to bare, waiting for gaze again.
+        updateCoolWebGlove(side: .left, pose: nil, now: 4)
+        pump(.left, at: [6])
+        XCTAssertTrue(state.snapshot().vertices.isEmpty)
     }
 
     func testDegeneratePoseDoesNotProduceNaNs() {
@@ -221,26 +298,29 @@ final class CoolWebGloveTests: XCTestCase {
 
     // MARK: - State store
 
-    func testGloveStateRespectsEnabledFlag() {
+    func testGloveStateCombinesHandsAndRespectsEnabledFlag() {
         let state = CoolWebGloveState.shared
         state.clear()
         setCoolWebGloveEnabled(false)
-
-        // Disabled: updates are dropped.
-        updateCoolWebGlove(side: .right, pose: makeHand())
-        XCTAssertTrue(state.snapshot().vertices.isEmpty)
-
-        setCoolWebGloveEnabled(true)
+        setCoolWebGloveSuitUp(true)
         defer {
+            setCoolWebGloveSuitUp(false)
             setCoolWebGloveEnabled(false)
             state.clear()
         }
-        updateCoolWebGlove(side: .right, pose: makeHand())
+
+        // Disabled: updates are dropped.
+        pump(.right, at: [0, 0.4, 2])
+        XCTAssertTrue(state.snapshot().vertices.isEmpty)
+
+        setCoolWebGloveEnabled(true)
+        suitUpFully(.right, from: 10)
         let one = state.snapshot()
         XCTAssertFalse(one.vertices.isEmpty)
 
         // Second hand combines, indices rebased past the first hand's block.
-        updateCoolWebGlove(side: .left, pose: makeHand())
+        suitUpFully(.left, from: 13)
+        pump(.right, at: [15.01])
         let two = state.snapshot()
         XCTAssertEqual(two.vertices.count, one.vertices.count * 2)
         XCTAssertTrue(two.indices.contains { Int($0) >= one.vertices.count })
@@ -248,24 +328,12 @@ final class CoolWebGloveTests: XCTestCase {
             XCTAssertLessThan(Int(index), two.vertices.count)
         }
 
-        // Tracking loss removes the hand; disabling clears everything.
-        updateCoolWebGlove(side: .left, pose: nil)
+        // An untracked pose removes the hand; disabling clears everything.
+        updateCoolWebGlove(
+            side: .left, pose: makeHand(isTracked: false), now: 16
+        )
         XCTAssertEqual(state.snapshot().vertices.count, one.vertices.count)
         setCoolWebGloveEnabled(false)
-        XCTAssertTrue(state.snapshot().vertices.isEmpty)
-    }
-
-    func testUntrackedPoseRemovesGlove() {
-        let state = CoolWebGloveState.shared
-        state.clear()
-        setCoolWebGloveEnabled(true)
-        defer {
-            setCoolWebGloveEnabled(false)
-            state.clear()
-        }
-        updateCoolWebGlove(side: .right, pose: makeHand())
-        XCTAssertFalse(state.snapshot().vertices.isEmpty)
-        updateCoolWebGlove(side: .right, pose: makeHand(isTracked: false))
         XCTAssertTrue(state.snapshot().vertices.isEmpty)
     }
 }

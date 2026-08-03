@@ -216,9 +216,11 @@ struct GloveVertexOut {
     float3 worldPos;
     float3 normal;
     float2 uv;              // x = u (0…1 around), y = v (m along)
-    float2 matAndRadius;    // x = material (0 fabric, 1 metal), y = ring radius (m)
+    float2 matAndRadius;    // x = material (0 palm, 1 metal, 2 finger), y = ring radius (m)
     float2 cover;           // x = coverage distance from wrist (m),
                             // y = suit-up front (m); huge = fully covered
+    float2 webCoord;        // web-pattern coords in meters (planar / unrolled)
+    float ao;               // baked ambient occlusion
 };
 
 vertex GloveVertexOut coolWebGloveVertex(
@@ -234,7 +236,35 @@ vertex GloveVertexOut coolWebGloveVertex(
     out.uv = float2(v.position.w, v.normal.w);
     out.matAndRadius = float2(v.params.x, v.params.y);
     out.cover = float2(v.params.z, v.params.w);
+    out.webCoord = v.extra.xy;
+    out.ao = v.extra.z;
     return out;
+}
+
+// Signed distance (m) to the nearest raised web line for the two fabric
+// looks, modeled on the reference glove: the palm/back of hand carries one
+// big radial spiderweb (spokes + sagging rings from a center), the fingers
+// carry plain rings wrapping the tube.
+static float gloveWebLineDist(float material, float2 wc) {
+    constexpr float twoPi = 6.28318530718;
+    if (material > 1.5) {
+        // Finger: rings every 9.5 mm along the tube.
+        const float spacing = 0.0095;
+        const float phase = fract(wc.y / spacing);
+        return min(phase, 1.0 - phase) * spacing;
+    }
+    // Palm: radial web. Spoke distance grows with radius; rings sag between
+    // spokes like sewn-on cord.
+    const float r = length(wc);
+    const float theta = atan2(wc.y, wc.x);
+    const float spokes = 10.0;
+    const float angTo = (fract(theta / twoPi * spokes) - 0.5) * (twoPi / spokes);
+    const float spokeDist = abs(sin(angTo)) * r;
+    const float spacing = 0.017;
+    const float sag = 0.22 * (0.5 - 0.5 * cos(angTo * spokes));
+    const float phase = fract(r / spacing + sag);
+    const float ringDist = min(phase, 1.0 - phase) * spacing;
+    return min(spokeDist, ringDist);
 }
 
 fragment float4 coolWebGloveFragment(
@@ -262,7 +292,7 @@ fragment float4 coolWebGloveFragment(
     const float buildGlow = 1.0 - smoothstep(0.0, 0.012, bandDist);
 
     float3 color;
-    if (in.matAndRadius.x > 0.5) {
+    if (in.matAndRadius.x > 0.5 && in.matAndRadius.x < 1.5) {
         // Web-shooter barrel: brushed metal with a hot Blinn glint.
         const float3 albedo = float3(0.30, 0.31, 0.34);
         const float diffuse = saturate(dot(normal, key)) * 0.6 + 0.30;
@@ -271,40 +301,50 @@ fragment float4 coolWebGloveFragment(
         const float fresnel = pow(1.0 - saturate(dot(normal, view)), 3.0);
         color = albedo * diffuse + spec + fresnel * 0.25;
     } else {
-        // Suit fabric: red with black webbing — fixed spokes along the limb,
-        // rings across it that sag between spokes like sewn web threads.
-        const float ringRadius = max(in.matAndRadius.y, 0.004);
-        const float circumference = 6.28318530718 * ringRadius;
-        const float spokes = 8.0;
+        // Suit fabric, modeled on the reference glove: red cloth with a
+        // THICK RAISED SILVER web cord. The cord gets a height bump so it
+        // catches light three-dimensionally instead of reading as a print.
+        const float lineDist = gloveWebLineDist(in.matAndRadius.x, in.webCoord);
+        const float lineWidth = in.matAndRadius.x > 1.5 ? 0.0021 : 0.0025;
+        const float aa = max(fwidth(lineDist), 0.0002);
+        float web = 1.0 - smoothstep(lineWidth - aa, lineWidth + aa, lineDist);
+        if (in.matAndRadius.x < 0.5) {
+            // Solid hub where the spokes converge, like the sewn center.
+            const float r = length(in.webCoord);
+            web = max(web, 1.0 - smoothstep(0.005, 0.009, r));
+        }
 
-        const float uWrapped = fract(in.uv.x * spokes) - 0.5;
-        const float spokeDist = abs(uWrapped) / spokes * circumference;
+        // Height-field bump: the cord stands ~1.5 mm proud of the cloth.
+        const float height = web * 0.0015;
+        const float3 sigmaX = dfdx(in.worldPos);
+        const float3 sigmaY = dfdy(in.worldPos);
+        const float3 r1 = cross(sigmaY, normal);
+        const float3 r2 = cross(normal, sigmaX);
+        const float det = dot(sigmaX, r1);
+        const float3 surfGrad = sign(det)
+            * (dfdx(height) * r1 + dfdy(height) * r2);
+        const float3 bumped = normalize(abs(det) * normal - surfGrad * 1.6);
 
-        const float spacing = 0.0105;
-        const float sag = 0.28 * (0.5 - 0.5 * cos(uWrapped * 6.28318530718));
-        const float phase = fract(in.uv.y / spacing + sag);
-        const float ringDist = min(phase, 1.0 - phase) * spacing;
+        // Red cloth with a faint honeycomb weave (the reference fabric).
+        const float2 hp = in.webCoord / 0.0028;
+        const float honey = sin(hp.x * 3.14159) * sin(hp.y * 3.14159);
+        const float3 red = float3(0.52, 0.035, 0.05) * (0.94 + 0.06 * honey);
+        const float3 silver = float3(0.46, 0.46, 0.49);
+        const float3 albedo = mix(red, silver, web);
 
-        const float lineWidth = 0.0016;
-        const float lineDist = min(spokeDist, ringDist);
-        const float web = 1.0 - smoothstep(lineWidth * 0.45, lineWidth, lineDist);
-
-        // Subtle woven-fabric shimmer, no texture fetch.
-        const float weave = 0.96
-            + 0.04 * sin(in.uv.x * 380.0) * sin(in.uv.y * 2400.0);
-
-        const float3 red = float3(0.58, 0.045, 0.06) * weave;
-        const float3 webbing = float3(0.020, 0.016, 0.018);
-        float3 albedo = mix(red, webbing, web);
-
-        // Wrap diffuse + headlight fill keeps the dark side readable indoors.
-        const float diffuse = saturate(dot(normal, key) * 0.5 + 0.5);
-        const float fill = saturate(dot(normal, view)) * 0.22;
-        const float rim = pow(1.0 - saturate(dot(normal, view)), 3.0) * 0.10;
-        color = albedo * (0.28 + 0.72 * diffuse + fill) + rim * float3(0.4, 0.05, 0.05);
-        // Faint sheen so the webbing reads as raised vinyl.
+        // Lighting on the bumped normal sells the relief; baked AO darkens
+        // the finger crotches and the knuckle crease.
+        const float diffuse = saturate(dot(bumped, key) * 0.5 + 0.5);
+        const float fill = saturate(dot(bumped, view)) * 0.20;
         const float3 half_ = normalize(key + view);
-        color += pow(saturate(dot(normal, half_)), 24.0) * 0.08 * (0.4 + 0.6 * web);
+        const float shininess = mix(20.0, 64.0, web);
+        const float specStrength = mix(0.06, 0.85, web);
+        const float spec = pow(saturate(dot(bumped, half_)), shininess)
+            * specStrength;
+        const float rim = pow(1.0 - saturate(dot(bumped, view)), 3.0)
+            * mix(0.08, 0.30, web);
+        color = albedo * in.ao * (0.26 + 0.74 * diffuse + fill)
+            + (spec + rim) * mix(float3(0.5, 0.12, 0.10), float3(1.0, 1.0, 1.05), web);
     }
     // Hot ember edge where the suit is materializing — HDR lift so the
     // engine bloom makes the front sizzle.
