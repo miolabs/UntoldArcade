@@ -22,6 +22,11 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
     private var segmentBuffers: [MTLBuffer] = []
     private var segmentBufferCursor = 0
 
+    // Glove mesh travels the same way: vertex + index ring, one slot per encode.
+    private var gloveVertexBuffers: [MTLBuffer] = []
+    private var gloveIndexBuffers: [MTLBuffer] = []
+    private var gloveBufferCursor = 0
+
     // One-shot diagnostics so a silently skipped pass is visible in the log.
     private var loggedScenePass = false
     private var loggedSceneFailure = false
@@ -71,6 +76,20 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
             blendMode: .none,
             name: "CoolWeb Real-Scene Occlusion"
         )
+        // Opaque and depth-writing: the glove replaces the (hidden) real hand,
+        // and the translucent strands drawn afterwards depth-test against it.
+        registry.registerScenePipeline(
+            CoolWebPluginContract.glovePipelineID,
+            vertexShader: "coolWebGloveVertex",
+            fragmentShader: "coolWebGloveFragment",
+            vertexShaderLibrary: library,
+            fragmentShaderLibrary: library,
+            depthCompareFunction: .lessEqual,
+            depthEnabled: true,
+            reverseZCompatible: true,
+            blendMode: .none,
+            name: "CoolWeb Spider Glove"
+        )
     }
 
     func buildGraph(
@@ -98,8 +117,10 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
 
         encodeLock.withLock {
             let state = CoolWebSceneState.shared.state()
+            let glove = CoolWebGloveState.shared.snapshot()
             let occlusionMeshes = CoolWebOcclusionStore.shared.snapshot()
-            guard !state.segments.isEmpty || !state.splats.isEmpty else { return }
+            let hasWeb = !state.segments.isEmpty || !state.splats.isEmpty
+            guard hasWeb || !glove.vertices.isEmpty else { return }
 
             let now = ProcessInfo.processInfo.systemUptime
 
@@ -163,6 +184,9 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
             )
 
             drawOcclusion(encoder, context: context, meshes: occlusionMeshes)
+            drawGlove(encoder, context: context, uniforms: &uniforms, glove: glove)
+
+            guard hasWeb else { return }
 
             encoder.pushDebugGroup("CoolWeb Strands")
             defer { encoder.popDebugGroup() }
@@ -188,6 +212,62 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
                 vertexCount: quadCount * 6
             )
         }
+    }
+
+    private func drawGlove(
+        _ encoder: MTLRenderCommandEncoder,
+        context: RenderPassContext,
+        uniforms: inout CoolWebUniforms,
+        glove: (vertices: [CoolWebGloveVertexGPU], indices: [UInt32])
+    ) {
+        guard !glove.vertices.isEmpty, !glove.indices.isEmpty,
+              let pipeline = context.renderPipelines.pipeline(
+                  CoolWebPluginContract.glovePipelineID
+              ),
+              let pipelineState = pipeline.pipelineState,
+              let buffers = nextGloveBuffers(device: context.device)
+        else { return }
+
+        glove.vertices.withUnsafeBytes { source in
+            buffers.vertex.contents().copyMemory(
+                from: source.baseAddress!, byteCount: source.count
+            )
+        }
+        glove.indices.withUnsafeBytes { source in
+            buffers.index.contents().copyMemory(
+                from: source.baseAddress!, byteCount: source.count
+            )
+        }
+
+        encoder.pushDebugGroup("CoolWeb Spider Glove")
+        defer { encoder.popDebugGroup() }
+
+        encoder.setRenderPipelineState(pipelineState)
+        encoder.setDepthStencilState(pipeline.depthState)
+        // The lofted tubes are not a watertight solid; skip backface culling.
+        encoder.setCullMode(.none)
+        encoder.setVertexBytes(
+            &uniforms,
+            length: MemoryLayout<CoolWebUniforms>.stride,
+            index: CoolWebGloveBufferIndex.uniforms.rawValue
+        )
+        encoder.setVertexBuffer(
+            buffers.vertex,
+            offset: 0,
+            index: CoolWebGloveBufferIndex.vertices.rawValue
+        )
+        encoder.setFragmentBytes(
+            &uniforms,
+            length: MemoryLayout<CoolWebUniforms>.stride,
+            index: CoolWebGloveBufferIndex.uniforms.rawValue
+        )
+        encoder.drawIndexedPrimitives(
+            type: .triangle,
+            indexCount: glove.indices.count,
+            indexType: .uint32,
+            indexBuffer: buffers.index,
+            indexBufferOffset: 0
+        )
     }
 
     private func drawOcclusion(
@@ -228,6 +308,29 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
                 indexBufferOffset: max(0, mesh.indexOffset)
             )
         }
+    }
+
+    private func nextGloveBuffers(
+        device: MTLDevice
+    ) -> (vertex: MTLBuffer, index: MTLBuffer)? {
+        if gloveVertexBuffers.isEmpty {
+            for slot in 0 ..< Self.segmentBufferRingSize {
+                guard let vertexBuffer = device.makeBuffer(
+                    length: CoolWebShaderLimits.gloveVertexBufferLength,
+                    options: .storageModeShared
+                ), let indexBuffer = device.makeBuffer(
+                    length: CoolWebShaderLimits.gloveIndexBufferLength,
+                    options: .storageModeShared
+                ) else { return nil }
+                vertexBuffer.label = "CoolWeb Glove Vertices \(slot)"
+                indexBuffer.label = "CoolWeb Glove Indices \(slot)"
+                gloveVertexBuffers.append(vertexBuffer)
+                gloveIndexBuffers.append(indexBuffer)
+            }
+        }
+        let slot = gloveBufferCursor
+        gloveBufferCursor = (gloveBufferCursor + 1) % gloveVertexBuffers.count
+        return (gloveVertexBuffers[slot], gloveIndexBuffers[slot])
     }
 
     private func nextSegmentBuffer(device: MTLDevice) -> MTLBuffer? {

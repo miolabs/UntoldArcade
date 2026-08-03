@@ -205,6 +205,91 @@ fragment float4 coolWebStrandFragment(WebVertexOut in [[stage_in]]) {
     return float4(rgb, alpha);
 }
 
+// MARK: - Spider-Man glove (opaque, depth-writing)
+
+// The glove mesh arrives as world-space vertices rebuilt from the tracked
+// hand every frame; the red-fabric + black-webbing suit look is painted here
+// procedurally from the tube coordinates (u around the limb, v meters along).
+
+struct GloveVertexOut {
+    float4 position [[position]];
+    float3 worldPos;
+    float3 normal;
+    float2 uv;              // x = u (0…1 around), y = v (m along)
+    float2 matAndRadius;    // x = material (0 fabric, 1 metal), y = ring radius (m)
+};
+
+vertex GloveVertexOut coolWebGloveVertex(
+    uint vid [[vertex_id]],
+    constant CoolWebUniforms &u [[buffer(CoolWebGloveUniformIndex)]],
+    device const CoolWebGloveVertexGPU *vertices [[buffer(CoolWebGloveVertexIndex)]]
+) {
+    const CoolWebGloveVertexGPU v = vertices[vid];
+    GloveVertexOut out;
+    out.worldPos = v.position.xyz;
+    out.position = u.viewProj * float4(v.position.xyz, 1.0);
+    out.normal = v.normal.xyz;
+    out.uv = float2(v.position.w, v.normal.w);
+    out.matAndRadius = float2(v.params.x, v.params.y);
+    return out;
+}
+
+fragment float4 coolWebGloveFragment(
+    GloveVertexOut in [[stage_in]],
+    constant CoolWebUniforms &u [[buffer(CoolWebGloveUniformIndex)]]
+) {
+    const float3 normal = normalize(in.normal);
+    const float3 view = normalize(u.cameraWorld.xyz - in.worldPos);
+    const float3 key = normalize(float3(0.30, 0.85, 0.35));
+
+    float3 color;
+    if (in.matAndRadius.x > 0.5) {
+        // Web-shooter barrel: brushed metal with a hot Blinn glint.
+        const float3 albedo = float3(0.30, 0.31, 0.34);
+        const float diffuse = saturate(dot(normal, key)) * 0.6 + 0.30;
+        const float3 half_ = normalize(key + view);
+        const float spec = pow(saturate(dot(normal, half_)), 60.0) * 1.1;
+        const float fresnel = pow(1.0 - saturate(dot(normal, view)), 3.0);
+        color = albedo * diffuse + spec + fresnel * 0.25;
+    } else {
+        // Suit fabric: red with black webbing — fixed spokes along the limb,
+        // rings across it that sag between spokes like sewn web threads.
+        const float ringRadius = max(in.matAndRadius.y, 0.004);
+        const float circumference = 6.28318530718 * ringRadius;
+        const float spokes = 8.0;
+
+        const float uWrapped = fract(in.uv.x * spokes) - 0.5;
+        const float spokeDist = abs(uWrapped) / spokes * circumference;
+
+        const float spacing = 0.0105;
+        const float sag = 0.28 * (0.5 - 0.5 * cos(uWrapped * 6.28318530718));
+        const float phase = fract(in.uv.y / spacing + sag);
+        const float ringDist = min(phase, 1.0 - phase) * spacing;
+
+        const float lineWidth = 0.0016;
+        const float lineDist = min(spokeDist, ringDist);
+        const float web = 1.0 - smoothstep(lineWidth * 0.45, lineWidth, lineDist);
+
+        // Subtle woven-fabric shimmer, no texture fetch.
+        const float weave = 0.96
+            + 0.04 * sin(in.uv.x * 380.0) * sin(in.uv.y * 2400.0);
+
+        const float3 red = float3(0.58, 0.045, 0.06) * weave;
+        const float3 webbing = float3(0.020, 0.016, 0.018);
+        float3 albedo = mix(red, webbing, web);
+
+        // Wrap diffuse + headlight fill keeps the dark side readable indoors.
+        const float diffuse = saturate(dot(normal, key) * 0.5 + 0.5);
+        const float fill = saturate(dot(normal, view)) * 0.22;
+        const float rim = pow(1.0 - saturate(dot(normal, view)), 3.0) * 0.10;
+        color = albedo * (0.28 + 0.72 * diffuse + fill) + rim * float3(0.4, 0.05, 0.05);
+        // Faint sheen so the webbing reads as raised vinyl.
+        const float3 half_ = normalize(key + view);
+        color += pow(saturate(dot(normal, half_)), 24.0) * 0.08 * (0.4 + 0.6 * web);
+    }
+    return float4(color, 1.0);
+}
+
 // MARK: - Real-scene occlusion (depth-only)
 
 struct WebOcclusionOut {

@@ -71,6 +71,7 @@ final class WebXRGame: @unchecked Sendable {
         session.stop()
         shooter.reset()
         clearCoolWebScene()
+        clearCoolWebGloves()
     }
 
     /// Called by the engine once per frame on the XR render thread.
@@ -81,8 +82,12 @@ final class WebXRGame: @unchecked Sendable {
         for side in CoolWebHandSide.allCases {
             guard let pose = session.handPose(side) else {
                 holder.setHandDiagnostics(side, tracked: false, extensions: nil)
+                updateCoolWebGlove(side: side, pose: nil)
                 continue
             }
+            // Rebuild the Spider-Man glove over this hand (no-op while the
+            // glove option is off; hides the glove while tracking is lost).
+            updateCoolWebGlove(side: side, pose: pose)
             holder.setHandDiagnostics(
                 side,
                 tracked: pose.isTracked,

@@ -11,12 +11,16 @@ public enum CoolWebPluginContract {
         "com.untoldengine.coolweb.scene.strands"
     public static let occlusionPipelineID: RenderPipelineType =
         "com.untoldengine.coolweb.scene.occlusion"
+    public static let glovePipelineID: RenderPipelineType =
+        "com.untoldengine.coolweb.scene.glove"
     public static let scenePassID = "com.untoldengine.coolweb.scene.pass"
     public static let shaderFunctionNames = [
         "coolWebStrandVertex",
         "coolWebStrandFragment",
         "coolWebOcclusionVertex",
         "coolWebOcclusionFragment",
+        "coolWebGloveVertex",
+        "coolWebGloveFragment",
     ]
 }
 

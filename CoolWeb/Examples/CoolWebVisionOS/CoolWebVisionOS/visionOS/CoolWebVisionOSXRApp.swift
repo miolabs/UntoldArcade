@@ -116,6 +116,7 @@ struct CoolWebVisionOSXRApp: App {
     @State private var occlusionEnabled = true
     @State private var tensionHeatmap = false
     @State private var impactSplat = false
+    @State private var spiderGlove = true
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -150,6 +151,15 @@ struct CoolWebVisionOSXRApp: App {
                         }
                         .buttonStyle(.bordered)
                     }
+
+                    // The Spider-Man glove drawn over the tracked hand. The
+                    // immersive space hides the passthrough hands while it is
+                    // on, so the glove replaces them instead of overlapping.
+                    Toggle("Spider glove", isOn: $spiderGlove)
+                        .frame(maxWidth: 320)
+                        .onChange(of: spiderGlove) { _, enabled in
+                            setCoolWebGloveEnabled(enabled)
+                        }
 
                     Toggle("Real-room occlusion", isOn: $occlusionEnabled)
                         .frame(maxWidth: 320)
@@ -207,6 +217,7 @@ struct CoolWebVisionOSXRApp: App {
                     return
                 }
                 guard installCoolWeb() else { return }
+                setCoolWebGloveEnabled(spiderGlove)
 
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 WebXRHolder.shared.xr = xr
@@ -248,6 +259,9 @@ struct CoolWebVisionOSXRApp: App {
             }
         }
         .immersionStyle(selection: $immersionStyle, in: .mixed)
+        // With the glove on, the system must not composite the real
+        // passthrough hands over our render — the glove replaces them.
+        .upperLimbVisibility(spiderGlove ? .hidden : .automatic)
     }
 
     @ViewBuilder

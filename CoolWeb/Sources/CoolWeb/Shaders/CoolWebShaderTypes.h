@@ -29,6 +29,14 @@ typedef struct {
     metal::float4 params; // x = seed, y = age (s), zw unused
 } CoolWebSplatGPU;
 
+// One skinned glove vertex, regenerated from the tracked hand every frame.
+typedef struct {
+    metal::float4 position; // xyz world, w = u (0…1 around the limb)
+    metal::float4 normal;   // xyz world normal, w = v (m along the limb)
+    metal::float4 params;   // x = material (0 fabric, 1 metal),
+                            // y = ring radius (m), zw unused
+} CoolWebGloveVertexGPU;
+
 typedef struct {
     metal::float4x4 viewProj;    // per-eye view-projection
     metal::float4   cameraWorld; // xyz camera position, w = time (s)
@@ -41,6 +49,12 @@ typedef struct {
 enum CoolWebBufferIndex {
     CoolWebUniformIndex = 0,
     CoolWebSegmentIndex = 1,
+};
+
+// Glove pipeline slots (separate pipeline, separate table).
+enum CoolWebGloveBufferIndex {
+    CoolWebGloveUniformIndex = 0,
+    CoolWebGloveVertexIndex = 1,
 };
 
 #endif /* CoolWebShaderTypes_h */

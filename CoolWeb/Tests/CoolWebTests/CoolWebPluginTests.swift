@@ -33,6 +33,7 @@ final class CoolWebPluginTests: XCTestCase {
     func testShaderABIStrideMatchesMetalLayout() {
         XCTAssertEqual(MemoryLayout<CoolWebSegmentGPU>.stride, 48)
         XCTAssertEqual(MemoryLayout<CoolWebSplatGPU>.stride, 48)
+        XCTAssertEqual(MemoryLayout<CoolWebGloveVertexGPU>.stride, 48)
         // 64 (viewProj) + 16 (cameraWorld) + 16 (counts) + 4*48 (splats)
         XCTAssertEqual(MemoryLayout<CoolWebUniforms>.stride, 288)
     }
