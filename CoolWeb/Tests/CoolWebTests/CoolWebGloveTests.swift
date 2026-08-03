@@ -104,6 +104,91 @@ final class CoolWebGloveTests: XCTestCase {
         XCTAssertLessThan(bare.vertices.count, mesh.vertices.count)
     }
 
+    func testCoverageGrowsFromWristToFingertips() {
+        let pose = makeHand()
+        let mesh = CoolWebGloveBuilder.build(pose: pose, side: .right)
+
+        // Coverage spans wrist (≈0) to past the middle fingertip, and every
+        // vertex starts life fully covered (no animation running).
+        XCTAssertGreaterThan(mesh.coverageExtent, 0.12)
+        var minCoverage = Float.infinity
+        for vertex in mesh.vertices {
+            XCTAssertTrue(vertex.params.z.isFinite)
+            XCTAssertGreaterThanOrEqual(vertex.params.z, 0)
+            XCTAssertLessThanOrEqual(vertex.params.z, mesh.coverageExtent)
+            XCTAssertEqual(vertex.params.w, CoolWebGloveBuild.coveredFront)
+            minCoverage = min(minCoverage, vertex.params.z)
+        }
+        XCTAssertLessThan(minCoverage, 0.02)
+
+        // The vertex closest to the middle fingertip carries (nearly) the
+        // largest coverage — the suit-up reaches it last.
+        guard let tip = pose.middle.points.last else { return XCTFail() }
+        let tipVertex = mesh.vertices.min { a, b in
+            simd_length(SIMD3(a.position.x, a.position.y, a.position.z) - tip)
+                < simd_length(SIMD3(b.position.x, b.position.y, b.position.z) - tip)
+        }
+        XCTAssertGreaterThan(tipVertex!.params.z, mesh.coverageExtent * 0.75)
+    }
+
+    func testSuitUpAnimationSweepsTheFront() {
+        let state = CoolWebGloveState.shared
+        state.clear()
+        setCoolWebGloveEnabled(true)
+        defer {
+            setCoolWebGloveEnabled(false)
+            state.clear()
+        }
+        var config = CoolWebGloveConfig()
+        config.buildDuration = 1.0
+        let t0: TimeInterval = 1000
+
+        updateCoolWebGlove(side: .right, pose: makeHand(), config: config, now: t0)
+        let extent = CoolWebGloveBuilder
+            .build(pose: makeHand(), side: .right, config: config)
+            .coverageExtent
+
+        // Early: the front hugs the wrist.
+        let early = state.snapshot(now: t0 + 0.05).vertices
+        XCTAssertFalse(early.isEmpty)
+        XCTAssertLessThan(early[0].params.w, extent * 0.25)
+        // Midway: swept out but not done.
+        let mid = state.snapshot(now: t0 + 0.5).vertices
+        XCTAssertGreaterThan(mid[0].params.w, early[0].params.w)
+        XCTAssertLessThan(mid[0].params.w, extent)
+        // Finished: back to the covered sentinel, untouched vertices.
+        let done = state.snapshot(now: t0 + 1.5).vertices
+        XCTAssertEqual(done[0].params.w, CoolWebGloveBuild.coveredFront)
+
+        // Replay rewinds the front to the wrist.
+        replayCoolWebGloveBuild(now: t0 + 2)
+        let replayed = state.snapshot(now: t0 + 2.05).vertices
+        XCTAssertLessThan(replayed[0].params.w, extent * 0.25)
+    }
+
+    func testTrackingBlipDoesNotReplaySuitUp() {
+        let state = CoolWebGloveState.shared
+        state.clear()
+        setCoolWebGloveEnabled(true)
+        defer {
+            setCoolWebGloveEnabled(false)
+            state.clear()
+        }
+        let t0: TimeInterval = 2000
+        updateCoolWebGlove(side: .left, pose: makeHand(), now: t0)
+        // Tracking blip: gone for 0.2 s, then back — no second suit-up.
+        updateCoolWebGlove(side: .left, pose: nil, now: t0 + 2)
+        updateCoolWebGlove(side: .left, pose: makeHand(), now: t0 + 2.2)
+        let after = state.snapshot(now: t0 + 2.25).vertices
+        XCTAssertEqual(after[0].params.w, CoolWebGloveBuild.coveredFront)
+
+        // A long absence replays the animation.
+        updateCoolWebGlove(side: .left, pose: nil, now: t0 + 3)
+        updateCoolWebGlove(side: .left, pose: makeHand(), now: t0 + 5)
+        let reappeared = state.snapshot(now: t0 + 5.05).vertices
+        XCTAssertLessThan(reappeared[0].params.w, 0.1)
+    }
+
     func testDegeneratePoseDoesNotProduceNaNs() {
         // All joints collapsed onto the wrist: every direction is degenerate.
         let point = SIMD3<Float>(0, 1, 0)

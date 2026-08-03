@@ -32,6 +32,9 @@ public struct CoolWebGloveConfig: Sendable, Equatable {
     public var cuffLength: Float = 0.055
     /// Whether the metal web-shooter barrel is added on the inner wrist.
     public var showWebShooter = true
+    /// Seconds the suit-up animation takes to sweep from the wrist to the
+    /// fingertips when a glove (re)appears. 0 disables the animation.
+    public var buildDuration: Float = 0.9
 
     public init() {}
 }
@@ -40,6 +43,9 @@ public struct CoolWebGloveConfig: Sendable, Equatable {
 public struct CoolWebGloveMesh: Sendable, Equatable {
     public var vertices: [CoolWebGloveVertexGPU] = []
     public var indices: [UInt32] = []
+    /// Largest per-vertex coverage distance (m) — the suit-up animation's
+    /// front sweeps 0 → this value.
+    public var coverageExtent: Float = 0
 
     public init() {}
 }
@@ -47,6 +53,12 @@ public struct CoolWebGloveMesh: Sendable, Equatable {
 public enum CoolWebGloveMaterial {
     public static let fabric: Float = 0
     public static let metal: Float = 1
+}
+
+public enum CoolWebGloveBuild {
+    /// params.w front value meaning "fully covered, no animation": far beyond
+    /// any real coverage distance, so the shader's front test never trips.
+    public static let coveredFront: Float = 1_000_000
 }
 
 // MARK: - Builder
@@ -136,6 +148,7 @@ public enum CoolWebGloveBuilder {
                 sRadius: halfWidth,
                 tRadius: halfThickness,
                 v: v,
+                coverage: abs(v - config.cuffLength),
                 material: CoolWebGloveMaterial.fabric,
                 sides: config.radialSides
             )
@@ -153,6 +166,7 @@ public enum CoolWebGloveBuilder {
             ring: palmRings[0],
             sides: config.radialSides,
             v: 0,
+            coverage: config.cuffLength,
             material: CoolWebGloveMaterial.fabric
         )
         accumulator.addFan(
@@ -161,6 +175,7 @@ public enum CoolWebGloveBuilder {
             ring: palmRings[palmRings.count - 1],
             sides: config.radialSides,
             v: config.cuffLength + palmLength,
+            coverage: palmLength,
             material: CoolWebGloveMaterial.fabric
         )
 
@@ -184,6 +199,7 @@ public enum CoolWebGloveBuilder {
                 stations: stations,
                 radii: radii,
                 referenceSide: lateral,
+                coverageOffset: simd_length(stations[0] - wrist),
                 material: CoolWebGloveMaterial.fabric,
                 sides: config.radialSides,
                 capEnd: true
@@ -208,6 +224,7 @@ public enum CoolWebGloveBuilder {
                     sRadius: station.a,
                     tRadius: station.b,
                     v: station.d + 0.016,
+                    coverage: abs(station.d),
                     material: CoolWebGloveMaterial.metal,
                     sides: config.radialSides
                 )
@@ -224,6 +241,7 @@ public enum CoolWebGloveBuilder {
                 ring: barrelRings[0],
                 sides: config.radialSides,
                 v: 0,
+                coverage: abs(barrelStations[0].d),
                 material: CoolWebGloveMaterial.metal
             )
             accumulator.addFan(
@@ -232,6 +250,7 @@ public enum CoolWebGloveBuilder {
                 ring: barrelRings[2],
                 sides: config.radialSides,
                 v: 0.05,
+                coverage: abs(barrelStations[2].d),
                 material: CoolWebGloveMaterial.metal
             )
         }
@@ -239,6 +258,7 @@ public enum CoolWebGloveBuilder {
         var mesh = CoolWebGloveMesh()
         mesh.vertices = accumulator.vertices
         mesh.indices = accumulator.indices
+        mesh.coverageExtent = accumulator.maxCoverage
         return mesh
     }
 }
@@ -248,9 +268,13 @@ public enum CoolWebGloveBuilder {
 private struct GloveMeshAccumulator {
     var vertices: [CoolWebGloveVertexGPU] = []
     var indices: [UInt32] = []
+    /// Largest coverage distance written so far (suit-up animation extent).
+    var maxCoverage: Float = 0
 
     /// Adds one elliptical ring in the (sAxis, tAxis) plane. `axialLean`
     /// tilts the normals toward `leanAxis` for hemisphere cap rings.
+    /// `coverage` is the vertex's distance from the wrist along the glove —
+    /// the suit-up animation front sweeps through it.
     /// Returns the index of the ring's first vertex.
     mutating func addRing(
         center: SIMD3<Float>,
@@ -259,6 +283,7 @@ private struct GloveMeshAccumulator {
         sRadius: Float,
         tRadius: Float,
         v: Float,
+        coverage: Float,
         material: Float,
         sides: Int,
         leanAxis: SIMD3<Float> = .zero,
@@ -266,6 +291,7 @@ private struct GloveMeshAccumulator {
     ) -> Int {
         let base = vertices.count
         let meanRadius = (sRadius + tRadius) * 0.5
+        maxCoverage = max(maxCoverage, coverage)
         for k in 0 ..< sides {
             let theta = 2 * Float.pi * Float(k) / Float(sides)
             let c = cos(theta)
@@ -285,7 +311,9 @@ private struct GloveMeshAccumulator {
             var vertex = CoolWebGloveVertexGPU()
             vertex.position = SIMD4<Float>(position, Float(k) / Float(sides))
             vertex.normal = SIMD4<Float>(normal, v)
-            vertex.params = SIMD4<Float>(material, meanRadius, 0, 0)
+            vertex.params = SIMD4<Float>(
+                material, meanRadius, coverage, CoolWebGloveBuild.coveredFront
+            )
             vertices.append(vertex)
         }
         return base
@@ -308,12 +336,16 @@ private struct GloveMeshAccumulator {
         ring: Int,
         sides: Int,
         v: Float,
+        coverage: Float,
         material: Float
     ) {
         var apexVertex = CoolWebGloveVertexGPU()
         apexVertex.position = SIMD4<Float>(apex, 0)
         apexVertex.normal = SIMD4<Float>(normal, v)
-        apexVertex.params = SIMD4<Float>(material, 0.01, 0, 0)
+        apexVertex.params = SIMD4<Float>(
+            material, 0.01, coverage, CoolWebGloveBuild.coveredFront
+        )
+        maxCoverage = max(maxCoverage, coverage)
         let apexIndex = UInt32(vertices.count)
         vertices.append(apexVertex)
         for k in 0 ..< sides {
@@ -324,10 +356,13 @@ private struct GloveMeshAccumulator {
 
     /// A tapered tube along `stations` with parallel-transported ring frames
     /// (no twist), optionally closed with a hemisphere cap at the last station.
+    /// `coverageOffset` is the first station's distance from the wrist; each
+    /// ring's coverage grows with arc length from there.
     mutating func addTube(
         stations: [SIMD3<Float>],
         radii: [Float],
         referenceSide: SIMD3<Float>,
+        coverageOffset: Float,
         material: Float,
         sides: Int,
         capEnd: Bool
@@ -358,6 +393,7 @@ private struct GloveMeshAccumulator {
                 sRadius: radius,
                 tRadius: radius,
                 v: v,
+                coverage: coverageOffset + v,
                 material: material,
                 sides: sides
             )
@@ -380,6 +416,7 @@ private struct GloveMeshAccumulator {
                 sRadius: tipRadius * cos(phi),
                 tRadius: tipRadius * cos(phi),
                 v: v + tipRadius * sin(phi),
+                coverage: coverageOffset + v + tipRadius * sin(phi),
                 material: material,
                 sides: sides,
                 leanAxis: axis,
@@ -394,6 +431,7 @@ private struct GloveMeshAccumulator {
             ring: previousRing,
             sides: sides,
             v: v + tipRadius,
+            coverage: coverageOffset + v + tipRadius,
             material: material
         )
     }
@@ -432,48 +470,120 @@ private func mix(_ a: Float, _ b: Float, t: Float) -> Float {
 final class CoolWebGloveState: @unchecked Sendable {
     static let shared = CoolWebGloveState()
 
+    /// A tracking blip shorter than this does not replay the suit-up.
+    private static let reappearGrace: TimeInterval = 0.5
+    /// The front sweeps a little past the extent so the glow band and the
+    /// ragged-edge jitter fully clear the fingertips.
+    private static let frontOverscan: Float = 0.015
+
+    private struct Entry {
+        var mesh: CoolWebGloveMesh
+        /// When this hand's suit-up animation started.
+        var buildStart: TimeInterval
+        var buildDuration: Float
+    }
+
     private let lock = NSLock()
     private var enabled = false
-    private var meshes: [CoolWebHandSide: CoolWebGloveMesh] = [:]
+    private var entries: [CoolWebHandSide: Entry] = [:]
+    private var removedAt: [CoolWebHandSide: TimeInterval] = [:]
 
     func setEnabled(_ newValue: Bool) {
         lock.withLock {
             enabled = newValue
-            if !newValue { meshes.removeAll() }
+            if !newValue {
+                entries.removeAll()
+                removedAt.removeAll()
+            }
         }
     }
 
-    func update(side: CoolWebHandSide, mesh: CoolWebGloveMesh) {
+    func update(
+        side: CoolWebHandSide,
+        mesh: CoolWebGloveMesh,
+        buildDuration: Float,
+        now: TimeInterval
+    ) {
         lock.withLock {
             guard enabled else { return }
-            meshes[side] = mesh
+            if var entry = entries[side] {
+                entry.mesh = mesh
+                entries[side] = entry
+                return
+            }
+            // Newly appeared: play the suit-up unless it is just a short
+            // tracking blip of an already-covered hand.
+            let awayFor = removedAt[side].map { now - $0 } ?? .infinity
+            let start = awayFor < Self.reappearGrace
+                ? now - TimeInterval(buildDuration) - 1
+                : now
+            entries[side] = Entry(
+                mesh: mesh, buildStart: start, buildDuration: buildDuration
+            )
         }
     }
 
-    func remove(side: CoolWebHandSide) {
-        lock.withLock { _ = meshes.removeValue(forKey: side) }
+    func remove(side: CoolWebHandSide, now: TimeInterval) {
+        lock.withLock {
+            guard entries.removeValue(forKey: side) != nil else { return }
+            removedAt[side] = now
+        }
     }
 
     func clear() {
-        lock.withLock { meshes.removeAll() }
+        lock.withLock {
+            entries.removeAll()
+            removedAt.removeAll()
+        }
+    }
+
+    /// Restarts the suit-up animation on every visible glove.
+    func replayBuild(now: TimeInterval) {
+        lock.withLock {
+            for side in entries.keys {
+                entries[side]?.buildStart = now
+            }
+            removedAt.removeAll()
+        }
     }
 
     /// Both hands combined into one vertex/index list (indices rebased), or
-    /// empty arrays when disabled/untracked. Respects the shader limits.
-    func snapshot() -> (vertices: [CoolWebGloveVertexGPU], indices: [UInt32]) {
+    /// empty arrays when disabled/untracked. During a suit-up animation the
+    /// per-vertex front distance (params.w) is stamped from the eased
+    /// progress; finished gloves keep the builder's covered sentinel.
+    func snapshot(
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> (vertices: [CoolWebGloveVertexGPU], indices: [UInt32]) {
         lock.withLock {
-            guard enabled, !meshes.isEmpty else { return ([], []) }
+            guard enabled, !entries.isEmpty else { return ([], []) }
             var vertices: [CoolWebGloveVertexGPU] = []
             var indices: [UInt32] = []
             for side in CoolWebHandSide.allCases {
-                guard let mesh = meshes[side] else { continue }
+                guard let entry = entries[side] else { continue }
+                let mesh = entry.mesh
                 guard vertices.count + mesh.vertices.count
                     <= CoolWebShaderLimits.maxGloveVertices,
                     indices.count + mesh.indices.count
                     <= CoolWebShaderLimits.maxGloveIndices
                 else { continue }
                 let base = UInt32(vertices.count)
-                vertices.append(contentsOf: mesh.vertices)
+                let progress = entry.buildDuration > 0
+                    ? Float((now - entry.buildStart) / TimeInterval(entry.buildDuration))
+                    : 1
+                if progress < 1 {
+                    // smoothstep easing: the front accelerates off the wrist
+                    // and settles at the fingertips.
+                    let t = max(0, min(1, progress))
+                    let eased = t * t * (3 - 2 * t)
+                    let front = eased * (mesh.coverageExtent + Self.frontOverscan)
+                    vertices.append(contentsOf: mesh.vertices.map {
+                        var vertex = $0
+                        vertex.params.w = front
+                        return vertex
+                    })
+                } else {
+                    vertices.append(contentsOf: mesh.vertices)
+                }
                 indices.append(contentsOf: mesh.indices.map { $0 + base })
             }
             return (vertices, indices)
@@ -492,17 +602,32 @@ public func setCoolWebGloveEnabled(_ enabled: Bool) {
 
 /// Rebuilds one hand's glove from the latest pose. Call every frame from the
 /// game update; pass nil (or an untracked pose) to hide that hand's glove.
+/// A glove that (re)appears plays a suit-up animation sweeping the fabric
+/// from the wrist to the fingertips (`config.buildDuration`).
 public func updateCoolWebGlove(
     side: CoolWebHandSide,
     pose: CoolWebHandPose?,
-    config: CoolWebGloveConfig = CoolWebGloveConfig()
+    config: CoolWebGloveConfig = CoolWebGloveConfig(),
+    now: TimeInterval = ProcessInfo.processInfo.systemUptime
 ) {
     guard let pose, pose.isTracked else {
-        CoolWebGloveState.shared.remove(side: side)
+        CoolWebGloveState.shared.remove(side: side, now: now)
         return
     }
     let mesh = CoolWebGloveBuilder.build(pose: pose, side: side, config: config)
-    CoolWebGloveState.shared.update(side: side, mesh: mesh)
+    CoolWebGloveState.shared.update(
+        side: side,
+        mesh: mesh,
+        buildDuration: config.buildDuration,
+        now: now
+    )
+}
+
+/// Replays the suit-up animation on the currently visible gloves.
+public func replayCoolWebGloveBuild(
+    now: TimeInterval = ProcessInfo.processInfo.systemUptime
+) {
+    CoolWebGloveState.shared.replayBuild(now: now)
 }
 
 /// Hides both gloves (e.g. on session teardown) without toggling the option.

@@ -161,6 +161,14 @@ struct CoolWebVisionOSXRApp: App {
                             setCoolWebGloveEnabled(enabled)
                         }
 
+                    // Re-runs the wrist→fingertips suit-up sweep on the
+                    // gloves currently on screen.
+                    Button("Replay glove suit-up") {
+                        replayCoolWebGloveBuild()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!spiderGlove)
+
                     Toggle("Real-room occlusion", isOn: $occlusionEnabled)
                         .frame(maxWidth: 320)
                         .onChange(of: occlusionEnabled) { _, enabled in

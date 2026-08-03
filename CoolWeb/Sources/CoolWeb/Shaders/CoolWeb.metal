@@ -217,6 +217,8 @@ struct GloveVertexOut {
     float3 normal;
     float2 uv;              // x = u (0…1 around), y = v (m along)
     float2 matAndRadius;    // x = material (0 fabric, 1 metal), y = ring radius (m)
+    float2 cover;           // x = coverage distance from wrist (m),
+                            // y = suit-up front (m); huge = fully covered
 };
 
 vertex GloveVertexOut coolWebGloveVertex(
@@ -231,6 +233,7 @@ vertex GloveVertexOut coolWebGloveVertex(
     out.normal = v.normal.xyz;
     out.uv = float2(v.position.w, v.normal.w);
     out.matAndRadius = float2(v.params.x, v.params.y);
+    out.cover = float2(v.params.z, v.params.w);
     return out;
 }
 
@@ -241,6 +244,22 @@ fragment float4 coolWebGloveFragment(
     const float3 normal = normalize(in.normal);
     const float3 view = normalize(u.cameraWorld.xyz - in.worldPos);
     const float3 key = normalize(float3(0.30, 0.85, 0.35));
+
+    // Suit-up: the fabric weaves on from the wrist outward. A hash raggs the
+    // sweeping front so it isn't a clean circle, everything beyond it is not
+    // built yet, and a hot band right behind it reads as the material
+    // assembling. When fully covered the front sits at +1e6 and this whole
+    // block is a no-op.
+    const float2 cell = floor(float2(in.uv.x * 48.0, in.uv.y * 420.0));
+    const float ragged = fract(
+        sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453
+    );
+    const float localFront = in.cover.y + (ragged - 0.5) * 0.010;
+    if (in.cover.x > localFront) {
+        discard_fragment();
+    }
+    const float bandDist = localFront - in.cover.x;
+    const float buildGlow = 1.0 - smoothstep(0.0, 0.012, bandDist);
 
     float3 color;
     if (in.matAndRadius.x > 0.5) {
@@ -287,6 +306,9 @@ fragment float4 coolWebGloveFragment(
         const float3 half_ = normalize(key + view);
         color += pow(saturate(dot(normal, half_)), 24.0) * 0.08 * (0.4 + 0.6 * web);
     }
+    // Hot ember edge where the suit is materializing — HDR lift so the
+    // engine bloom makes the front sizzle.
+    color = mix(color, float3(2.4, 0.55, 0.12), buildGlow * 0.9);
     return float4(color, 1.0);
 }
 
