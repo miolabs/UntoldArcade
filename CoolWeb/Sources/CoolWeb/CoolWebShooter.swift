@@ -91,8 +91,16 @@ public final class CoolWebShooter {
     }
 
     /// Moves the root anchors of the held nets with the tracked hands.
-    public func updateHand(_ hand: CoolWebHandSide, position: SIMD3<Float>) {
-        heldNet(for: hand)?.updateHand(position)
+    /// `collision` approximates the hand (a few spheres) so the held strand
+    /// drapes over a closed fist instead of clipping through the glove.
+    public func updateHand(
+        _ hand: CoolWebHandSide,
+        position: SIMD3<Float>,
+        collision: [CoolWebCollisionSphere] = []
+    ) {
+        guard let net = heldNet(for: hand) else { return }
+        net.updateHand(position)
+        net.collisionSpheres = collision
     }
 
     /// Steps every net and publishes the frame's drawable scene.

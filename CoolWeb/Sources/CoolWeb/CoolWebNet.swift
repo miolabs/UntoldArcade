@@ -18,6 +18,18 @@ struct CoolWebRandom: RandomNumberGenerator {
     }
 }
 
+/// A pushout collider for the rope — a few of these approximate the gloved
+/// hand so held strands drape over a closed fist instead of clipping it.
+public struct CoolWebCollisionSphere: Sendable, Equatable {
+    public var center: SIMD3<Float>
+    public var radius: Float
+
+    public init(center: SIMD3<Float>, radius: Float) {
+        self.center = center
+        self.radius = radius
+    }
+}
+
 /// Tuning for one fired web.
 public struct CoolWebNetParams: Sendable, Equatable {
     /// Particles of the single leader line from the wrist.
@@ -332,6 +344,11 @@ public final class CoolWebNet {
         handPosition = position
     }
 
+    /// Hand colliders for this frame; strands are pushed out of them each
+    /// substep so a closed fist gathers the web over the glove instead of
+    /// letting it clip through the fingers.
+    public var collisionSpheres: [CoolWebCollisionSphere] = []
+
     /// Lets go of the root: the web stays on the wall and dangles.
     public func release(now: TimeInterval) {
         guard isHeld else { return }
@@ -427,7 +444,22 @@ public final class CoolWebNet {
                 solveConstraints(forward: true)
                 solveConstraints(forward: false)
             }
+            resolveCollisions()
             applyPins()
+        }
+    }
+
+    private func resolveCollisions() {
+        guard !collisionSpheres.isEmpty else { return }
+        for sphere in collisionSpheres {
+            let radiusSq = sphere.radius * sphere.radius
+            for i in 0 ..< positions.count where !isPinned(i) {
+                let delta = positions[i] - sphere.center
+                let distanceSq = simd_length_squared(delta)
+                guard distanceSq < radiusSq, distanceSq > 1e-10 else { continue }
+                let distance = sqrt(distanceSq)
+                positions[i] = sphere.center + delta * (sphere.radius / distance)
+            }
         }
     }
 

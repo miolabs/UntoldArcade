@@ -128,9 +128,26 @@ final class WebXRGame: @unchecked Sendable {
 
             // The strand roots at (and fires from) the gray web-shooter
             // barrel on the inner wrist, matching the drawn glove geometry.
+            // A few spheres approximate the gloved hand so the held strand
+            // drapes over a closed fist instead of clipping the fingers.
             let muzzle = CoolWebGloveBuilder.webShooterMuzzle(pose: pose, side: side)
                 ?? pose.wrist
-            shooter.updateHand(side, position: muzzle)
+            let knuckleCenter = (pose.index.points[1] + pose.little.points[1]) * 0.5
+            let midFingers = [pose.index, pose.middle, pose.ring, pose.little]
+                .compactMap { $0.points.count > 2 ? $0.points[2] : nil }
+            let midCenter = midFingers.isEmpty
+                ? knuckleCenter
+                : midFingers.reduce(.zero, +) / Float(midFingers.count)
+            let tips = [pose.index, pose.middle, pose.ring, pose.little]
+                .compactMap { $0.points.last }
+            let tipCenter = tips.isEmpty
+                ? knuckleCenter
+                : tips.reduce(.zero, +) / Float(tips.count)
+            shooter.updateHand(side, position: muzzle, collision: [
+                CoolWebCollisionSphere(center: knuckleCenter, radius: 0.048),
+                CoolWebCollisionSphere(center: midCenter, radius: 0.042),
+                CoolWebCollisionSphere(center: tipCenter, radius: 0.038),
+            ])
 
             switch classifiers[side]?.update(pose: pose) {
             case let .webShooterFired(_, direction):

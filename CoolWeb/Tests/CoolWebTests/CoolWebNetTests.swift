@@ -76,6 +76,48 @@ final class CoolWebNetTests: XCTestCase {
         return now
     }
 
+    func testCollisionSpheresKeepTheStrandOutOfTheFist() {
+        let shooter = makeShooter()
+        let net = shooter.fire(
+            hand: .right,
+            origin: handOrigin,
+            direction: SIMD3<Float>(0, 0, -1),
+            now: 0,
+            randomSeed: 11
+        )
+        run(shooter, from: 0, seconds: 1, hand: handOrigin)
+        XCTAssertEqual(net?.phase, .attached)
+
+        // A "fist" sphere sits right on the strand's path in front of the
+        // hand. With the collider fed every frame, the settled rope must not
+        // leave any free segment endpoint meaningfully inside it.
+        let fist = CoolWebCollisionSphere(
+            center: handOrigin + SIMD3<Float>(0, 0, -0.15), radius: 0.05
+        )
+        var now: TimeInterval = 1
+        let dt: Float = 1 / 90
+        for _ in 0 ..< 90 {
+            now += Double(dt)
+            shooter.updateHand(.right, position: handOrigin, collision: [fist])
+            shooter.step(now: now, dt: dt)
+        }
+        var segments: [CoolWebSegmentDesc] = []
+        net?.appendSegments(into: &segments)
+        XCTAssertFalse(segments.isEmpty)
+        // The pinned root may sit wherever the hand is; everything else must
+        // have been pushed out to (near) the sphere surface.
+        let tolerance: Float = 0.005
+        for segment in segments {
+            for point in [segment.a, segment.b]
+            where simd_length(point - handOrigin) > 1e-4 {
+                XCTAssertGreaterThan(
+                    simd_length(point - fist.center),
+                    fist.radius - tolerance
+                )
+            }
+        }
+    }
+
     func testFireFliesAndAttachesTheWholeCone() throws {
         setCoolWebSplatsEnabled(true)
         defer { setCoolWebSplatsEnabled(false) }

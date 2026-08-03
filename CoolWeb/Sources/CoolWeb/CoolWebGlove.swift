@@ -20,7 +20,7 @@ import simd
 /// Tunables for the procedural glove. Distances are meters.
 public struct CoolWebGloveConfig: Sendable, Equatable {
     /// Radial vertices per tube ring.
-    public var radialSides = 12
+    public var radialSides = 18
     /// Base finger radii, ordered thumb, index, middle, ring, little.
     public var fingerRadii: [Float] = [0.0115, 0.0102, 0.0102, 0.0096, 0.0088]
     /// Extra radius so the glove sits over the real finger, not inside it.
@@ -136,7 +136,10 @@ public enum CoolWebGloveBuilder {
         frame: CoolWebHandFrame,
         config: CoolWebGloveConfig
     ) -> SIMD3<Float> {
-        frame.wrist + frame.palmNormal * (config.palmHalfThicknessWrist + 0.006)
+        // Behind the wrist joint, over the cuff — on device the wrist joint
+        // itself already reads as the start of the palm.
+        frame.wrist - frame.forward * 0.018
+            + frame.palmNormal * (config.palmHalfThicknessWrist + 0.006)
     }
 
     static func muzzlePosition(
@@ -144,6 +147,32 @@ public enum CoolWebGloveBuilder {
         config: CoolWebGloveConfig
     ) -> SIMD3<Float> {
         barrelCenter(frame: frame, config: config) + frame.forward * 0.026
+    }
+
+    /// Inserts a Catmull-Rom midpoint between every pair of stations
+    /// (weights -1/16, 9/16, 9/16, -1/16) so tube bends round off instead of
+    /// kinking at the joints. Radii are linearly interpolated.
+    static func subdivided(
+        stations: [SIMD3<Float>],
+        radii: [Float]
+    ) -> ([SIMD3<Float>], [Float]) {
+        guard stations.count >= 3 else { return (stations, radii) }
+        func radius(_ i: Int) -> Float { radii[min(i, radii.count - 1)] }
+        var outStations: [SIMD3<Float>] = []
+        var outRadii: [Float] = []
+        for i in 0 ..< stations.count - 1 {
+            outStations.append(stations[i])
+            outRadii.append(radius(i))
+            let p0 = stations[max(i - 1, 0)]
+            let p3 = stations[min(i + 2, stations.count - 1)]
+            let mid = (stations[i] + stations[i + 1]) * (9.0 / 16.0)
+                - (p0 + p3) * (1.0 / 16.0)
+            outStations.append(mid)
+            outRadii.append((radius(i) + radius(i + 1)) * 0.5)
+        }
+        outStations.append(stations[stations.count - 1])
+        outRadii.append(radius(stations.count - 1))
+        return (outStations, outRadii)
     }
 
     /// Builds the world-space glove mesh for one tracked hand pose.
@@ -269,17 +298,22 @@ public enum CoolWebGloveBuilder {
             var stations = [mix(points[0], points[1], t: rootBias)]
             stations.append(contentsOf: points[1...4])
             let radii = taper.map { $0 * baseRadius }
+            // Catmull-Rom midpoints double the ring count: a curled finger
+            // bends as a smooth arc instead of a segmented worm.
+            let (smoothStations, smoothRadii) = Self.subdivided(
+                stations: stations, radii: radii
+            )
             // Roots sit in the crotch between fingers: bake them darker.
             accumulator.addTube(
-                stations: stations,
-                radii: radii,
+                stations: smoothStations,
+                radii: smoothRadii,
                 referenceSide: lateral,
                 coverageOffset: simd_length(stations[0] - wrist),
                 material: CoolWebGloveMaterial.fingerFabric,
                 sides: config.radialSides,
                 capEnd: true,
                 web: .cylindrical,
-                stationAO: [0.62, 0.78, 1, 1, 1]
+                stationAO: [0.62, 0.70, 0.78, 0.89, 1, 1, 1, 1, 1]
             )
         }
 

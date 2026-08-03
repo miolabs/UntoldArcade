@@ -93,12 +93,13 @@ final class CoolWebGloveTests: XCTestCase {
         guard let muzzle = CoolWebGloveBuilder.webShooterMuzzle(
             pose: pose, side: .right
         ) else { return XCTFail("no muzzle for a valid pose") }
-        // Close to the wrist but clearly offset from it, and ahead of it
-        // along the aim so the strand exits the barrel's front.
+        // Close to the wrist but clearly offset from it (palm side), and not
+        // behind it — the barrel hugs the wrist, not the palm.
         let offset = muzzle - pose.wrist
         XCTAssertGreaterThan(simd_length(offset), 0.015)
         XCTAssertLessThan(simd_length(offset), 0.07)
-        XCTAssertGreaterThan(simd_dot(offset, pose.aimDirection), 0.01)
+        XCTAssertGreaterThan(simd_dot(offset, pose.aimDirection), 0)
+        XCTAssertLessThan(simd_dot(offset, pose.aimDirection), 0.02)
         // And it matches a metal vertex of the built glove (the barrel).
         let mesh = CoolWebGloveBuilder.build(pose: pose, side: .right)
         let nearestMetal = mesh.vertices
