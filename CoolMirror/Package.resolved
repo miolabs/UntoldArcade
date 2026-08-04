@@ -1,0 +1,15 @@
+{
+  "originHash" : "1509f22b04e07c21e010e4a4243de381a4c4fd38feb5d27f2bdae4aa005554c5",
+  "pins" : [
+    {
+      "identity" : "untoldengine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/miolabs/UntoldEngine.git",
+      "state" : {
+        "branch" : "feature/compute_skinning",
+        "revision" : "5f6326c098c89daebcd581274e73e40666a317cd"
+      }
+    }
+  ],
+  "version" : 3
+}

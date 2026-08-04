@@ -7,6 +7,7 @@ The demos included are:
 
 - 🏠 **HomeDesign** – a visionOS mixed-reality demo: pick a pre-furnished floor plan, place it on your real floor, and walk through it at full scale or from a bird's-eye view. Also shows off the engine's Rendering Extension system by integrating **CoolWater** (below) to render a real-time animated pool.
 - 🛠️ **SceneBuilder** – a declarative scene-building demo using SwiftUI-style syntax to construct 3D scenes programmatically.
+- 🪞 **CoolMirror** – a visionOS *virtual mirror* demo for the engine's character-deformation stack: a rigged character stands in front of you and the skinning path (vertex shader vs. compute) is switchable live. Later phases add pose-space correctives, XPBD muscles, an ML deformer, and live iPhone body-tracking so the character mirrors your own movements (`CoolMirror/Examples/CoolMirrorVisionOS`).
 
 ### Rendering Extensions
 
