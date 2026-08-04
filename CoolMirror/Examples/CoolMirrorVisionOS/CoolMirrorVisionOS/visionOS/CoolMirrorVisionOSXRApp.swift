@@ -42,6 +42,12 @@ final class MirrorControls {
     var clip: CoolMirrorClip = .idle {
         didSet { XRHolder.shared.game?.setClip(clip) }
     }
+    var bellyWeight: Double = 0 {
+        didSet { XRHolder.shared.game?.setMorphWeight(name: "belly", weight: Float(bellyWeight)) }
+    }
+    var bigheadWeight: Double = 0 {
+        didSet { XRHolder.shared.game?.setMorphWeight(name: "bighead", weight: Float(bigheadWeight)) }
+    }
 }
 
 @main
@@ -89,6 +95,21 @@ struct CoolMirrorVisionOSXRApp: App {
                         }
                         .pickerStyle(.segmented).labelsHidden()
                     }
+                    GridRow {
+                        Text("Belly")
+                        Slider(value: $controls.bellyWeight, in: 0 ... 1)
+                            .disabled(controls.skinningPath == .vertexShader)
+                    }
+                    GridRow {
+                        Text("Big head")
+                        Slider(value: $controls.bigheadWeight, in: 0 ... 1)
+                            .disabled(controls.skinningPath == .vertexShader)
+                    }
+                }
+
+                if controls.skinningPath == .vertexShader {
+                    Text("Morphs need a compute skinning path (LBS/DQS/DDM).")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .padding(48)

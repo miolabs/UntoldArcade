@@ -84,6 +84,19 @@ public final class CoolMirrorGame {
         applyClip()
     }
 
+    /// Morph target weight passthrough (demo asset ships "belly" and
+    /// "bighead"). Applied by the deformation pass, so a compute skinning
+    /// path must be active for the weight to show.
+    public func setMorphWeight(name: String, weight: Float) {
+        guard let characterId else { return }
+        setEntityMorphTargetWeight(entityId: characterId, name: name, weight: weight)
+    }
+
+    public func morphTargetNames() -> [String] {
+        guard let characterId else { return [] }
+        return entityMorphTargetNames(entityId: characterId)
+    }
+
     private func applySkinningPath() {
         guard let characterId else { return }
         switch skinningPath {

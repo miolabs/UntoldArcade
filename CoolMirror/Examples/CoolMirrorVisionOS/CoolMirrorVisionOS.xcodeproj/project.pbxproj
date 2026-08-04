@@ -361,7 +361,7 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/miolabs/UntoldEngine";
 			requirement = {
-				branch = "feature/dqs_ddm";
+				branch = "feature/morph_format";
 				kind = branch;
 			};
 		};
