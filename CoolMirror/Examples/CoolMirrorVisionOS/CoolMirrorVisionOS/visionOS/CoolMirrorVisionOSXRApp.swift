@@ -36,8 +36,8 @@ struct MirrorLayerConfiguration: CompositorLayerConfiguration {
 @Observable
 @MainActor
 final class MirrorControls {
-    var computeSkinning = false {
-        didSet { XRHolder.shared.game?.setComputeSkinning(enabled: computeSkinning) }
+    var skinningPath: CoolMirrorSkinningPath = .vertexShader {
+        didSet { XRHolder.shared.game?.setSkinningPath(skinningPath) }
     }
     var clip: CoolMirrorClip = .idle {
         didSet { XRHolder.shared.game?.setClip(clip) }
@@ -73,9 +73,11 @@ struct CoolMirrorVisionOSXRApp: App {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
                     GridRow {
                         Text("Skinning")
-                        Picker("Skinning", selection: $controls.computeSkinning) {
-                            Text("Vertex shader").tag(false)
-                            Text("Compute (LBS)").tag(true)
+                        Picker("Skinning", selection: $controls.skinningPath) {
+                            Text("Vertex").tag(CoolMirrorSkinningPath.vertexShader)
+                            Text("LBS").tag(CoolMirrorSkinningPath.computeLBS)
+                            Text("DQS").tag(CoolMirrorSkinningPath.computeDQS)
+                            Text("DDM").tag(CoolMirrorSkinningPath.computeDDM)
                         }
                         .pickerStyle(.segmented).labelsHidden()
                     }

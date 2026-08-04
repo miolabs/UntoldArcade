@@ -361,7 +361,7 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/miolabs/UntoldEngine";
 			requirement = {
-				branch = "feature/compute_skinning";
+				branch = "feature/dqs_ddm";
 				kind = branch;
 			};
 		};

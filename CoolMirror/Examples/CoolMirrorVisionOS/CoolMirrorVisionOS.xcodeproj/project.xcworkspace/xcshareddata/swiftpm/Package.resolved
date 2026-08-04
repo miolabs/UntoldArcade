@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/miolabs/UntoldEngine",
       "state" : {
-        "branch" : "feature/compute_skinning",
-        "revision" : "5f6326c098c89daebcd581274e73e40666a317cd"
+        "branch" : "feature/dqs_ddm",
+        "revision" : "636fa8ef323391e7c1dd467fea54828f8c36e7da"
       }
     }
   ],

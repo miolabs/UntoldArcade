@@ -18,6 +18,14 @@ public enum CoolMirrorClip: String, CaseIterable, Sendable {
     case idle
 }
 
+/// Skinning paths the mirror can switch between live.
+public enum CoolMirrorSkinningPath: String, CaseIterable, Sendable {
+    case vertexShader
+    case computeLBS
+    case computeDQS
+    case computeDDM
+}
+
 @MainActor
 public final class CoolMirrorGame {
     public private(set) var characterId: EntityID?
@@ -25,7 +33,7 @@ public final class CoolMirrorGame {
     // Mirror framing: the character stands ~1.6 m in front of the world origin
     // and faces back toward the user like a reflection.
     private let characterPosition = simd_float3(0.0, 0.0, -1.6)
-    private var computeSkinningEnabled = false
+    private var skinningPath: CoolMirrorSkinningPath = .vertexShader
     private var currentClip: CoolMirrorClip = .idle
 
     public init() {}
@@ -66,8 +74,8 @@ public final class CoolMirrorGame {
 
     // MARK: - Controls (called from the SwiftUI control window)
 
-    public func setComputeSkinning(enabled: Bool) {
-        computeSkinningEnabled = enabled
+    public func setSkinningPath(_ path: CoolMirrorSkinningPath) {
+        skinningPath = path
         applySkinningPath()
     }
 
@@ -78,10 +86,15 @@ public final class CoolMirrorGame {
 
     private func applySkinningPath() {
         guard let characterId else { return }
-        if computeSkinningEnabled {
-            setEntityDeformation(entityId: characterId, skinningMode: .lbs)
-        } else {
+        switch skinningPath {
+        case .vertexShader:
             removeEntityDeformation(entityId: characterId)
+        case .computeLBS:
+            setEntityDeformation(entityId: characterId, skinningMode: .lbs)
+        case .computeDQS:
+            setEntityDeformation(entityId: characterId, skinningMode: .dqs)
+        case .computeDDM:
+            setEntityDeformation(entityId: characterId, skinningMode: .ddm)
         }
     }
 
