@@ -18,8 +18,10 @@ public struct CoolScanStyleParams: Sendable {
     public var toonBands: Float = 3
     /// Color multiplier applied to the darkest toon band.
     public var toonShadeColor: SIMD3<Float> = [0.42, 0.38, 0.52]
-    /// Strength of the toon rim highlight (0 disables).
-    public var rimStrength: Float = 0.25
+    /// Strength of the toon rim highlight (0 disables). Off by default: the
+    /// engine's view-space normal vertex output proved noisy on scan meshes,
+    /// which turns the quantized rim into per-pixel glitter.
+    public var rimStrength: Float = 0
     /// Angular width of the rim highlight.
     public var rimWidth: Float = 0.35
 

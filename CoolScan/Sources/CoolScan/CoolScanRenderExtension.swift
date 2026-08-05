@@ -160,9 +160,22 @@ final class CoolScanRenderExtension: RenderExtension, @unchecked Sendable {
                 matching: [CoolScanToonComponent.self],
                 label: "CoolScan Toon Surface",
                 argumentLayoutID: CoolScanPluginContract.toonArgumentLayoutID,
-                bindArguments: { arguments, _, _ in
+                bindEntity: { encoder, _, _ in
+                    // This pass re-rasterizes geometry the deferred pass
+                    // already drew; the two pipelines are not bit-identical
+                    // in depth, so bias toward the camera (reverse-Z: depth
+                    // grows toward the viewer) to avoid equality speckle.
+                    encoder.setDepthBias(64.0, slopeScale: 2.0, clamp: 0.01)
+                },
+                bindArguments: { arguments, entityID, _ in
+                    // Prefer the engine's already-loaded material texture so
+                    // sampling matches the PBR pass exactly; the app-supplied
+                    // override and the white fallback cover the rest.
+                    let texture = state.toonAlbedo
+                        ?? Self.engineBaseColorTexture(entityID: entityID)
+                        ?? albedo
                     arguments.setTexture(
-                        albedo,
+                        texture,
                         id: RenderExtensionModelSurfaceArgument.texture0
                     )
                     arguments.setBytes(
@@ -172,6 +185,23 @@ final class CoolScanRenderExtension: RenderExtension, @unchecked Sendable {
                 }
             )
         }
+    }
+
+    private static func engineBaseColorTexture(entityID: EntityID) -> MTLTexture? {
+        guard let renderComponent = getEntityComponent(
+            entityId: entityID,
+            componentType: RenderComponent.self
+        ) else {
+            return nil
+        }
+        for mesh in renderComponent.mesh {
+            for submesh in mesh.submeshes {
+                if let texture = submesh.material?.baseColor.texture {
+                    return texture
+                }
+            }
+        }
+        return nil
     }
 
     private func ensureFallbackAlbedo(device: MTLDevice) -> MTLTexture? {

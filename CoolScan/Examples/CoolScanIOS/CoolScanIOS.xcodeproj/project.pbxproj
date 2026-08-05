@@ -1,0 +1,402 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		060EE8B1887C322234E9C6F2 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = B28D1553E12F16E809D9E74A /* UntoldEngine */; };
+		21372167FEBE4A9EB800227D /* CoolScanPipeline in Frameworks */ = {isa = PBXBuildFile; productRef = AF93DC83AC4AF5F411903701 /* CoolScanPipeline */; };
+		2AC8CDD141C58E65400CFD07 /* CoolScan in Frameworks */ = {isa = PBXBuildFile; productRef = 19989838FE4091614919B82F /* CoolScan */; };
+		6D4E82C5ADDCE8C65CB029EC /* ball.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 7049DA8454ACC4DCB1185DB4 /* ball.usdz */; };
+		6FE3197D79B4300D307A743E /* StylePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A356CDCDC5F05C8E72D8A2C4 /* StylePickerView.swift */; };
+		9A0AD4D4D4A09FA27759BB33 /* ScanStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5341A912058AFC489FE16CB /* ScanStore.swift */; };
+		D1857F15F52063A53E37D83D /* CoolScanApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99742B7AEDA39651BF517BBE /* CoolScanApp.swift */; };
+		D3F33FA00FA036059C0A86B6 /* ViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77B1562F1D1EFAB35D09BDD8 /* ViewerView.swift */; };
+		E70D2B47AC371E03F4F70C96 /* ScanLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8630C946ADA2B29C25DB66 /* ScanLibraryView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		531A69FE583A53F47AED04D5 /* UntoldEngine */ = {isa = PBXFileReference; lastKnownFileType = folder; name = UntoldEngine; path = ../../../../UntoldEngine; sourceTree = SOURCE_ROOT; };
+		558322AFFDF350FAAE15E3B4 /* CoolScan */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CoolScan; path = ../..; sourceTree = SOURCE_ROOT; };
+		5E8630C946ADA2B29C25DB66 /* ScanLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLibraryView.swift; sourceTree = "<group>"; };
+		7049DA8454ACC4DCB1185DB4 /* ball.usdz */ = {isa = PBXFileReference; lastKnownFileType = file.usdz; path = ball.usdz; sourceTree = "<group>"; };
+		77B1562F1D1EFAB35D09BDD8 /* ViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewerView.swift; sourceTree = "<group>"; };
+		99742B7AEDA39651BF517BBE /* CoolScanApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoolScanApp.swift; sourceTree = "<group>"; };
+		A356CDCDC5F05C8E72D8A2C4 /* StylePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StylePickerView.swift; sourceTree = "<group>"; };
+		C7951DE096F8FED703FCD0C8 /* CoolScanIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CoolScanIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5341A912058AFC489FE16CB /* ScanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanStore.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		667F02A9124EDB46998316A2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				060EE8B1887C322234E9C6F2 /* UntoldEngine in Frameworks */,
+				2AC8CDD141C58E65400CFD07 /* CoolScan in Frameworks */,
+				21372167FEBE4A9EB800227D /* CoolScanPipeline in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		18601A254780A4A5B7886FAB /* CoolScanIOS */ = {
+			isa = PBXGroup;
+			children = (
+				99742B7AEDA39651BF517BBE /* CoolScanApp.swift */,
+				5E8630C946ADA2B29C25DB66 /* ScanLibraryView.swift */,
+				E5341A912058AFC489FE16CB /* ScanStore.swift */,
+				A356CDCDC5F05C8E72D8A2C4 /* StylePickerView.swift */,
+				77B1562F1D1EFAB35D09BDD8 /* ViewerView.swift */,
+				965F95BC708593AF82C91003 /* Resources */,
+			);
+			path = CoolScanIOS;
+			sourceTree = "<group>";
+		};
+		685ACF354A9E157B0E9DFF86 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				558322AFFDF350FAAE15E3B4 /* CoolScan */,
+				531A69FE583A53F47AED04D5 /* UntoldEngine */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		8FB483435BB6B438EE0D4111 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C7951DE096F8FED703FCD0C8 /* CoolScanIOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		965F95BC708593AF82C91003 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				7049DA8454ACC4DCB1185DB4 /* ball.usdz */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		AA34FEB2DF92403DD4BBD7E6 = {
+			isa = PBXGroup;
+			children = (
+				18601A254780A4A5B7886FAB /* CoolScanIOS */,
+				685ACF354A9E157B0E9DFF86 /* Packages */,
+				8FB483435BB6B438EE0D4111 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F0B7D0EB6BE067109803A5F2 /* CoolScanIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A04671A349870DFD0488970A /* Build configuration list for PBXNativeTarget "CoolScanIOS" */;
+			buildPhases = (
+				5F3CFBA3A49AFA8895041907 /* Sources */,
+				233067CFA9D904BAEACE36B1 /* Resources */,
+				667F02A9124EDB46998316A2 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CoolScanIOS;
+			packageProductDependencies = (
+				B28D1553E12F16E809D9E74A /* UntoldEngine */,
+				19989838FE4091614919B82F /* CoolScan */,
+				AF93DC83AC4AF5F411903701 /* CoolScanPipeline */,
+			);
+			productName = CoolScanIOS;
+			productReference = C7951DE096F8FED703FCD0C8 /* CoolScanIOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DFBECF9B4BC1D3EDC946D1EA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					F0B7D0EB6BE067109803A5F2 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = B5D949E53A22130246DEF7A2 /* Build configuration list for PBXProject "CoolScanIOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = AA34FEB2DF92403DD4BBD7E6;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				BD0E3D5D9D42240066AB6665 /* XCLocalSwiftPackageReference "../.." */,
+				F8ED318FFF139A5D99C670C8 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 8FB483435BB6B438EE0D4111 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F0B7D0EB6BE067109803A5F2 /* CoolScanIOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		233067CFA9D904BAEACE36B1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6D4E82C5ADDCE8C65CB029EC /* ball.usdz in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5F3CFBA3A49AFA8895041907 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1857F15F52063A53E37D83D /* CoolScanApp.swift in Sources */,
+				E70D2B47AC371E03F4F70C96 /* ScanLibraryView.swift in Sources */,
+				9A0AD4D4D4A09FA27759BB33 /* ScanStore.swift in Sources */,
+				6FE3197D79B4300D307A743E /* StylePickerView.swift in Sources */,
+				D3F33FA00FA036059C0A86B6 /* ViewerView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		04D2C8962103BB812E0772DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		478B8804ADD964401BD54C83 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "CoolScan uses the camera to scan real objects into 3D models.";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.coolscan;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		ABC456179FEA0B5CD31523AD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "CoolScan uses the camera to scan real objects into 3D models.";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.coolscan;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		B6ECC7D48351923AEBEBE76C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A04671A349870DFD0488970A /* Build configuration list for PBXNativeTarget "CoolScanIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ABC456179FEA0B5CD31523AD /* Debug */,
+				478B8804ADD964401BD54C83 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B5D949E53A22130246DEF7A2 /* Build configuration list for PBXProject "CoolScanIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B6ECC7D48351923AEBEBE76C /* Debug */,
+				04D2C8962103BB812E0772DA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		BD0E3D5D9D42240066AB6665 /* XCLocalSwiftPackageReference "../.." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../..;
+		};
+		F8ED318FFF139A5D99C670C8 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../../UntoldEngine;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		19989838FE4091614919B82F /* CoolScan */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CoolScan;
+		};
+		AF93DC83AC4AF5F411903701 /* CoolScanPipeline */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CoolScanPipeline;
+		};
+		B28D1553E12F16E809D9E74A /* UntoldEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UntoldEngine;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = DFBECF9B4BC1D3EDC946D1EA /* Project object */;
+}

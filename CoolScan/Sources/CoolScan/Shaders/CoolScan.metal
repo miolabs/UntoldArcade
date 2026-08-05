@@ -23,10 +23,15 @@ fragment float4 coolScanToonFragment(
     constant CoolScanToonUniforms &u =
         *reinterpret_cast<constant CoolScanToonUniforms *>(arguments.buffer0);
     constexpr sampler albedoSampler(
-        mag_filter::linear, min_filter::linear, address::repeat
+        mag_filter::linear, min_filter::linear, mip_filter::linear,
+        address::repeat
     );
 
-    float3 albedo = arguments.texture0.sample(albedoSampler, in.uvCoords).rgb;
+    // Match the engine's model fragment: V is flipped before sampling. The
+    // positive LOD bias softens fine surface grain that flat cel shading
+    // would otherwise expose (PBR lighting normally masks it).
+    float2 st = float2(in.uvCoords.x, 1.0 - in.uvCoords.y);
+    float3 albedo = arguments.texture0.sample(albedoSampler, st, bias(1.5)).rgb;
 
     float3 n = normalize(in.normal);
     float3 l = normalize(-u.lightDirection.xyz);
@@ -58,6 +63,21 @@ fragment float4 coolScanToonFragment(
 static inline float coolScanLuma(float3 c)
 {
     return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+// The screen kernels run before the engine's look/tonemap chain, so the
+// input is linear HDR. Stylize in a display-ish [0,1] space (Reinhard) and
+// invert afterwards so the downstream chain still behaves.
+static inline float3 coolScanToDisplay(float3 c)
+{
+    c = max(c, 0.0);
+    return c / (1.0 + c);
+}
+
+static inline float3 coolScanFromDisplay(float3 c)
+{
+    c = clamp(c, 0.0, 0.985);
+    return c / (1.0 - c);
 }
 
 static inline uint2 coolScanClampCoord(int2 p, uint w, uint h)
@@ -118,30 +138,37 @@ kernel void coolScanComicKernel(
     float outlineStrength = saturate(u.paramsA.z);
     float outlineThreshold = max(u.paramsA.w, 1e-3);
 
-    float3 color = src.read(gid).rgb;
+    float3 color = coolScanToDisplay(src.read(gid).rgb);
     float lumaBefore = coolScanLuma(color);
 
-    // Posterize each channel.
-    float3 poster = floor(color * levels) / (levels - 1.0);
-    poster = clamp(poster, 0.0, 1.0);
 
-    // Halftone shading: dark areas grow ink dots on a 45-degree grid.
+    // Posterize luminance only, preserving hue. Quantize in gamma space
+    // with round-to-nearest so shadow and midtone bands are distributed the
+    // way the eye expects (pure linear-space floors crush darks to black).
+    float lumaGamma = pow(max(lumaBefore, 0.0), 1.0 / 2.2);
+    float posterGamma = round(lumaGamma * (levels - 1.0)) / (levels - 1.0);
+    float posterLuma = pow(posterGamma, 2.2);
+    float3 poster = lumaBefore > 1e-4
+        ? clamp(color * (posterLuma / lumaBefore), 0.0, 1.0)
+        : color;
+
+    // Halftone shading: genuinely dark areas grow ink dots on a 45° grid.
     if (halftone > 0.0) {
-        const float cell = 7.0;
+        const float cell = 9.0;
         float2 p = float2(gid);
         float2 r = float2(p.x + p.y, p.y - p.x) * 0.70710678;
         float2 f = fract(r / cell) - 0.5;
         float dot2 = length(f) * 2.0;
-        float darkness = 1.0 - saturate(lumaBefore * 1.4);
-        float ink = step(dot2, darkness) * halftone;
-        poster = mix(poster, poster * 0.25, ink);
+        float darkness = 1.0 - saturate(lumaGamma * 1.6);
+        float ink = step(dot2, darkness * 0.9) * halftone;
+        poster = mix(poster, poster * 0.4, ink);
     }
 
     // Ink contour lines.
     float edge = coolScanEdgeFactor(src, depth, gid, outlineThreshold);
     poster = mix(poster, float3(0.02), edge * outlineStrength);
 
-    dst.write(float4(poster, 1.0), gid);
+    dst.write(float4(coolScanFromDisplay(poster), 1.0), gid);
 }
 
 // MARK: - Pixel art (downsample + palette quantize + dither)
@@ -162,7 +189,7 @@ kernel void coolScanPixelKernel(
     uint2 cell = uint2(floor(float2(gid) / pixelSize) * pixelSize
                        + pixelSize * 0.5);
     cell = coolScanClampCoord(int2(cell), src.get_width(), src.get_height());
-    float3 color = src.read(cell).rgb;
+    float3 color = coolScanToDisplay(src.read(cell).rgb);
 
     // 4x4 Bayer ordered dithering inside the art-pixel grid hides banding.
     constexpr float bayer[16] = {
@@ -173,10 +200,14 @@ kernel void coolScanPixelKernel(
     };
     uint2 artPixel = uint2(floor(float2(gid) / pixelSize));
     uint bayerIndex = (artPixel.y % 4) * 4 + (artPixel.x % 4);
-    float dither = (bayer[bayerIndex] / 16.0 - 0.5) / levels;
+    float dither = (bayer[bayerIndex] / 16.0 - 0.5) * 0.5 / levels;
 
-    float3 quantized = floor((color + dither) * levels) / (levels - 1.0);
-    dst.write(float4(clamp(quantized, 0.0, 1.0), 1.0), gid);
+    // Quantize in gamma space so the palette spends levels where the eye
+    // sees them instead of crushing shadows.
+    float3 gammaColor = pow(max(color, 0.0), 1.0 / 2.2);
+    float3 quantized = round((gammaColor + dither) * (levels - 1.0)) / (levels - 1.0);
+    quantized = pow(clamp(quantized, 0.0, 1.0), 2.2);
+    dst.write(float4(coolScanFromDisplay(quantized), 1.0), gid);
 }
 
 // MARK: - Pencil sketch (hatching + paper tint + graphite lines)
@@ -194,8 +225,9 @@ kernel void coolScanSketchKernel(
     float outlineStrength = saturate(u.paramsA.z);
     float outlineThreshold = max(u.paramsA.w, 1e-3);
 
-    float3 color = src.read(gid).rgb;
-    float luma = coolScanLuma(color);
+    float3 color = coolScanToDisplay(src.read(gid).rgb);
+    // Perceptual luminance: hatch thresholds behave like values on paper.
+    float luma = pow(max(coolScanLuma(color), 0.0), 1.0 / 2.2);
 
     const float3 paper = float3(0.96, 0.945, 0.90);
     const float3 graphite = float3(0.16, 0.16, 0.19);
@@ -217,7 +249,7 @@ kernel void coolScanSketchKernel(
     float ink = max(shade, edge * outlineStrength);
 
     float3 sketch = mix(paper, graphite, saturate(ink));
-    dst.write(float4(sketch, 1.0), gid);
+    dst.write(float4(coolScanFromDisplay(sketch), 1.0), gid);
 }
 
 // MARK: - Edge (toon contour overlay)
@@ -234,8 +266,8 @@ kernel void coolScanEdgeKernel(
     float outlineStrength = saturate(u.paramsA.z);
     float outlineThreshold = max(u.paramsA.w, 1e-3);
 
-    float3 color = src.read(gid).rgb;
+    float3 color = coolScanToDisplay(src.read(gid).rgb);
     float edge = coolScanEdgeFactor(src, depth, gid, outlineThreshold);
     float3 outlined = mix(color, float3(0.02), edge * outlineStrength);
-    dst.write(float4(outlined, 1.0), gid);
+    dst.write(float4(coolScanFromDisplay(outlined), 1.0), gid);
 }
