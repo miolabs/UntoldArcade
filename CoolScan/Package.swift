@@ -59,6 +59,9 @@ let package = Package(
                 "CoolScanPipeline",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
             ],
+            resources: [
+                .copy("Resources/ball.usdz"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]
