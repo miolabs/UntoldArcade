@@ -1,8 +1,10 @@
+import RealityKit
 import SwiftUI
 
 struct ScanLibraryView: View {
     @StateObject private var store = ScanStore.shared
     @State private var path: [String] = []
+    @State private var showingScanFlow = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -16,8 +18,14 @@ struct ScanLibraryView: View {
             .navigationTitle("CoolScan")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    scanButton
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     importSampleButton
                 }
+            }
+            .navigationDestination(isPresented: $showingScanFlow) {
+                ScanFlowView()
             }
             .overlay {
                 if store.isCooking {
@@ -92,8 +100,20 @@ struct ScanLibraryView: View {
         } description: {
             Text("Import the sample model to try the viewer, or scan a real object.")
         } actions: {
+            scanButton
             importSampleButton
         }
+    }
+
+    /// Object Capture needs LiDAR; on unsupported devices (and the
+    /// simulator) the sample import remains the way in.
+    private var scanButton: some View {
+        Button {
+            showingScanFlow = true
+        } label: {
+            Label("Scan Object", systemImage: "camera.viewfinder")
+        }
+        .disabled(!ObjectCaptureSession.isSupported || store.isCooking)
     }
 
     private var importSampleButton: some View {
