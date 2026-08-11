@@ -12,6 +12,10 @@ The demos included are:
 
 - 💧 **CoolWater** – a reusable Rendering Extension package (owns its own shader library, pipelines, and render-graph passes) that draws an animated water surface with reflection/refraction and ripple simulation. Ships with its own standalone visionOS example (`CoolWater/Examples/CoolWaterVisionOS`) and is also consumed directly by **HomeDesign** as a real-world integration example.
 
+### Physics Backend Plugins
+
+- ⚽️ **CoolBall** – mixed-reality football for Vision Pro and the first consumer of the engine's physics backend plugin seam: a pure-Swift `PhysicsBackend` simulates the ball against your real floor, walls and furniture (ARKit plane detection), the goal standing in your room, and your hands — pinch to grab and throw, swat to kick, score between the posts (`CoolBall/Examples/CoolBallVisionOS`).
+
 ---
 
 ## ⚙️ Requirements
