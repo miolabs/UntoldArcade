@@ -49,10 +49,28 @@ public final class CoolBallScene: @unchecked Sendable {
             segments: [32, 24],
             name: "CoolBall.ball"
         )
-        .baseColor(0.95, 0.95, 0.95)
-        .roughness(0.55)
+        .baseColor(1.0, 1.0, 1.0)
+        .roughness(0.45)
         .metallic(0.0)
         ballEntity = node.entityID
+
+        // World-Cup-style panel artwork (original, Trionda-inspired),
+        // equirectangular to match the sphere primitive's UVs. The engine
+        // resolves texture paths by name through its asset search paths, so
+        // point them at this package's resource bundle first — the demo loads
+        // no other engine assets, so claiming the base path is safe.
+        if let resourceRoot = Bundle.module.resourceURL {
+            assetBasePath = resourceRoot
+        }
+        if let textureURL = Bundle.module.url(
+            forResource: "football_baseColor", withExtension: "png"
+        ) {
+            updateMaterialTexture(
+                entityId: ballEntity, textureType: .baseColor, path: textureURL
+            )
+        } else {
+            print("CoolBall: ball texture missing from bundle — plain white ball")
+        }
 
         translateTo(entityId: ballEntity, position: position)
         attachBallBody(velocity: .zero, at: position)

@@ -21,6 +21,9 @@ let package = Package(
             dependencies: [
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
             ],
+            resources: [
+                .copy("Resources/football_baseColor.png"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

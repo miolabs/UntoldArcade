@@ -48,7 +48,7 @@ public final class CoolBallGame: @unchecked Sendable {
     /// floor calibration — its origin is at the head — so the pitch drops to
     /// a plausible standing-eye offset below it.
     #if targetEnvironment(simulator)
-    public static let floorY: Float = -1.4
+    public static let floorY: Float = -1.0
     #else
     public static let floorY: Float = 0.0
     #endif
