@@ -25,6 +25,8 @@ public final class CoolBallScene: @unchecked Sendable {
     private var goalPartEntities: [EntityID] = []
     /// The XPBD goal net (visual cloth + the backend's catch plane).
     public let net = CoolBallNet()
+    /// Translucent placement preview: two posts + crossbar, no physics.
+    private var ghostEntities: [EntityID] = []
     public private(set) var goalCatchPlane: CoolBallWorldPlane?
     public private(set) var goalSkirtPlane: CoolBallWorldPlane?
 
@@ -138,6 +140,55 @@ public final class CoolBallScene: @unchecked Sendable {
             .rotateBy(angle: -50, axis: [.x])
             .rotateBy(angle: 30, axis: [.y])
         sunEntity = sun.entityID
+    }
+
+    // MARK: - Goal placement ghost
+
+    /// Builds the translucent placement preview (parked out of sight until
+    /// the first `moveGoalGhost`). No colliders, no net — just the frame.
+    @MainActor public func buildGoalGhost() {
+        removeGoalGhost()
+        for (name, scale) in [
+            ("CoolBall.ghostPostL", SIMD3<Float>(Self.postRadius * 2, Self.goalHeight, Self.postRadius * 2)),
+            ("CoolBall.ghostPostR", SIMD3<Float>(Self.postRadius * 2, Self.goalHeight, Self.postRadius * 2)),
+            ("CoolBall.ghostBar", SIMD3<Float>(Self.goalWidth + Self.postRadius * 2, Self.postRadius * 2, Self.postRadius * 2)),
+        ] {
+            let node = CubeNode(size: 1.0, name: name)
+                .baseColor(0.45, 0.8, 1.0, 0.4)
+                .roughness(0.3)
+                .scaleTo(x: scale.x, y: scale.y, z: scale.z)
+            updateMaterialAlphaMode(entityId: node.entityID, mode: .blend)
+            translateTo(entityId: node.entityID, position: SIMD3<Float>(0, -100, 0))
+            ghostEntities.append(node.entityID)
+        }
+    }
+
+    /// Places the preview frame at `position` (floor point) facing `facing`.
+    /// Callable from the game thread every frame.
+    public func moveGoalGhost(to position: SIMD3<Float>, facing: SIMD3<Float>) {
+        guard ghostEntities.count == 3 else { return }
+        let forward = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
+        let yaw = atan2f(forward.x, forward.z)
+        let orientation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
+        let right = orientation.act(SIMD3<Float>(1, 0, 0))
+        let halfWidth = Self.goalWidth * 0.5
+
+        let placements = [
+            position - right * halfWidth + SIMD3<Float>(0, Self.goalHeight * 0.5, 0),
+            position + right * halfWidth + SIMD3<Float>(0, Self.goalHeight * 0.5, 0),
+            position + SIMD3<Float>(0, Self.goalHeight + Self.postRadius, 0),
+        ]
+        for (entity, target) in zip(ghostEntities, placements) {
+            translateTo(entityId: entity, position: target)
+            rotateTo(entityId: entity, rotation: orientation)
+        }
+    }
+
+    public func removeGoalGhost() {
+        for entity in ghostEntities {
+            destroyEntity(entityId: entity)
+        }
+        ghostEntities.removeAll()
     }
 
     // MARK: - Goal
@@ -322,6 +373,7 @@ public final class CoolBallScene: @unchecked Sendable {
         rightHandEntity = .invalid
         footEntity = .invalid
         sunEntity = .invalid
+        removeGoalGhost()
         clearGoal()
     }
 }

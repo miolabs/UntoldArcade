@@ -23,7 +23,21 @@ public final class CoolBallGame: @unchecked Sendable {
     public let audio = CoolBallAudio()
     private let backendStore = CoolBallLockedBox<CoolBallPhysicsBackend?>(nil)
 
+    /// The demo starts by placing the goal: a translucent ghost frame
+    /// follows the player's gaze along the floor until they confirm (pinch,
+    /// or the control window's button); only then do the real goal, net and
+    /// ball exist.
+    public enum Phase: Sendable {
+        case placingGoal
+        case playing
+    }
+
     private let lock = NSLock()
+    private var phase = Phase.placingGoal
+    private var placePending = false
+    private var ghostTarget = SIMD3<Float>(0, CoolBallGame.floorY, -2.6)
+    private var ghostFacing = SIMD3<Float>(0, 0, 1)
+    private var autoPlaceDeadline: TimeInterval?
     private var started = false
     private var score = 0
     private var goalSubscription: EventSubscription?
@@ -95,14 +109,68 @@ public final class CoolBallGame: @unchecked Sendable {
         }
         scene.createBodyProxies()
         scene.addLighting()
-        scene.buildGoal(
-            at: SIMD3<Float>(0.0, Self.floorY, -2.6),
-            facing: SIMD3<Float>(0.0, 0.0, 1.0)
+        // Placement first: the goal frame appears as a gaze-following ghost;
+        // the real goal, net and ball are built on confirmation.
+        scene.buildGoalGhost()
+        scene.moveGoalGhost(
+            to: lock.withLock { ghostTarget },
+            facing: lock.withLock { ghostFacing }
         )
-        scene.spawnBall(at: ballSpawnPosition)
         subscribeEvents()
-        // The goal now exists: include its net catch plane.
+
+        // Test hook: `-autoPlaceGoal` confirms placement after a short beat,
+        // so automated simulator runs reach the playing phase unattended.
+        if ProcessInfo.processInfo.arguments.contains("-autoPlaceGoal") {
+            lock.withLock {
+                autoPlaceDeadline = ProcessInfo.processInfo.systemUptime + 1.5
+            }
+        }
+    }
+
+    public var currentPhase: Phase {
+        lock.withLock { phase }
+    }
+
+    /// Confirms the current ghost position (control-window button, pinch, or
+    /// the `-autoPlaceGoal` test hook).
+    public func requestGoalPlacement() {
+        lock.withLock {
+            guard phase == .placingGoal else { return }
+            placePending = true
+        }
+    }
+
+    /// Tears the goal down and returns to placement (control-window button).
+    public func requestGoalMove() {
+        let shouldReset = lock.withLock { () -> Bool in
+            guard phase == .playing else { return false }
+            phase = .placingGoal
+            return true
+        }
+        guard shouldReset else { return }
+        Task { @MainActor in
+            self.scene.clear()
+            self.scene.createBodyProxies()
+            self.scene.addLighting()
+            self.scene.buildGoalGhost()
+            self.pushWorldPlanes()
+        }
+    }
+
+    /// Builds the real pitch at the confirmed spot. Main actor: node creation.
+    @MainActor
+    private func buildPitch(at position: SIMD3<Float>, facing: SIMD3<Float>) {
+        scene.removeGoalGhost()
+        scene.buildGoal(at: position, facing: facing)
+
+        // Ball drops in between the player and the goal.
+        let toPlayer = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
+        let spawn = position + toPlayer * 1.2 + SIMD3<Float>(0, 1.0, 0)
+        ballSpawnPosition = spawn
+        scene.spawnBall(at: spawn)
         pushWorldPlanes()
+        lock.withLock { phase = .playing }
+        coolBallLog.log("goal placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
     }
 
     /// Rebuilds the backend's plane set: detected real surfaces (or the
@@ -198,6 +266,11 @@ public final class CoolBallGame: @unchecked Sendable {
     // MARK: - Per-frame update (XR render thread)
 
     public func update(deltaTime: Float) {
+        if currentPhase == .placingGoal {
+            updatePlacement(now: ProcessInfo.processInfo.systemUptime)
+            return
+        }
+
         #if os(visionOS)
         let now = ProcessInfo.processInfo.systemUptime
         updateHands(now: now)
@@ -223,6 +296,75 @@ public final class CoolBallGame: @unchecked Sendable {
         )
 
         respawnIfLost()
+    }
+
+    /// Placement phase: the ghost follows the gaze ray to the floor;
+    /// a pinch (either hand), the window button, or the test hook confirms.
+    private func updatePlacement(now: TimeInterval) {
+        var target = lock.withLock { ghostTarget }
+        var facing = lock.withLock { ghostFacing }
+
+        #if os(visionOS)
+        if let head = session.headTransform() {
+            let headPosition = SIMD3<Float>(
+                head.columns.3.x, head.columns.3.y, head.columns.3.z
+            )
+            // ARKit device anchor looks along -Z.
+            let forward = -SIMD3<Float>(
+                head.columns.2.x, head.columns.2.y, head.columns.2.z
+            )
+            // Intersect the gaze with the floor plane; clamp the reach so
+            // looking at the horizon parks the goal at a playable distance.
+            let horizontal = SIMD3<Float>(forward.x, 0, forward.z)
+            let horizontalLength = simd_length(horizontal)
+            if horizontalLength > 0.05 {
+                let direction = horizontal / horizontalLength
+                var distance: Float = 3.0
+                if forward.y < -0.05 {
+                    let drop = headPosition.y - Self.floorY
+                    distance = drop * horizontalLength / -forward.y
+                }
+                distance = min(max(distance, 1.5), 4.5)
+                target = SIMD3<Float>(
+                    headPosition.x + direction.x * distance,
+                    Self.floorY,
+                    headPosition.z + direction.z * distance
+                )
+                facing = -direction // goal mouth faces the player
+            }
+
+            // Pinch to confirm.
+            for side in CoolBallHandSide.allCases {
+                if let pose = session.predictedHandPose(side, at: now),
+                   pose.isTracked, pose.pinchDistance < pinchGrabDistance
+                {
+                    lock.withLock { placePending = true }
+                }
+            }
+        }
+        #endif
+
+        lock.withLock {
+            ghostTarget = target
+            ghostFacing = facing
+        }
+        scene.moveGoalGhost(to: target, facing: facing)
+
+        let shouldPlace = lock.withLock { () -> Bool in
+            if let deadline = autoPlaceDeadline, now >= deadline {
+                autoPlaceDeadline = nil
+                placePending = true
+            }
+            guard placePending, phase == .placingGoal else { return false }
+            placePending = false
+            phase = .playing // reserved; buildPitch re-affirms after build
+            return true
+        }
+        if shouldPlace {
+            Task { @MainActor in
+                self.buildPitch(at: target, facing: facing)
+            }
+        }
     }
 
     #if os(visionOS)

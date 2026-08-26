@@ -32,6 +32,12 @@ final class BallXRGame: @unchecked Sendable {
     func update(deltaTime: Float) {
         let holder = BallXRHolder.shared
 
+        if holder.takePlaceGoalRequest() {
+            game.requestGoalPlacement()
+        }
+        if holder.takeMoveGoalRequest() {
+            game.requestGoalMove()
+        }
         if holder.takeResetBallRequest() {
             game.scene.respawnBall(at: game.ballSpawnPosition)
         }
@@ -44,7 +50,8 @@ final class BallXRGame: @unchecked Sendable {
         holder.setDiagnostics(
             score: game.currentScore,
             planes: game.worldPlaneCount,
-            impulse: game.lastImpulse
+            impulse: game.lastImpulse,
+            placing: game.currentPhase == .placingGoal
         )
     }
 

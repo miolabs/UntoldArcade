@@ -35,14 +35,18 @@ final class BallXRHolder: @unchecked Sendable {
     private var impulseStorage: Float = 0
     private var resetBallPending = false
     private var resetScorePending = false
+    private var placeGoalPending = false
+    private var moveGoalPending = false
+    private var placingStorage = true
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(score: Int, planes: Int, impulse: Float) {
+    func setDiagnostics(score: Int, planes: Int, impulse: Float, placing: Bool) {
         lock.withLock {
             scoreStorage = score
             planeStorage = planes
             impulseStorage = impulse
+            placingStorage = placing
         }
     }
 
@@ -57,11 +61,30 @@ final class BallXRHolder: @unchecked Sendable {
     // MARK: Control-window API
 
     var score: Int { lock.withLock { scoreStorage } }
+    var isPlacingGoal: Bool { lock.withLock { placingStorage } }
     var planeCount: Int { lock.withLock { planeStorage } }
     var lastImpulse: Float { lock.withLock { impulseStorage } }
 
     func requestResetBall() { lock.withLock { resetBallPending = true } }
     func requestResetScore() { lock.withLock { resetScorePending = true } }
+    func requestPlaceGoal() { lock.withLock { placeGoalPending = true } }
+    func requestMoveGoal() { lock.withLock { moveGoalPending = true } }
+
+    func takePlaceGoalRequest() -> Bool {
+        lock.withLock {
+            let pending = placeGoalPending
+            placeGoalPending = false
+            return pending
+        }
+    }
+
+    func takeMoveGoalRequest() -> Bool {
+        lock.withLock {
+            let pending = moveGoalPending
+            moveGoalPending = false
+            return pending
+        }
+    }
 
     func takeResetBallRequest() -> Bool {
         lock.withLock {
@@ -99,7 +122,7 @@ struct CoolBallVisionOSXRApp: App {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Ball ⚽️").font(.extraLargeTitle).fontWeight(.bold)
-                    Text("Kick the ball with your foot — step into it or swing your leg through it.\nPinch near it to pick it up, move and let go to throw.\nIt bounces off your real floor, walls and furniture.\nPut it between the posts to score!")
+                    Text("First, place your goal: look where you want it — the ghost frame follows your gaze —\nand pinch (or press Place goal here). Then kick the ball with your foot,\nor pinch near it to pick it up and throw. Put it between the posts to score!")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Button {
@@ -115,6 +138,18 @@ struct CoolBallVisionOSXRApp: App {
                     .buttonStyle(.borderedProminent).controlSize(.large)
 
                     Divider()
+
+                    HStack(spacing: 16) {
+                        Button("Place goal here") {
+                            BallXRHolder.shared.requestPlaceGoal()
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Move goal") {
+                            BallXRHolder.shared.requestMoveGoal()
+                        }
+                        .buttonStyle(.bordered)
+                    }
 
                     HStack(spacing: 16) {
                         Button("Reset ball") {
@@ -133,7 +168,7 @@ struct CoolBallVisionOSXRApp: App {
                     TimelineView(.periodic(from: .now, by: 0.25)) { _ in
                         let holder = BallXRHolder.shared
                         VStack(spacing: 8) {
-                            Text("Goals: \(holder.score)")
+                            Text(holder.isPlacingGoal ? "Placing the goal…" : "Goals: \(holder.score)")
                                 .font(.title2.monospacedDigit()).fontWeight(.semibold)
                             Text(
                                 "Space \(holder.spaceOpen ? "OPEN" : "closed")"
