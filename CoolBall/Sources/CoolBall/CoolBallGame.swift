@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import os
 import simd
 import UntoldEngine
 
@@ -64,6 +65,9 @@ public final class CoolBallGame: @unchecked Sendable {
     public let session = CoolBallSpatialSession()
     #endif
 
+    private let detectedPlanes = CoolBallLockedBox<[CoolBallWorldPlane]>([])
+    private var heartbeatAccumulator: Float = 0
+
     public init() {}
 
     // MARK: - Lifecycle
@@ -73,9 +77,7 @@ public final class CoolBallGame: @unchecked Sendable {
     public func installPhysics() -> Bool {
         guard let backend = registerCoolBallPhysics() else { return false }
         backendStore.value = backend
-        // Until real planes stream in (and always in the simulator), a flat
-        // floor at the world origin keeps the ball playable.
-        backend.setWorldPlanes([.infiniteFloor(y: Self.floorY)])
+        pushWorldPlanes()
         return true
     }
 
@@ -83,6 +85,12 @@ public final class CoolBallGame: @unchecked Sendable {
     /// the immersive-space setup closure, before the render loop starts.
     @MainActor
     public func setupScene() {
+        // Engine texture lookups resolve by name through the asset search
+        // paths — point them at this package's bundled resources before any
+        // textured entity (ball, net) is built.
+        if let resourceRoot = Bundle.module.resourceURL {
+            assetBasePath = resourceRoot
+        }
         scene.createBodyProxies()
         scene.addLighting()
         scene.buildGoal(
@@ -91,6 +99,23 @@ public final class CoolBallGame: @unchecked Sendable {
         )
         scene.spawnBall(at: ballSpawnPosition)
         subscribeEvents()
+        // The goal now exists: include its net catch plane.
+        pushWorldPlanes()
+    }
+
+    /// Rebuilds the backend's plane set: detected real surfaces (or the
+    /// fallback floor) plus the goal net's backstop.
+    private func pushWorldPlanes() {
+        guard let backend = backendStore.value else { return }
+        let detected = detectedPlanes.value
+        var planes = detected.isEmpty ? [CoolBallWorldPlane.infiniteFloor(y: Self.floorY)] : detected
+        if let catchPlane = scene.goalCatchPlane {
+            planes.append(catchPlane)
+        }
+        if let skirtPlane = scene.goalSkirtPlane {
+            planes.append(skirtPlane)
+        }
+        backend.setWorldPlanes(planes)
     }
 
     public func start() {
@@ -100,9 +125,10 @@ public final class CoolBallGame: @unchecked Sendable {
         }
         #if os(visionOS)
         session.onPlanesChanged = { [weak self] planes in
-            guard let self, let backend = self.backendStore.value else { return }
+            guard let self else { return }
             // Real surfaces replace the fallback floor as soon as they exist.
-            backend.setWorldPlanes(planes.isEmpty ? [.infiniteFloor(y: Self.floorY)] : planes)
+            self.detectedPlanes.value = planes
+            self.pushWorldPlanes()
         }
         session.start()
         #endif
@@ -156,12 +182,31 @@ public final class CoolBallGame: @unchecked Sendable {
 
     // MARK: - Per-frame update (XR render thread)
 
-    public func update(deltaTime _: Float) {
+    public func update(deltaTime: Float) {
         #if os(visionOS)
         let now = ProcessInfo.processInfo.systemUptime
         updateHands(now: now)
         updateFoot(now: now)
         #endif
+
+        // TEMP diagnostics: ball state heartbeat (os_log reaches `log stream`).
+        heartbeatAccumulator += deltaTime
+        if heartbeatAccumulator > 1.0 {
+            heartbeatAccumulator = 0
+            if let state = backendStore.value?.bodyState(for: scene.ballEntity) {
+                coolBallLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3))")
+            }
+        }
+
+        // The net cloth follows the simulated ball (or the held one).
+        let ballCenter = backendStore.value?.bodyState(for: scene.ballEntity)?.position
+            ?? scene.ballPosition()
+        scene.net.step(
+            deltaTime: deltaTime,
+            ballCenter: ballCenter,
+            ballRadius: CoolBallScene.ballRadius
+        )
+
         respawnIfLost()
     }
 
@@ -315,3 +360,6 @@ final class CoolBallLockedBox<Value>: @unchecked Sendable {
         }
     }
 }
+
+
+let coolBallLog = Logger(subsystem: "com.miolabs.coolball", category: "game")

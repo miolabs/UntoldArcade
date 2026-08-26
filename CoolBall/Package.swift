@@ -23,6 +23,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/football_baseColor.png"),
+                .copy("Resources/net_baseColor.png"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

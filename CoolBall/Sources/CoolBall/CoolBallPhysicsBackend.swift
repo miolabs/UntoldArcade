@@ -28,6 +28,9 @@ public struct CoolBallWorldPlane: Sendable {
     public var tangentV: SIMD3<Float>
     public var extentU: Float
     public var extentV: Float
+    /// Multiplies the ball's restitution on this surface — a goal net
+    /// (~0.1) kills the bounce and catches the ball.
+    public var restitutionScale: Float
 
     public init(
         id: UUID,
@@ -36,7 +39,8 @@ public struct CoolBallWorldPlane: Sendable {
         tangentU: SIMD3<Float>,
         tangentV: SIMD3<Float>,
         extentU: Float,
-        extentV: Float
+        extentV: Float,
+        restitutionScale: Float = 1.0
     ) {
         self.id = id
         self.center = center
@@ -45,6 +49,7 @@ public struct CoolBallWorldPlane: Sendable {
         self.tangentV = tangentV
         self.extentU = extentU
         self.extentV = extentV
+        self.restitutionScale = restitutionScale
     }
 
     /// An unbounded horizontal floor — the simulator fallback when no real
@@ -81,6 +86,9 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
         var kinematicVelocity: SIMD3<Float> = .zero
         /// Kinematic bodies: the target position seen last substep.
         var previousTarget: SIMD3<Float>?
+        /// Dynamic bodies: gripped by the net pocket — integration paused
+        /// until something (a hand, the boot) touches it again.
+        var isAsleep = false
         var radius: Float {
             if case let .sphere(radius) = descriptor.collider.shape { return radius }
             return 0.1
@@ -215,16 +223,44 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
             let restitution = body.descriptor.collider.restitution
             let friction = body.descriptor.collider.friction
 
+            if body.isAsleep {
+                // A sleeping ball still reacts to the hands and the boot —
+                // any such contact wakes it.
+                for (handEntity, hand) in kinematicBodies {
+                    resolveSphereVsKinematic(
+                        &body, entity: entity,
+                        hand: hand, handEntity: handEntity,
+                        restitution: restitution
+                    )
+                }
+                if simd_length(body.linearVelocity) > 0.01 {
+                    body.isAsleep = false
+                }
+                dynamicBodies[entity] = body
+                continue
+            }
+
             body.linearVelocity += gravity * body.descriptor.gravityScale * deltaTime
             body.position += body.linearVelocity * deltaTime
 
-            // Real-world planes.
+            // Real-world planes. Two simultaneous net-surface contacts at
+            // low speed mean the pocket has gripped the ball: hard rest,
+            // instead of letting rigid-wedge push-outs pump jitter forever.
+            var netContacts = 0
             for plane in worldPlanes {
-                resolveSphereVsPlane(
+                let contacted = resolveSphereVsPlane(
                     &body, entity: entity, plane: plane,
                     restitution: restitution, friction: friction,
                     deltaTime: deltaTime
                 )
+                if contacted, plane.restitutionScale < 0.99 {
+                    netContacts += 1
+                }
+            }
+            if netContacts >= 2, simd_length(body.linearVelocity) < 1.0 {
+                body.linearVelocity = .zero
+                body.angularVelocity = .zero
+                body.isAsleep = true
             }
 
             // Static boxes (goal posts, crossbar, placed props).
@@ -303,6 +339,7 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
 
     // MARK: - Collision resolution (lock held)
 
+    @discardableResult
     private func resolveSphereVsPlane(
         _ body: inout Body,
         entity: EntityID,
@@ -310,11 +347,11 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
         restitution: Float,
         friction: Float,
         deltaTime: Float
-    ) {
+    ) -> Bool {
         let toCenter = body.position - plane.center
         let signedDistance = simd_dot(toCenter, plane.normal)
         // Two-sided: walls can be hit from either face.
-        guard abs(signedDistance) < body.radius else { return }
+        guard abs(signedDistance) < body.radius else { return false }
         let normal = signedDistance >= 0 ? plane.normal : -plane.normal
         let distance = abs(signedDistance)
 
@@ -324,13 +361,13 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
             let u = abs(simd_dot(toCenter, plane.tangentU))
             let v = abs(simd_dot(toCenter, plane.tangentV))
             guard u <= plane.extentU + body.radius, v <= plane.extentV + body.radius else {
-                return
+                return false
             }
         }
 
         let approaching = simd_dot(body.linearVelocity, normal)
         body.position += normal * (body.radius - distance)
-        guard approaching < 0 else { return }
+        guard approaching < 0 else { return true }
 
         let normalSpeed = -approaching
         var normalVelocity = normal * approaching
@@ -338,11 +375,18 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
 
         // Below resting speed the bounce dies and the ball rolls.
         normalVelocity = normalSpeed > restingSpeed
-            ? -normalVelocity * restitution
+            ? -normalVelocity * restitution * plane.restitutionScale
             : .zero
         // Rolling friction, scaled by dt so behavior is step-rate independent.
         tangentVelocity *= max(0.0, 1.0 - friction * 2.0 * deltaTime)
         body.linearVelocity = normalVelocity + tangentVelocity
+
+        // Net-like surfaces (restitutionScale < 1) grip: strong extra drag
+        // kills the jitter a rigid wedge of planes would otherwise pump into
+        // the ball, so it settles hammocked in the pocket.
+        if plane.restitutionScale < 0.99 {
+            body.linearVelocity *= max(0.0, 1.0 - 6.0 * deltaTime)
+        }
 
         // Rolling spin from tangential motion: ω = (n × v) / r.
         let tangentSpeed = simd_length(tangentVelocity)
@@ -359,6 +403,7 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
                 impulse: normalSpeed * body.descriptor.mass
             )
         }
+        return true
     }
 
     private func resolveSphereVsStatic(

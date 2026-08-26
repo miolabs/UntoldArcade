@@ -23,6 +23,10 @@ public final class CoolBallScene: @unchecked Sendable {
     public private(set) var footEntity: EntityID = .invalid
     public private(set) var sunEntity: EntityID = .invalid
     private var goalPartEntities: [EntityID] = []
+    /// The XPBD goal net (visual cloth + the backend's catch plane).
+    public let net = CoolBallNet()
+    public private(set) var goalCatchPlane: CoolBallWorldPlane?
+    public private(set) var goalSkirtPlane: CoolBallWorldPlane?
 
     /// FIFA size-5 ball: radius ~0.11 m, mass ~0.43 kg.
     public static let ballRadius: Float = 0.11
@@ -221,6 +225,27 @@ public final class CoolBallScene: @unchecked Sendable {
                 + SIMD3<Float>(0, Self.goalHeight * 0.5, 0)
         )
         rotateTo(entityId: goalTriggerEntity, rotation: orientation)
+        // The net: XPBD cloth hanging from the crossbar, staked behind the
+        // goal, plus a low-restitution backstop plane so the ball is caught.
+        net.build(
+            goalCenter: position,
+            forward: forward,
+            width: Self.goalWidth,
+            height: Self.goalHeight,
+            floorY: position.y
+        )
+        goalCatchPlane = CoolBallNet.catchPlane(
+            goalCenter: position,
+            forward: forward,
+            width: Self.goalWidth,
+            height: Self.goalHeight
+        )
+        goalSkirtPlane = CoolBallNet.groundSkirtPlane(
+            goalCenter: position,
+            forward: forward,
+            width: Self.goalWidth
+        )
+
         registerComponent(entityId: goalTriggerEntity, componentType: ColliderComponent.self)
         registerComponent(entityId: goalTriggerEntity, componentType: RigidBodyComponent.self)
         if let collider = scene.get(component: ColliderComponent.self, for: goalTriggerEntity) {
@@ -243,6 +268,9 @@ public final class CoolBallScene: @unchecked Sendable {
         }
         goalPartEntities.removeAll()
         goalTriggerEntity = .invalid
+        net.destroy()
+        goalCatchPlane = nil
+        goalSkirtPlane = nil
     }
 
     // MARK: - Body proxies
