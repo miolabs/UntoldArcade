@@ -19,6 +19,8 @@ import UntoldEngine
 
 public final class CoolBallGame: @unchecked Sendable {
     public let scene = CoolBallScene()
+    /// Synthesized kick/goal sounds (no asset files).
+    public let audio = CoolBallAudio()
     private let backendStore = CoolBallLockedBox<CoolBallPhysicsBackend?>(nil)
 
     private let lock = NSLock()
@@ -123,6 +125,7 @@ public final class CoolBallGame: @unchecked Sendable {
             guard !started else { return }
             started = true
         }
+        audio.start()
         #if os(visionOS)
         session.onPlanesChanged = { [weak self] planes in
             guard let self else { return }
@@ -136,6 +139,7 @@ public final class CoolBallGame: @unchecked Sendable {
 
     public func shutdown() {
         lock.withLock { started = false }
+        audio.stop()
         #if os(visionOS)
         session.stop()
         #endif
@@ -172,11 +176,22 @@ public final class CoolBallGame: @unchecked Sendable {
                 self.score += 1
                 return self.score
             }
+            self.audio.playGoal()
             print("CoolBall: ⚽️ GOAL! score \(total)")
         }
         contactSubscription = PhysicsEvents.shared.onContact { [weak self] event in
             guard let self else { return }
             self.lock.withLock { self.lastKickImpulse = event.impulse }
+
+            // The thump. A kick (boot or hand contact) sounds at full
+            // strength; bounces off the world are softer. Impulse for a firm
+            // kick is ~1-2 N·s; a dying bounce ~0.05.
+            let other = event.entityA == self.scene.ballEntity ? event.entityB : event.entityA
+            let isBodyContact = other == self.scene.footEntity
+                || other == self.scene.leftHandEntity
+                || other == self.scene.rightHandEntity
+            let scale: Float = isBodyContact ? 1.0 : 0.45
+            self.audio.playKick(intensity: min(event.impulse / 1.2, 1.0) * scale)
         }
     }
 
