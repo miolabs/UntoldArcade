@@ -43,10 +43,22 @@ public final class CoolBallGame: @unchecked Sendable {
     /// How far ahead of your motion the boot leads — approximates the swing
     /// leg being out in front during a step or kick.
     private let footLead: Float = 0.25
-    /// Ball spawns on the floor for kicking (pick it up to throw instead).
-    public var ballSpawnPosition = SIMD3<Float>(0.0, CoolBallScene.ballRadius, -0.8)
+    /// Floor height in the world frame. On device the ARKit world origin sits
+    /// on the floor beneath the user, so 0 is right. The SIMULATOR has no
+    /// floor calibration — its origin is at the head — so the pitch drops to
+    /// a plausible standing-eye offset below it.
+    #if targetEnvironment(simulator)
+    public static let floorY: Float = -1.4
+    #else
+    public static let floorY: Float = 0.0
+    #endif
+    /// Ball spawns a meter up, drops in and settles on the floor — visibly in
+    /// front of the player (and inside the simulator's fixed view).
+    public var ballSpawnPosition = SIMD3<Float>(
+        0.0, CoolBallGame.floorY + 1.0, -2.0
+    )
     /// Ball below this height is considered lost and respawns.
-    public var respawnFloorY: Float = -3.0
+    public var respawnFloorY: Float = CoolBallGame.floorY - 3.0
 
     #if os(visionOS)
     public let session = CoolBallSpatialSession()
@@ -63,7 +75,7 @@ public final class CoolBallGame: @unchecked Sendable {
         backendStore.value = backend
         // Until real planes stream in (and always in the simulator), a flat
         // floor at the world origin keeps the ball playable.
-        backend.setWorldPlanes([.infiniteFloor()])
+        backend.setWorldPlanes([.infiniteFloor(y: Self.floorY)])
         return true
     }
 
@@ -72,8 +84,9 @@ public final class CoolBallGame: @unchecked Sendable {
     @MainActor
     public func setupScene() {
         scene.createBodyProxies()
+        scene.addLighting()
         scene.buildGoal(
-            at: SIMD3<Float>(0.0, 0.0, -2.2),
+            at: SIMD3<Float>(0.0, Self.floorY, -2.6),
             facing: SIMD3<Float>(0.0, 0.0, 1.0)
         )
         scene.spawnBall(at: ballSpawnPosition)
@@ -89,7 +102,7 @@ public final class CoolBallGame: @unchecked Sendable {
         session.onPlanesChanged = { [weak self] planes in
             guard let self, let backend = self.backendStore.value else { return }
             // Real surfaces replace the fallback floor as soon as they exist.
-            backend.setWorldPlanes(planes.isEmpty ? [.infiniteFloor()] : planes)
+            backend.setWorldPlanes(planes.isEmpty ? [.infiniteFloor(y: Self.floorY)] : planes)
         }
         session.start()
         #endif
@@ -182,7 +195,7 @@ public final class CoolBallGame: @unchecked Sendable {
 
         let footPosition = SIMD3<Float>(
             headPosition.x + smoothedBodyVelocity.x * footLead,
-            CoolBallScene.footRadius * 0.9,
+            Self.floorY + CoolBallScene.footRadius * 0.9,
             headPosition.z + smoothedBodyVelocity.z * footLead
         )
         scene.moveProxy(scene.footEntity, to: footPosition)

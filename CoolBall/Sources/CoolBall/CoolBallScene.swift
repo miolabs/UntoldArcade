@@ -21,6 +21,7 @@ public final class CoolBallScene: @unchecked Sendable {
     public private(set) var leftHandEntity: EntityID = .invalid
     public private(set) var rightHandEntity: EntityID = .invalid
     public private(set) var footEntity: EntityID = .invalid
+    public private(set) var sunEntity: EntityID = .invalid
     private var goalPartEntities: [EntityID] = []
 
     /// FIFA size-5 ball: radius ~0.11 m, mass ~0.43 kg.
@@ -101,6 +102,20 @@ public final class CoolBallScene: @unchecked Sendable {
 
     public func ballPosition() -> SIMD3<Float>? {
         scene.get(component: LocalTransformComponent.self, for: ballEntity)?.position
+    }
+
+    // MARK: - Lighting
+
+    /// A sun so the ball and goal shade like solid objects instead of flat
+    /// ambient blobs.
+    @MainActor public func addLighting() {
+        guard sunEntity == .invalid else { return }
+        let sun = DirectionalLightNode(name: "CoolBall.sun")
+            .color(1.0, 0.98, 0.92)
+            .intensity(2.0)
+            .rotateBy(angle: -50, axis: [.x])
+            .rotateBy(angle: 30, axis: [.y])
+        sunEntity = sun.entityID
     }
 
     // MARK: - Goal
@@ -255,10 +270,12 @@ public final class CoolBallScene: @unchecked Sendable {
         if leftHandEntity != .invalid { destroyEntity(entityId: leftHandEntity) }
         if rightHandEntity != .invalid { destroyEntity(entityId: rightHandEntity) }
         if footEntity != .invalid { destroyEntity(entityId: footEntity) }
+        if sunEntity != .invalid { destroyEntity(entityId: sunEntity) }
         ballEntity = .invalid
         leftHandEntity = .invalid
         rightHandEntity = .invalid
         footEntity = .invalid
+        sunEntity = .invalid
         clearGoal()
     }
 }

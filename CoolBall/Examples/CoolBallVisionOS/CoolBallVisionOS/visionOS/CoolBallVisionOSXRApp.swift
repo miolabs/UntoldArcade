@@ -147,6 +147,18 @@ struct CoolBallVisionOSXRApp: App {
                     }
                 }
                 .padding(48)
+                .onAppear {
+                    // Test hook: `-autoOpenSpace` opens the immersive space
+                    // immediately, so automated simulator runs don't depend
+                    // on synthesizing a gaze-and-pinch on the button.
+                    guard ProcessInfo.processInfo.arguments.contains("-autoOpenSpace"),
+                          !BallXRHolder.shared.spaceOpen else { return }
+                    Task {
+                        let result = await openImmersiveSpace(id: "Pitch")
+                        BallXRHolder.shared.lastOpenResult = String(describing: result)
+                        print("CoolBall: auto-open → \(String(describing: result))")
+                    }
+                }
             }
         }
         .windowStyle(.plain)
