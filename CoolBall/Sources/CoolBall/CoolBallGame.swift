@@ -38,6 +38,11 @@ public final class CoolBallGame: @unchecked Sendable {
     private var ghostTarget = SIMD3<Float>(0, CoolBallGame.floorY, -2.6)
     private var ghostFacing = SIMD3<Float>(0, 0, 1)
     private var autoPlaceDeadline: TimeInterval?
+    /// Placement ignores pinches until this time (the pinch that pressed
+    /// 'Move goal' must not instantly re-place the goal) and requires each
+    /// confirming pinch to be freshly closed.
+    private var placementPinchGraceUntil: TimeInterval = 0
+    private var pinchWasClosed: [CoolBallHandSide: Bool] = [:]
     private var started = false
     private var score = 0
     private var goalSubscription: EventSubscription?
@@ -122,6 +127,10 @@ public final class CoolBallGame: @unchecked Sendable {
         )
         subscribeEvents()
 
+        lock.withLock {
+            placementPinchGraceUntil = ProcessInfo.processInfo.systemUptime + 1.0
+        }
+
         // Test hook: `-autoPlaceGoal` confirms placement after a short beat,
         // so automated simulator runs reach the playing phase unattended.
         if ProcessInfo.processInfo.arguments.contains("-autoPlaceGoal") {
@@ -152,6 +161,10 @@ public final class CoolBallGame: @unchecked Sendable {
             return true
         }
         guard shouldReset else { return }
+        lock.withLock {
+            placementPinchGraceUntil = ProcessInfo.processInfo.systemUptime + 1.0
+            pinchWasClosed.removeAll()
+        }
         Task { @MainActor in
             self.scene.clear()
             self.scene.createBodyProxies()
@@ -184,10 +197,11 @@ public final class CoolBallGame: @unchecked Sendable {
     /// fallback floor) plus the goal net's backstop.
     private func pushWorldPlanes() {
         guard let backend = backendStore.value else { return }
-        let detected = detectedPlanes.value
-        var planes = detected.isEmpty
-            ? [CoolBallWorldPlane.infiniteFloor(y: floorLevel.value)]
-            : detected
+        // Detected surfaces PLUS a safety-net infinite floor at the measured
+        // level: ARKit's floor coverage has holes, and a ball that finds one
+        // must not fall out of the world.
+        var planes = detectedPlanes.value
+        planes.append(.infiniteFloor(y: floorLevel.value))
         if let catchPlane = scene.goalCatchPlane {
             planes.append(catchPlane)
         }
@@ -343,12 +357,27 @@ public final class CoolBallGame: @unchecked Sendable {
                 facing = -direction // goal mouth faces the player
             }
 
-            // Pinch to confirm.
+            // Pinch to confirm — but only a FRESH pinch, after a grace
+            // period: the pinch that pressed 'Move goal' (or opened the
+            // space) must not instantly re-place the goal.
+            let graceOver = lock.withLock { now >= placementPinchGraceUntil }
             for side in CoolBallHandSide.allCases {
-                if let pose = session.predictedHandPose(side, at: now),
-                   pose.isTracked, pose.pinchDistance < pinchGrabDistance
-                {
+                guard let pose = session.predictedHandPose(side, at: now),
+                      pose.isTracked
+                else {
+                    lock.withLock { pinchWasClosed[side] = nil }
+                    continue
+                }
+                let closed = pose.pinchDistance < pinchGrabDistance
+                let open = pose.pinchDistance > pinchReleaseDistance
+                let previouslyClosed = lock.withLock { pinchWasClosed[side] }
+                if closed, previouslyClosed == false, graceOver {
                     lock.withLock { placePending = true }
+                }
+                if closed {
+                    lock.withLock { pinchWasClosed[side] = true }
+                } else if open {
+                    lock.withLock { pinchWasClosed[side] = false }
                 }
             }
         }
