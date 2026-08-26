@@ -476,7 +476,8 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
         let approaching = simd_dot(relativeVelocity, contact.normal)
         guard approaching < 0 else { return }
 
-        let bounce = max(restitution, 0.55)
+        // Snappier than a wall bounce: a kick should feel like a strike.
+        let bounce = max(restitution, 0.7)
         let reflected = relativeVelocity - (1.0 + bounce) * approaching * contact.normal
         body.linearVelocity = reflected + hand.kinematicVelocity
 

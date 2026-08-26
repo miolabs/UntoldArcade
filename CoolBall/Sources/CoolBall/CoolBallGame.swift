@@ -74,14 +74,18 @@ public final class CoolBallGame: @unchecked Sendable {
     public var ballSpawnPosition = SIMD3<Float>(
         0.0, CoolBallGame.floorY + 1.0, -2.0
     )
-    /// Ball below this height is considered lost and respawns.
-    public var respawnFloorY: Float = CoolBallGame.floorY - 3.0
+    /// Ball this far below the floor is considered lost and respawns.
+    private var respawnDepth: Float = 3.0
 
     #if os(visionOS)
     public let session = CoolBallSpatialSession()
     #endif
 
     private let detectedPlanes = CoolBallLockedBox<[CoolBallWorldPlane]>([])
+    /// The real floor height, measured from detected upward planes below the
+    /// head (the compile-time constant is only the pre-scan default: on
+    /// device the world origin is NOT reliably on the real floor).
+    private let floorLevel = CoolBallLockedBox<Float>(CoolBallGame.floorY)
     private var heartbeatAccumulator: Float = 0
 
     public init() {}
@@ -161,11 +165,14 @@ public final class CoolBallGame: @unchecked Sendable {
     @MainActor
     private func buildPitch(at position: SIMD3<Float>, facing: SIMD3<Float>) {
         scene.removeGoalGhost()
-        scene.buildGoal(at: position, facing: facing)
+        // Anchor to the measured floor even if the ghost was confirmed
+        // before the scan settled.
+        let grounded = SIMD3<Float>(position.x, floorLevel.value, position.z)
+        scene.buildGoal(at: grounded, facing: facing)
 
         // Ball drops in between the player and the goal.
         let toPlayer = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
-        let spawn = position + toPlayer * 1.2 + SIMD3<Float>(0, 1.0, 0)
+        let spawn = grounded + toPlayer * 1.2 + SIMD3<Float>(0, 1.0, 0)
         ballSpawnPosition = spawn
         scene.spawnBall(at: spawn)
         pushWorldPlanes()
@@ -178,7 +185,9 @@ public final class CoolBallGame: @unchecked Sendable {
     private func pushWorldPlanes() {
         guard let backend = backendStore.value else { return }
         let detected = detectedPlanes.value
-        var planes = detected.isEmpty ? [CoolBallWorldPlane.infiniteFloor(y: Self.floorY)] : detected
+        var planes = detected.isEmpty
+            ? [CoolBallWorldPlane.infiniteFloor(y: floorLevel.value)]
+            : detected
         if let catchPlane = scene.goalCatchPlane {
             planes.append(catchPlane)
         }
@@ -199,6 +208,8 @@ public final class CoolBallGame: @unchecked Sendable {
             guard let self else { return }
             // Real surfaces replace the fallback floor as soon as they exist.
             self.detectedPlanes.value = planes
+            let headY = self.session.headTransform()?.columns.3.y
+            self.updateFloorLevel(planes: planes, headY: headY)
             self.pushWorldPlanes()
         }
         session.start()
@@ -313,21 +324,20 @@ public final class CoolBallGame: @unchecked Sendable {
             let forward = -SIMD3<Float>(
                 head.columns.2.x, head.columns.2.y, head.columns.2.z
             )
-            // Intersect the gaze with the floor plane; clamp the reach so
-            // looking at the horizon parks the goal at a playable distance.
+            // The ghost only follows a gaze that actually points at the
+            // floor — glancing up at the control window (to press its
+            // buttons) must not drag the goal along.
+            let floor = floorLevel.value
             let horizontal = SIMD3<Float>(forward.x, 0, forward.z)
             let horizontalLength = simd_length(horizontal)
-            if horizontalLength > 0.05 {
+            if horizontalLength > 0.05, forward.y < -0.12 {
                 let direction = horizontal / horizontalLength
-                var distance: Float = 3.0
-                if forward.y < -0.05 {
-                    let drop = headPosition.y - Self.floorY
-                    distance = drop * horizontalLength / -forward.y
-                }
+                let drop = headPosition.y - floor
+                var distance = drop * horizontalLength / -forward.y
                 distance = min(max(distance, 1.5), 4.5)
                 target = SIMD3<Float>(
                     headPosition.x + direction.x * distance,
-                    Self.floorY,
+                    floor,
                     headPosition.z + direction.z * distance
                 )
                 facing = -direction // goal mouth faces the player
@@ -368,8 +378,12 @@ public final class CoolBallGame: @unchecked Sendable {
     }
 
     #if os(visionOS)
-    /// Places the boot from head tracking: under the head, at floor level,
-    /// leading ahead of the body's horizontal velocity. The kinematic-target
+    /// Places the boot from head tracking. Legs aren't tracked, so when the
+    /// ball is within kicking range the boot REACHES from under the head
+    /// toward the ball — approximating the extended leg the player actually
+    /// kicks with (the head barely moves during a real kick, which made the
+    /// under-the-head boot feel like no collision at all). Away from the
+    /// ball it trails the body with a velocity lead. The kinematic-target
     /// deltas give the backend the boot's sweep velocity — that is the kick.
     private func updateFoot(now: TimeInterval) {
         guard let head = session.headTransform() else {
@@ -395,11 +409,29 @@ public final class CoolBallGame: @unchecked Sendable {
         previousHeadPosition = headPosition
         previousHeadTime = now
 
-        let footPosition = SIMD3<Float>(
+        let footY = floorLevel.value + CoolBallScene.footRadius * 0.9
+        var footPosition = SIMD3<Float>(
             headPosition.x + smoothedBodyVelocity.x * footLead,
-            Self.floorY + CoolBallScene.footRadius * 0.9,
+            footY,
             headPosition.z + smoothedBodyVelocity.z * footLead
         )
+
+        // Reach assist: with the ball in range, the boot extends toward it
+        // (up to a leg's length), so stepping into or leaning at the ball
+        // connects the way the player expects.
+        if let ball = scene.ballPosition() {
+            let toBall = SIMD3<Float>(ball.x - headPosition.x, 0, ball.z - headPosition.z)
+            let ballDistance = simd_length(toBall)
+            if ballDistance > 0.01, ballDistance < 1.3 {
+                let reach = min(ballDistance, 0.95)
+                let direction = toBall / ballDistance
+                footPosition = SIMD3<Float>(
+                    headPosition.x + direction.x * reach,
+                    footY,
+                    headPosition.z + direction.z * reach
+                )
+            }
+        }
         scene.moveProxy(scene.footEntity, to: footPosition)
     }
     #endif
@@ -482,7 +514,7 @@ public final class CoolBallGame: @unchecked Sendable {
     private func respawnIfLost() {
         guard grabbingSide == nil,
               let position = scene.ballPosition(),
-              position.y < respawnFloorY
+              position.y < floorLevel.value - respawnDepth
         else { return }
         scene.respawnBall(at: ballSpawnPosition)
         print("CoolBall: ball lost below the world — respawned")
@@ -492,6 +524,24 @@ public final class CoolBallGame: @unchecked Sendable {
 
     public var worldPlaneCount: Int {
         backendStore.value?.worldPlaneCount ?? 0
+    }
+
+    /// Current best estimate of the real floor height.
+    public var currentFloorLevel: Float {
+        floorLevel.value
+    }
+
+    /// Updates the floor estimate: the lowest upward-facing detected plane
+    /// in a plausible band below the head.
+    private func updateFloorLevel(planes: [CoolBallWorldPlane], headY: Float?) {
+        let reference = headY ?? 0
+        let candidates = planes.filter { plane in
+            plane.normal.y > 0.85
+                && plane.center.y < reference - 0.5
+                && plane.center.y > reference - 2.8
+        }
+        guard let lowest = candidates.min(by: { $0.center.y < $1.center.y }) else { return }
+        floorLevel.value = lowest.center.y
     }
 }
 

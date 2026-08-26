@@ -207,8 +207,12 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
         onPlanesChanged?(planes)
     }
 
-    /// visionOS plane extents live in the extent transform's X-Y plane with
-    /// the normal along +Z.
+    /// ARKit planes lie in their anchor's X-Z plane with the normal along
+    /// +Y (device-verified: the previous X-Y/+Z reading left every surface
+    /// misoriented, and the ball rested on phantom geometry mid-air). The
+    /// extent transform only rotates within the plane, so the tangents come
+    /// from the composed transform's X and Z columns, width along X and
+    /// height along Z.
     private static func makePlane(from anchor: PlaneAnchor) -> CoolBallWorldPlane {
         let extent = anchor.geometry.extent
         let transform = anchor.originFromAnchorTransform * extent.anchorFromExtentTransform
@@ -218,10 +222,10 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
         let tangentU = SIMD3<Float>(
             transform.columns.0.x, transform.columns.0.y, transform.columns.0.z
         )
-        let tangentV = SIMD3<Float>(
+        let normal = SIMD3<Float>(
             transform.columns.1.x, transform.columns.1.y, transform.columns.1.z
         )
-        let normal = SIMD3<Float>(
+        let tangentV = SIMD3<Float>(
             transform.columns.2.x, transform.columns.2.y, transform.columns.2.z
         )
         return CoolBallWorldPlane(
