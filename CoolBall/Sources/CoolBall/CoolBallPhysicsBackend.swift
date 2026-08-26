@@ -121,6 +121,10 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
 
     /// Ball speed below which a floor contact stops bouncing and starts rolling.
     private let restingSpeed: Float = 0.35
+    /// Sanity caps: hand-tracking glitches must not teleport-launch the ball
+    /// (a fast enough ball tunnels straight through the net planes).
+    private let maxKinematicSpeed: Float = 6.0
+    private let maxDynamicSpeed: Float = 10.0
 
     public init() {}
 
@@ -138,6 +142,25 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return worldPlanes.count
+    }
+
+    /// Applies a velocity change to an awake dynamic body — the cloth's
+    /// reaction on the ball. Sleeping bodies (hammocked in the net) ignore
+    /// small nudges so the pocket stays at rest.
+    public func nudgeBody(entity: EntityID, velocityDelta: SIMD3<Float>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var body = dynamicBodies[entity] else { return }
+        if body.isAsleep {
+            guard simd_length(velocityDelta) > 1.0 else { return }
+            body.isAsleep = false
+        }
+        body.linearVelocity += velocityDelta
+        let speed = simd_length(body.linearVelocity)
+        if speed > maxDynamicSpeed {
+            body.linearVelocity *= maxDynamicSpeed / speed
+        }
+        dynamicBodies[entity] = body
     }
 
     /// Current simulated state of a dynamic body (read-back for game logic,
@@ -211,7 +234,12 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
         // seen last substep.
         for (entity, var body) in kinematicBodies {
             if let previous = body.previousTarget {
-                body.kinematicVelocity = (body.position - previous) / deltaTime
+                var velocity = (body.position - previous) / deltaTime
+                let speed = simd_length(velocity)
+                if speed > maxKinematicSpeed {
+                    velocity *= maxKinematicSpeed / speed
+                }
+                body.kinematicVelocity = velocity
             }
             body.previousTarget = body.position
             kinematicBodies[entity] = body
@@ -241,6 +269,10 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
             }
 
             body.linearVelocity += gravity * body.descriptor.gravityScale * deltaTime
+            let speed = simd_length(body.linearVelocity)
+            if speed > maxDynamicSpeed {
+                body.linearVelocity *= maxDynamicSpeed / speed
+            }
             body.position += body.linearVelocity * deltaTime
 
             // Real-world planes. Two simultaneous net-surface contacts at

@@ -62,6 +62,11 @@ public final class CoolBallGame: @unchecked Sendable {
     private var previousHeadPosition: SIMD3<Float>?
     private var previousHeadTime: TimeInterval = 0
     private var smoothedBodyVelocity = SIMD3<Float>.zero
+    /// Where the BODY is, not where the head glances: a slow-following
+    /// anchor so head turns and leans don't swing the boot through the ball
+    /// ("it feels like kicking with my head").
+    private var smoothedBodyPosition: SIMD3<Float>?
+    private var lastFootPosition: SIMD3<Float>?
     /// How far ahead of your motion the boot leads — approximates the swing
     /// leg being out in front during a step or kick.
     private let footLead: Float = 0.25
@@ -311,7 +316,10 @@ public final class CoolBallGame: @unchecked Sendable {
             }
         }
 
-        // The net cloth follows the simulated ball (or the held one).
+        // The net cloth follows the simulated ball (or the held one) — and
+        // pushes back: the summed particle displacement the ball forced on
+        // the cloth comes back as a decelerating reaction, which is what
+        // makes shots die INTO the net instead of ghosting through it.
         let ballCenter = backendStore.value?.bodyState(for: scene.ballEntity)?.position
             ?? scene.ballPosition()
         scene.net.step(
@@ -319,6 +327,16 @@ public final class CoolBallGame: @unchecked Sendable {
             ballCenter: ballCenter,
             ballRadius: CoolBallScene.ballRadius
         )
+        if let push = scene.net.solver?.lastBallPush, simd_length(push) > 1e-4 {
+            var reaction = push * 3.0
+            let magnitude = simd_length(reaction)
+            if magnitude > 3.0 {
+                reaction *= 3.0 / magnitude
+            }
+            backendStore.value?.nudgeBody(
+                entity: scene.ballEntity, velocityDelta: reaction
+            )
+        }
 
         respawnIfLost()
     }
@@ -424,9 +442,11 @@ public final class CoolBallGame: @unchecked Sendable {
             head.columns.3.x, head.columns.3.y, head.columns.3.z
         )
 
+        var frameDt: Float = 1.0 / 90.0
         if let previous = previousHeadPosition {
             let dt = Float(now - previousHeadTime)
             if dt > 0.001 {
+                frameDt = min(dt, 1.0 / 30.0)
                 var velocity = (headPosition - previous) / dt
                 velocity.y = 0
                 // Light smoothing so tracking jitter doesn't rattle the ball.
@@ -438,29 +458,52 @@ public final class CoolBallGame: @unchecked Sendable {
         previousHeadPosition = headPosition
         previousHeadTime = now
 
+        // Body anchor: heavy smoothing (~0.4 s) of the head's ground
+        // position. Walking moves it; turning or tilting the head barely
+        // does — so only real body motion drives the kick.
+        let groundedHead = SIMD3<Float>(headPosition.x, 0, headPosition.z)
+        let anchorBlend = 1.0 - exp(-frameDt / 0.4)
+        let body = smoothedBodyPosition.map {
+            simd_mix($0, groundedHead, SIMD3<Float>(repeating: anchorBlend))
+        } ?? groundedHead
+        smoothedBodyPosition = body
+
         let footY = floorLevel.value + CoolBallScene.footRadius * 0.9
-        var footPosition = SIMD3<Float>(
-            headPosition.x + smoothedBodyVelocity.x * footLead,
+        var footTarget = SIMD3<Float>(
+            body.x + smoothedBodyVelocity.x * footLead,
             footY,
-            headPosition.z + smoothedBodyVelocity.z * footLead
+            body.z + smoothedBodyVelocity.z * footLead
         )
 
-        // Reach assist: with the ball in range, the boot extends toward it
-        // (up to a leg's length), so stepping into or leaning at the ball
-        // connects the way the player expects.
-        if let ball = scene.ballPosition() {
-            let toBall = SIMD3<Float>(ball.x - headPosition.x, 0, ball.z - headPosition.z)
+        // Reach assist: with the ball in range AND near the ground, the boot
+        // extends from the body toward it (up to a leg's length), so
+        // stepping into the ball connects the way the player expects.
+        if let ball = scene.ballPosition(), ball.y < floorLevel.value + 0.6 {
+            let toBall = SIMD3<Float>(ball.x - body.x, 0, ball.z - body.z)
             let ballDistance = simd_length(toBall)
             if ballDistance > 0.01, ballDistance < 1.3 {
                 let reach = min(ballDistance, 0.95)
                 let direction = toBall / ballDistance
-                footPosition = SIMD3<Float>(
-                    headPosition.x + direction.x * reach,
+                footTarget = SIMD3<Float>(
+                    body.x + direction.x * reach,
                     footY,
-                    headPosition.z + direction.z * reach
+                    body.z + direction.z * reach
                 )
             }
         }
+
+        // The boot never teleports: its travel is speed-limited, so retarget
+        // jumps (reach engaging, tracking hiccups) cannot launch the ball.
+        var footPosition = footTarget
+        if let last = lastFootPosition {
+            let travel = footTarget - last
+            let travelLength = simd_length(travel)
+            let maxTravel = 3.5 * frameDt
+            if travelLength > maxTravel {
+                footPosition = last + travel / travelLength * maxTravel
+            }
+        }
+        lastFootPosition = footPosition
         scene.moveProxy(scene.footEntity, to: footPosition)
     }
     #endif
