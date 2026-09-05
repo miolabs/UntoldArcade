@@ -11,6 +11,7 @@
 #if os(macOS)
     import Foundation
     import simd
+    import SwiftUI
     import UntoldEngine
 
     /// AI character locomotion with no animation state machine: a wandering
@@ -110,6 +111,7 @@
             setEntityName(entityId: target, name: "Target")
             let marker = BasicPrimitives.createCube(extent: 0.125)
             setEntityMeshDirect(entityId: target, meshes: marker, assetName: "target")
+            updateMaterialColor(entityId: target, color: Color(red: 0.85, green: 0.15, blue: 0.1))
             translateTo(entityId: target, position: simd_float3(3.5, 0.15, 0))
         }
 
