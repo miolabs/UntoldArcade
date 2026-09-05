@@ -47,4 +47,6 @@ clips, only the code. To run the demo:
 - download a prebuilt demo binary from the Releases page, where the
   clips ship embedded in the compiled app as the license allows.
 
-The `ZombieAA` model is our own asset and stays in the repository.
+The `ZombieAA` model comes from Studio New Punch's "Zombie Pack V1"
+(Unreal Marketplace) and is likewise not redistributable in source form —
+it ships only inside the prebuilt demo binaries.
