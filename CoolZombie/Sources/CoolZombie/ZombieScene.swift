@@ -104,6 +104,7 @@
             setEntityName(entityId: ground, name: "Ground")
             let plane = BasicPrimitives.createPlane(width: 24, depth: 24)
             setEntityMeshDirect(entityId: ground, meshes: plane, assetName: "ground")
+            updateMaterialColor(entityId: ground, color: Color(red: 0.55, green: 0.55, blue: 0.52))
         }
 
         private func makeTarget() {
