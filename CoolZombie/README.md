@@ -33,3 +33,18 @@ Planned motion data attribution: *Motion data: ChingMu MotionDecode Data Opennes
 ## License
 
 MPL-2.0, matching the engine. This demo is non-commercial.
+
+## Animations
+
+The zombie's animation clips are cooked from [MoCap Online's Zombie Pro
+pack](https://mocaponline.com/products/ue4-zombie-pro), whose license does
+not permit redistributing animation data — so this repository contains no
+clips, only the code. To run the demo:
+
+- own the pack, export the sequences as glTF, and cook them with the
+  Untold Engine Blender add-on into
+  `Sources/CoolZombie/Resources/Animations/<clip>/<clip>.untold`, or
+- download a prebuilt demo binary from the Releases page, where the
+  clips ship embedded in the compiled app as the license allows.
+
+The `ZombieAA` model is our own asset and stays in the repository.

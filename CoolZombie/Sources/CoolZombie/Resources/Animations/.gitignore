@@ -1,0 +1,7 @@
+# Animation clips are cooked from MoCap Online's "Zombie Pro" pack, whose
+# license permits use inside a product but forbids redistributing the
+# animation data in any format. They are therefore never committed.
+# Bring your own copy of the pack and cook the clips (see the README),
+# or download the prebuilt demo binary from Releases.
+*
+!.gitignore
