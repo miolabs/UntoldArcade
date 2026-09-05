@@ -38,8 +38,8 @@
             // Clips carry CONTACT-MATCHED root travel: per frame the root
             // moves by the stance foot's measured sweep, so planted feet are
             // world-stationary by construction. Mean speeds run
-            // 0.15/0.40/0.51/0.58/0.69/2.25/2.95/4.66 m/s.
-            static let maxSpeed: Float = 4.7 // hyperchase_5 mean travel
+            // 0.15/0.41/0.51/0.58/0.69/2.36/3.17/5.06 m/s.
+            static let maxSpeed: Float = 5.05 // hyperchase_5 mean travel
             static let speedPerMeter: Float = 1.0
             static let stopDistance: Float = 1.2
         }
