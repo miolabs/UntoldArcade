@@ -164,8 +164,9 @@
         // MARK: - Per-frame update
 
         /// Free camera: WASD pans and dollies (W/S zoom, A/D strafe),
-        /// Q/E move vertically, right-drag looks around. Works while
-        /// paused too, so a shot can be framed before pressing play.
+        /// Q/E move vertically. Right-drag orbits around the zombie;
+        /// Shift+right-drag free-looks instead. Works while paused too,
+        /// so a shot can be framed before pressing play.
         func handleInput() {
             let input = InputSystem.shared
             moveCameraWithInput(
@@ -183,12 +184,26 @@
             )
 
             if input.keyState.rightMousePressed {
-                rotateCamera(
-                    entityId: camera,
-                    pitch: input.mouseDeltaY,
-                    yaw: input.mouseDeltaX,
-                    sensitivity: -0.01
-                )
+                if input.keyState.shiftPressed || zombie == .invalid {
+                    rotateCamera(
+                        entityId: camera,
+                        pitch: input.mouseDeltaY,
+                        yaw: input.mouseDeltaX,
+                        sensitivity: -0.01
+                    )
+                } else {
+                    // Re-anchor the orbit pivot to the (moving) zombie every
+                    // frame: aim at it, set the pivot at that distance, then
+                    // orbit by the drag delta.
+                    let eye = getCameraPosition(entityId: camera)
+                    let pivot = getPosition(entityId: zombie) + simd_float3(0, 0.9, 0)
+                    cameraLookAt(entityId: camera, eye: eye, target: pivot, up: simd_float3(0, 1, 0))
+                    setOrbitOffset(entityId: camera, uTargetOffset: simd_length(pivot - eye))
+                    orbitCameraAround(
+                        entityId: camera,
+                        uDelta: simd_float2(input.mouseDeltaX, input.mouseDeltaY)
+                    )
+                }
             }
         }
 
