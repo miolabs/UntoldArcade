@@ -48,10 +48,16 @@
             static let speedPerMeter: Float = 1.0
             static let chaseEnterDistance: Float = 4.5
             static let chaseExitDistance: Float = 3.0
-            static let stopDistance: Float = 1.2
+            // The stop boundary is hysteretic too: without it the orbiting
+            // target makes the goal flicker between zero and walk every few
+            // frames, and motion matching churns jumps (frozen-looking pose,
+            // residual drift).
+            static let moveEnterDistance: Float = 1.6
+            static let stopDistance: Float = 1.0
         }
 
         private var chasing = false
+        private var moving = true
 
         // MARK: Entities
 
@@ -248,15 +254,20 @@
             } else if distance < Locomotion.chaseExitDistance {
                 chasing = false
             }
+            if distance > Locomotion.moveEnterDistance {
+                moving = true
+            } else if distance < Locomotion.stopDistance {
+                moving = false
+            }
 
             var desiredVelocity = simd_float3.zero
             var desiredFacing: simd_float3?
-            if distance > Locomotion.stopDistance {
+            if moving {
                 let direction = toTarget / distance
                 let ramp = (distance - Locomotion.stopDistance) * Locomotion.speedPerMeter
                 let speed = chasing
                     ? min(Locomotion.maxSpeed, max(Locomotion.chaseFloorSpeed, ramp))
-                    : min(Locomotion.walkTopSpeed, ramp)
+                    : min(Locomotion.walkTopSpeed, max(0.15, ramp)) // floor at the creep
                 desiredVelocity = direction * speed
                 desiredFacing = direction
             }
@@ -270,7 +281,7 @@
             // The generated clips travel without turning, so steer the
             // heading directly toward the goal; turning clips replace this
             // once real mocap lands.
-            if distance > Locomotion.stopDistance {
+            if moving, distance > 1e-4 {
                 turnToward(direction: toTarget / distance, deltaTime: deltaTime)
             }
         }
