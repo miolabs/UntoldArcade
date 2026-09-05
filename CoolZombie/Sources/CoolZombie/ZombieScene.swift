@@ -172,6 +172,9 @@
                 FootIKGroundSample(height: 0)
             }
             setFootIKEnabled(entityId: zombie, enabled: true)
+            // Pin planted feet in world space; absorbs the residual slide
+            // root motion cannot fix (the trailing foot in double support).
+            setFootIKStanceLocking(entityId: zombie, enabled: true)
 
             // Motion matching: the loaded clips are the whole vocabulary.
             // A responsive trajectory prediction plus a heavier trajectory
