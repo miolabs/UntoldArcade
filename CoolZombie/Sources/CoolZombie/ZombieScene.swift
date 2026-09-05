@@ -43,6 +43,7 @@
 
         private var zombie: EntityID = .invalid
         private var target: EntityID = .invalid
+        private var camera: EntityID = .invalid
         private var zombieReady = false
 
         private var targetAngle: Float = 0
@@ -66,6 +67,8 @@
             if let resources = Bundle.module.resourceURL {
                 setEngine(.assetBasePath(resources))
             }
+            registerKeyboardEvents()
+            registerMouseEvents()
             setRendering(.postProcessing(.enabled))
             setRendering(.antiAliasing(.fxaa))
             setRendering(.environment(.ibl(true)))
@@ -73,7 +76,7 @@
         }
 
         private func makeCamera() {
-            let camera = createEntity()
+            camera = createEntity()
             setEntityName(entityId: camera, name: "Main Camera")
             createGameCamera(entityId: camera)
             cameraLookAt(
@@ -159,6 +162,35 @@
         }
 
         // MARK: - Per-frame update
+
+        /// Free camera: WASD pans and dollies (W/S zoom, A/D strafe),
+        /// Q/E move vertically, right-drag looks around. Works while
+        /// paused too, so a shot can be framed before pressing play.
+        func handleInput() {
+            let input = InputSystem.shared
+            moveCameraWithInput(
+                entityId: camera,
+                input: (
+                    w: input.keyState.wPressed,
+                    a: input.keyState.aPressed,
+                    s: input.keyState.sPressed,
+                    d: input.keyState.dPressed,
+                    q: input.keyState.qPressed,
+                    e: input.keyState.ePressed
+                ),
+                speed: 3.0,
+                deltaTime: 1.0 / 60.0
+            )
+
+            if input.keyState.rightMousePressed {
+                rotateCamera(
+                    entityId: camera,
+                    pitch: input.mouseDeltaY,
+                    yaw: input.mouseDeltaX,
+                    sensitivity: -0.01
+                )
+            }
+        }
 
         func update(deltaTime: Float) {
             guard gameMode else { return }

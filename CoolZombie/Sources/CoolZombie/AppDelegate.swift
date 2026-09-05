@@ -60,7 +60,9 @@
                 gameUpdate: { [weak self] deltaTime in
                     self?.zombieScene.update(deltaTime: deltaTime)
                 },
-                handleInput: {}
+                handleInput: { [weak self] in
+                    self?.zombieScene.handleInput()
+                }
             )
         }
 
