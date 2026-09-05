@@ -38,11 +38,20 @@
             // Clips carry CONTACT-MATCHED root travel: per frame the root
             // moves by the stance foot's measured sweep, so planted feet are
             // world-stationary by construction. Mean speeds run
-            // 0.15/0.41/0.51/0.58/0.69/2.36/3.17/5.06 m/s.
+            // 0.15/0.41/0.51/0.58/0.69 (walk cluster) and 2.36/3.17/5.06
+            // (chase cluster) — nothing in between, so the goal snaps to a
+            // cluster with hysteresis instead of hovering in the hole and
+            // churning transitions.
             static let maxSpeed: Float = 5.05 // hyperchase_5 mean travel
+            static let walkTopSpeed: Float = 0.69 // chase_2 mean travel
+            static let chaseFloorSpeed: Float = 2.36 // hyperchase_1 mean travel
             static let speedPerMeter: Float = 1.0
+            static let chaseEnterDistance: Float = 4.5
+            static let chaseExitDistance: Float = 3.0
             static let stopDistance: Float = 1.2
         }
+
+        private var chasing = false
 
         // MARK: Entities
 
@@ -234,11 +243,20 @@
             toTarget.y = 0
             let distance = simd_length(toTarget)
 
+            if distance > Locomotion.chaseEnterDistance {
+                chasing = true
+            } else if distance < Locomotion.chaseExitDistance {
+                chasing = false
+            }
+
             var desiredVelocity = simd_float3.zero
             var desiredFacing: simd_float3?
             if distance > Locomotion.stopDistance {
                 let direction = toTarget / distance
-                let speed = min(Locomotion.maxSpeed, (distance - Locomotion.stopDistance) * Locomotion.speedPerMeter)
+                let ramp = (distance - Locomotion.stopDistance) * Locomotion.speedPerMeter
+                let speed = chasing
+                    ? min(Locomotion.maxSpeed, max(Locomotion.chaseFloorSpeed, ramp))
+                    : min(Locomotion.walkTopSpeed, ramp)
                 desiredVelocity = direction * speed
                 desiredFacing = direction
             }
