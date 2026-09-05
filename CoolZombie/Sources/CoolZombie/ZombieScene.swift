@@ -35,10 +35,11 @@
         /// continuously with distance so the search can use the whole
         /// ladder.
         private enum Locomotion {
-            // Clips are cooked at their NATURAL stride speeds (measured from
-            // stance-foot sweep), so feet plant instead of skating: the
-            // ladder is 0.2/0.45/0.62/0.66/0.75/2.55/3.3/5.05 m/s.
-            static let maxSpeed: Float = 5.05 // hyperchase_5 at true stride
+            // Clips carry CONTACT-MATCHED root travel: per frame the root
+            // moves by the stance foot's measured sweep, so planted feet are
+            // world-stationary by construction. Mean speeds run
+            // 0.15/0.40/0.51/0.58/0.69/2.25/2.95/4.66 m/s.
+            static let maxSpeed: Float = 4.7 // hyperchase_5 mean travel
             static let speedPerMeter: Float = 1.0
             static let stopDistance: Float = 1.2
         }
