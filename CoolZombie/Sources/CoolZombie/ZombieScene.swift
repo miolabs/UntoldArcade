@@ -158,9 +158,14 @@
             setFootIKEnabled(entityId: zombie, enabled: true)
 
             // Motion matching: the loaded clips are the whole vocabulary.
+            // A responsive trajectory prediction plus a heavier trajectory
+            // weight let the search actually reach the fast gaits; the
+            // defaults park it on the mid gait even for sprint goals.
             setMotionMatching(entityId: zombie, descriptor: MotionMatchingDescriptor(
                 leftFootPath: Rig.leftFoot,
-                rightFootPath: Rig.rightFoot
+                rightFootPath: Rig.rightFoot,
+                predictionHalflife: 0.12,
+                weights: MotionMatchingWeights(trajectoryPosition: 2.5, trajectoryDirection: 1.25)
             ))
             setMotionMatchingEnabled(entityId: zombie, enabled: true)
 
