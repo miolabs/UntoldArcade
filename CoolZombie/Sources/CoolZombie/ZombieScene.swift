@@ -150,17 +150,23 @@
         }
 
         private func configureZombieAnimation() {
-            // Idles, a walk/chase ladder (0.2-0.91) and a hyper ladder
-            // (2.73-5.56) — all authored root motion, straight-travel only.
-            // The cooked turns/circulars/starts stay out of the database
-            // until motion-matched steering is tuned: a goal pointing far
-            // off-heading leaves the feature space the straight clips span
-            // and the search degenerates (see the arrival harness).
+            // Idles, a walk/chase ladder (0.2-0.91), a hyper ladder
+            // (2.73-5.56), circular sprints, in-place turns at 45/90/180,
+            // and acceleration starts — all authored root motion. Motion
+            // matching picks and blends; nobody selects a clip, and with
+            // turn data in the database nobody steers in code either: the
+            // engine predicts a turn-rate-limited arc toward the goal, and
+            // the turn/circular clips' root yaw rotates the character.
             for clip in [
                 "idle_3", "shamble_1",
                 "walk_1", "walk_3", "walk_6",
                 "chase_1", "chase_2", "chase_3", "chase_5",
                 "hyper_1", "hyper_2", "hyper_3", "hyper_5",
+                "hyper_1_cir_l", "hyper_1_cir_r", "hyper_3_cir_l", "hyper_3_cir_r",
+                "hyper_5_cir_l", "hyper_5_cir_r",
+                "turn_l_45", "turn_r_45", "turn_l_90", "turn_r_90",
+                "turn_l_180", "turn_r_180",
+                "start_chase", "start_hyper",
             ] {
                 setEntityAnimations(entityId: zombie, filename: clip, withExtension: "untold", name: clip)
             }
@@ -287,32 +293,8 @@
                 desiredFacing: desiredFacing
             )
 
-            // Heading stays code-steered until motion-matched steering is
-            // tuned; the clips travel straight, so yaw control is external.
-            if moving, distance > 1e-4 {
-                turnToward(direction: toTarget / distance, deltaTime: deltaTime)
-            }
-        }
-
-        /// Rotates the character's yaw toward `direction` along the shortest
-        /// arc, capped at `turnSpeed` rad/s.
-        private func turnToward(direction: simd_float3, deltaTime: Float) {
-            let turnSpeed: Float = 3.0 // rad/s
-
-            let forward = getForwardAxisVector(entityId: zombie)
-            let currentYaw = atan2f(forward.x, forward.z)
-            let targetYaw = atan2f(direction.x, direction.z)
-
-            var delta = fmodf(targetYaw - currentYaw + .pi, 2 * .pi)
-            if delta < 0 { delta += 2 * .pi }
-            delta -= .pi
-
-            let maxStep = turnSpeed * deltaTime
-            let step = max(-maxStep, min(maxStep, delta))
-            rotateTo(
-                entityId: zombie,
-                rotation: simd_quatf(angle: currentYaw + step, axis: simd_float3(0, 1, 0))
-            )
+            // Heading is entirely motion-matched — desiredFacing steers the
+            // search, the clips' authored yaw turns the character.
         }
 
         private func moveTarget(deltaTime: Float) {
