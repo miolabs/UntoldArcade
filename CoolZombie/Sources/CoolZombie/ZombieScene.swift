@@ -29,14 +29,13 @@
             static let rightLeg = (hip: "/root/pelvis/thigh_r", knee: "/root/pelvis/thigh_r/calf_r")
         }
 
-        /// Travel speeds injected into the clips at cook time, matching the
-        /// game's BS_IdlWalkRun blend-sample speeds (cm/s -> m/s).
+        /// The clip vocabulary spans 0-2.55 m/s (travel injected at cook
+        /// time from the game's blend-sample speeds); the goal speed ramps
+        /// continuously with distance so the search can use the whole
+        /// ladder.
         private enum Locomotion {
-            static let sprintSpeed: Float = 2.55 // hyperchase_5
-            static let chaseSpeed: Float = 1.65 // hyperchase_1
-            static let walkSpeed: Float = 0.90 // chase_2
-            static let sprintDistance: Float = 5.0
-            static let chaseDistance: Float = 2.8
+            static let maxSpeed: Float = 2.55 // hyperchase_5
+            static let speedPerMeter: Float = 0.8
             static let stopDistance: Float = 1.2
         }
 
@@ -126,12 +125,14 @@
         }
 
         private func configureZombieAnimation() {
-            // walk_f is the zero-travel shuffle (the game plays it when the
-            // zombie stands still); the chase ladder covers 0.9-2.55 m/s.
-            setEntityAnimations(entityId: zombie, filename: "walk_f", withExtension: "untold", name: "walk_f")
-            setEntityAnimations(entityId: zombie, filename: "chase_2", withExtension: "untold", name: "chase_2")
-            setEntityAnimations(entityId: zombie, filename: "hyperchase_1", withExtension: "untold", name: "hyperchase_1")
-            setEntityAnimations(entityId: zombie, filename: "hyperchase_5", withExtension: "untold", name: "hyperchase_5")
+            // Idles + a speed ladder from creep (0.2) to sprint (2.55);
+            // motion matching picks and blends, nobody selects a clip.
+            for clip in [
+                "idle_3", "shamble_1", "walk_f", "chase_1", "walk_f6",
+                "chase_3", "chase_2", "hyperchase_1", "hyperchase_2", "hyperchase_5",
+            ] {
+                setEntityAnimations(entityId: zombie, filename: clip, withExtension: "untold", name: clip)
+            }
 
             // The clips' own travel moves the entity.
             setRootMotionEnabled(entityId: zombie, enabled: true)
@@ -178,13 +179,7 @@
             var desiredFacing: simd_float3?
             if distance > Locomotion.stopDistance {
                 let direction = toTarget / distance
-                let speed: Float = if distance > Locomotion.sprintDistance {
-                    Locomotion.sprintSpeed
-                } else if distance > Locomotion.chaseDistance {
-                    Locomotion.chaseSpeed
-                } else {
-                    Locomotion.walkSpeed
-                }
+                let speed = min(Locomotion.maxSpeed, (distance - Locomotion.stopDistance) * Locomotion.speedPerMeter)
                 desiredVelocity = direction * speed
                 desiredFacing = direction
             }
