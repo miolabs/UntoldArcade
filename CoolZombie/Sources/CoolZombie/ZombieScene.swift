@@ -44,6 +44,11 @@
         private var target: EntityID = .invalid
         private var zombieReady = false
 
+        /// The real zombie model (UE export). Stands in rest pose until its
+        /// own clips are exported; the redplayer still drives the motion
+        /// matching demo.
+        private var zombieModel: EntityID = .invalid
+
         private var targetAngle: Float = 0
 
         init() {
@@ -53,6 +58,7 @@
             makeGround()
             makeTarget()
             loadZombie()
+            loadZombieModel()
         }
 
         // MARK: - Setup
@@ -120,6 +126,18 @@
                 }
                 configureZombieAnimation()
                 setSceneReady(true)
+            }
+        }
+
+        private func loadZombieModel() {
+            zombieModel = createEntity()
+            setEntityName(entityId: zombieModel, name: "ZombieAA")
+            setEntityMeshAsync(entityId: zombieModel, filename: "ZombieAA", withExtension: "untold") { [weak self] success in
+                guard let self, success else {
+                    print("CoolZombie: failed to load ZombieAA mesh")
+                    return
+                }
+                translateTo(entityId: zombieModel, position: simd_float3(-2.5, 0, 0))
             }
         }
 
