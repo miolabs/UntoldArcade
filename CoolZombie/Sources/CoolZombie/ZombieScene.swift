@@ -150,11 +150,17 @@
         }
 
         private func configureZombieAnimation() {
-            // Idles + a speed ladder from creep (0.2) to sprint (2.55);
-            // motion matching picks and blends, nobody selects a clip.
+            // Idles, a walk/chase ladder (0.2-0.91) and a hyper ladder
+            // (2.73-5.56) — all authored root motion, straight-travel only.
+            // The cooked turns/circulars/starts stay out of the database
+            // until motion-matched steering is tuned: a goal pointing far
+            // off-heading leaves the feature space the straight clips span
+            // and the search degenerates (see the arrival harness).
             for clip in [
-                "idle_3", "shamble_1", "walk_f", "chase_1", "walk_f6",
-                "chase_3", "chase_2", "hyperchase_1", "hyperchase_2", "hyperchase_5",
+                "idle_3", "shamble_1",
+                "walk_1", "walk_3", "walk_6",
+                "chase_1", "chase_2", "chase_3", "chase_5",
+                "hyper_1", "hyper_2", "hyper_3", "hyper_5",
             ] {
                 setEntityAnimations(entityId: zombie, filename: clip, withExtension: "untold", name: clip)
             }
@@ -281,20 +287,15 @@
                 desiredFacing: desiredFacing
             )
 
-            // The generated clips travel without turning, so steer the
-            // heading directly toward the goal; turning clips replace this
-            // once real mocap lands.
+            // Heading stays code-steered until motion-matched steering is
+            // tuned; the clips travel straight, so yaw control is external.
             if moving, distance > 1e-4 {
                 turnToward(direction: toTarget / distance, deltaTime: deltaTime)
             }
         }
 
         /// Rotates the character's yaw toward `direction` along the shortest
-        /// arc, capped at `turnSpeed` rad/s. Explicit yaw-only control: the
-        /// engine's alignOrientation mixes orientation-matrix columns, which
-        /// degenerates for large heading changes (a target passing behind
-        /// the character), and it expects physics components this entity
-        /// doesn't carry.
+        /// arc, capped at `turnSpeed` rad/s.
         private func turnToward(direction: simd_float3, deltaTime: Float) {
             let turnSpeed: Float = 3.0 // rad/s
 
@@ -302,7 +303,6 @@
             let currentYaw = atan2f(forward.x, forward.z)
             let targetYaw = atan2f(direction.x, direction.z)
 
-            // Shortest signed arc, wrapped to (-π, π].
             var delta = fmodf(targetYaw - currentYaw + .pi, 2 * .pi)
             if delta < 0 { delta += 2 * .pi }
             delta -= .pi
