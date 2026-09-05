@@ -20,21 +20,23 @@
     /// the feet. Nobody ever calls changeAnimation.
     @MainActor
     final class ZombieScene {
-        // MARK: Rig constants (redplayer skeleton)
+        // MARK: Rig constants (UE4 Mannequin skeleton)
 
         private enum Rig {
-            static let leftFoot = "/Hips/LeftUpperLeg/LeftLowerLeg/LeftFoot"
-            static let rightFoot = "/Hips/RightUpperLeg/RightLowerLeg/RightFoot"
-            static let leftLeg = (hip: "/Hips/LeftUpperLeg", knee: "/Hips/LeftUpperLeg/LeftLowerLeg")
-            static let rightLeg = (hip: "/Hips/RightUpperLeg", knee: "/Hips/RightUpperLeg/RightLowerLeg")
+            static let leftFoot = "/root/pelvis/thigh_l/calf_l/foot_l"
+            static let rightFoot = "/root/pelvis/thigh_r/calf_r/foot_r"
+            static let leftLeg = (hip: "/root/pelvis/thigh_l", knee: "/root/pelvis/thigh_l/calf_l")
+            static let rightLeg = (hip: "/root/pelvis/thigh_r", knee: "/root/pelvis/thigh_r/calf_r")
         }
 
-        /// Effective travel speeds baked into the generated clips
-        /// (root displacement per loop / loop duration).
+        /// Travel speeds injected into the clips at cook time, matching the
+        /// game's BS_IdlWalkRun blend-sample speeds (cm/s -> m/s).
         private enum Locomotion {
-            static let runSpeed: Float = 2.35
-            static let walkSpeed: Float = 0.94
-            static let runDistance: Float = 4.0
+            static let sprintSpeed: Float = 2.55 // hyperchase_5
+            static let chaseSpeed: Float = 1.65 // hyperchase_1
+            static let walkSpeed: Float = 0.90 // chase_2
+            static let sprintDistance: Float = 5.0
+            static let chaseDistance: Float = 2.8
             static let stopDistance: Float = 1.2
         }
 
@@ -43,11 +45,6 @@
         private var zombie: EntityID = .invalid
         private var target: EntityID = .invalid
         private var zombieReady = false
-
-        /// The real zombie model (UE export). Stands in rest pose until its
-        /// own clips are exported; the redplayer still drives the motion
-        /// matching demo.
-        private var zombieModel: EntityID = .invalid
 
         private var targetAngle: Float = 0
 
@@ -58,7 +55,6 @@
             makeGround()
             makeTarget()
             loadZombie()
-            loadZombieModel()
         }
 
         // MARK: - Setup
@@ -118,9 +114,9 @@
         private func loadZombie() {
             zombie = createEntity()
             setEntityName(entityId: zombie, name: "Zombie")
-            setEntityMeshAsync(entityId: zombie, filename: "redplayer", withExtension: "untold") { [weak self] success in
+            setEntityMeshAsync(entityId: zombie, filename: "ZombieAA", withExtension: "untold") { [weak self] success in
                 guard let self, success else {
-                    print("CoolZombie: failed to load redplayer mesh")
+                    print("CoolZombie: failed to load ZombieAA mesh")
                     setSceneReady(true)
                     return
                 }
@@ -129,22 +125,13 @@
             }
         }
 
-        private func loadZombieModel() {
-            zombieModel = createEntity()
-            setEntityName(entityId: zombieModel, name: "ZombieAA")
-            setEntityMeshAsync(entityId: zombieModel, filename: "ZombieAA", withExtension: "untold") { [weak self] success in
-                guard let self, success else {
-                    print("CoolZombie: failed to load ZombieAA mesh")
-                    return
-                }
-                translateTo(entityId: zombieModel, position: simd_float3(-2.5, 0, 0))
-            }
-        }
-
         private func configureZombieAnimation() {
-            setEntityAnimations(entityId: zombie, filename: "idle", withExtension: "untold", name: "idle")
-            setEntityAnimations(entityId: zombie, filename: "walk_forward", withExtension: "untold", name: "walk_forward")
-            setEntityAnimations(entityId: zombie, filename: "run_forward", withExtension: "untold", name: "run_forward")
+            // walk_f is the zero-travel shuffle (the game plays it when the
+            // zombie stands still); the chase ladder covers 0.9-2.55 m/s.
+            setEntityAnimations(entityId: zombie, filename: "walk_f", withExtension: "untold", name: "walk_f")
+            setEntityAnimations(entityId: zombie, filename: "chase_2", withExtension: "untold", name: "chase_2")
+            setEntityAnimations(entityId: zombie, filename: "hyperchase_1", withExtension: "untold", name: "hyperchase_1")
+            setEntityAnimations(entityId: zombie, filename: "hyperchase_5", withExtension: "untold", name: "hyperchase_5")
 
             // The clips' own travel moves the entity.
             setRootMotionEnabled(entityId: zombie, enabled: true)
@@ -191,7 +178,13 @@
             var desiredFacing: simd_float3?
             if distance > Locomotion.stopDistance {
                 let direction = toTarget / distance
-                let speed = distance > Locomotion.runDistance ? Locomotion.runSpeed : Locomotion.walkSpeed
+                let speed: Float = if distance > Locomotion.sprintDistance {
+                    Locomotion.sprintSpeed
+                } else if distance > Locomotion.chaseDistance {
+                    Locomotion.chaseSpeed
+                } else {
+                    Locomotion.walkSpeed
+                }
                 desiredVelocity = direction * speed
                 desiredFacing = direction
             }
