@@ -41,8 +41,8 @@ public final class ZombieChaseGame: @unchecked Sendable {
         /// Come this close and it starts chasing.
         public var triggerRadius: Float = 2.5
         /// It never walks into the player: the goal drops to zero here.
-        /// The last clip plays out and the velocity crossfade decays, so it
-        /// settles roughly 0.4 m closer than this — about arm's length.
+        /// The last step plays out and the velocity crossfade decays, so it
+        /// settles a few centimetres closer than this — about arm's length.
         public var stopDistance: Float = 1.4
         /// ...and resumes only once the player has backed off to here.
         public var resumeDistance: Float = 2.0
@@ -61,10 +61,13 @@ public final class ZombieChaseGame: @unchecked Sendable {
         static let rightLeg = (hip: "/root/pelvis/thigh_r", knee: "/root/pelvis/thigh_r/calf_r")
     }
 
-    // Authored clip speeds: walk/chase 0.2-0.91, hyper 2.73-5.56.
+    // Authored clip speeds: walk/chase 0.4-0.91, hyper 2.73-5.56.
     private enum Locomotion {
         static let maxSpeed: Float = 5.56
         static let walkTopSpeed: Float = 0.91
+        /// Never ask for a creep: below this the matcher cannot tell the
+        /// goal from standing still.
+        static let walkFloorSpeed: Float = 0.3
         static let chaseFloorSpeed: Float = 2.73
         static let speedPerMeter: Float = 1.0
     }
@@ -156,20 +159,38 @@ public final class ZombieChaseGame: @unchecked Sendable {
             rightFootPath: Rig.rightFoot,
             predictionHalflife: 0.12,
             headingCorrectionRate: 1.5,
-            weights: MotionMatchingWeights(trajectoryPosition: 2.5, trajectoryDirection: 1.25)
+            // The database spans 0-5.6 m/s, so per-dimension normalisation
+            // makes a slow walk look almost like standing. The trajectory
+            // must outweigh pose continuity or a zero goal never leaves the
+            // walk and the zombie creeps into the player.
+            weights: MotionMatchingWeights(trajectoryPosition: 5.0, trajectoryDirection: 1.25)
         ))
-        setMotionMatchingEnabled(entityId: zombie, enabled: true)
+        // Build the database at load time: it is enabled only when the
+        // zombie is provoked, and that frame must not stall.
+        prepareMotionMatching(entityId: zombie)
     }
 
     private func placeAtSpawn() {
         translateTo(entityId: zombie, position: spawnPosition)
-        // Spawned ahead of the player (-Z) and facing them (+Z).
-        rotateTo(entityId: zombie, rotation: simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0)))
+        // Spawned ahead of the player (-Z) and facing them: the character's
+        // forward is its local +Z, so the identity rotation looks at +Z.
+        rotateTo(entityId: zombie, rotation: simd_quatf(angle: 0, axis: simd_float3(0, 1, 0)))
+        // Waiting is the one scripted state: a calm idle plays directly and
+        // motion matching stays off until the zombie is provoked — a zero
+        // goal would have it pick the aggressive attack idles instead.
+        setMotionMatchingEnabled(entityId: zombie, enabled: false)
+        changeAnimation(entityId: zombie, name: ZombieResources.waitingClip, transitionHalflife: 0.3)
         lock.withLock {
             phaseStorage = .waiting
             hyper = false
             moving = false
         }
+    }
+
+    /// Hands the character to motion matching: from here on the goal
+    /// drives every clip choice.
+    private func startHunting() {
+        setMotionMatchingEnabled(entityId: zombie, enabled: true)
     }
 
     // MARK: - Per-frame
@@ -196,15 +217,14 @@ public final class ZombieChaseGame: @unchecked Sendable {
         let direction = distance > 1e-4 ? toPlayer / distance : simd_float3(0, 0, 1)
 
         var phase = lock.withLock { phaseStorage }
-        if provoked, phase == .waiting {
+        if phase == .waiting, provoked || distance < configuration.triggerRadius {
+            startHunting()
             phase = .chasing
         }
 
         switch phase {
         case .waiting:
-            if distance < configuration.triggerRadius {
-                phase = .chasing
-            }
+            break
         case .chasing, .holding:
             // Stop short of the player with hysteresis, and pick a gait
             // cluster with hysteresis so the goal never hovers in the hole
@@ -230,7 +250,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
             let ramp = (distance - configuration.stopDistance) * Locomotion.speedPerMeter
             let speed = hyper
                 ? min(Locomotion.maxSpeed, max(Locomotion.chaseFloorSpeed, ramp))
-                : min(Locomotion.walkTopSpeed, max(0.15, ramp))
+                : min(Locomotion.walkTopSpeed, max(Locomotion.walkFloorSpeed, ramp))
             desiredVelocity = direction * speed
         case .holding:
             break

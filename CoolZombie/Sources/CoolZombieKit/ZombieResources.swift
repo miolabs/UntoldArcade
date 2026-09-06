@@ -18,8 +18,13 @@ public enum ZombieResources {
         Bundle.module.resourceURL
     }
 
+    /// The calm idle played directly while the zombie waits to be provoked
+    /// — the pack's stillest idle (no root travel, a slow sway). Motion
+    /// matching would pick the aggressive attack idles for a zero goal.
+    public static let waitingClip = "idle_1"
+
     /// Clip names the chase database is built from: standing idles, a
-    /// walk/chase ladder (0.2-0.91 m/s), a hyper-chase ladder (2.73-5.56
+    /// walk/chase ladder (0.4-0.91 m/s), a hyper-chase ladder (2.73-5.56
     /// m/s), circular sprints, in-place turns and acceleration starts — all
     /// with the pack's authored root motion.
     ///
@@ -27,9 +32,13 @@ public enum ZombieResources {
     /// shuffle step, and a zero-motion goal refuses to play through it —
     /// the search snaps back to the stillest frame every 0.3 s and the idle
     /// visibly restarts. `shamble_1` and the short attack idles hold.
+    /// The 0.2 m/s `walk_1` is left out for the mirror reason: it is close
+    /// enough to standing that a zero goal keeps playing it and the zombie
+    /// creeps into the player instead of stopping.
     public static let chaseClips: [String] = [
+        Self.waitingClip,
         "shamble_1", "hold_1", "hold_2", "hold_3", "hold_4",
-        "walk_1", "walk_3", "walk_6",
+        "walk_3", "walk_6",
         "chase_1", "chase_2", "chase_3", "chase_5",
         "hyper_1", "hyper_2", "hyper_3", "hyper_5",
         "hyper_1_cir_l", "hyper_1_cir_r", "hyper_3_cir_l", "hyper_3_cir_r",
