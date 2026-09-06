@@ -196,6 +196,11 @@
                 leftFootPath: Rig.leftFoot,
                 rightFootPath: Rig.rightFoot,
                 predictionHalflife: 0.12,
+                // The pack has curved sprints and in-place pivots but no
+                // curved walk; the warp bends straight walks toward the
+                // target so the residual heading error closes instead of
+                // the zombie orbiting behind the cube.
+                headingCorrectionRate: 1.5,
                 weights: MotionMatchingWeights(trajectoryPosition: 2.5, trajectoryDirection: 1.25)
             ))
             setMotionMatchingEnabled(entityId: zombie, enabled: true)
