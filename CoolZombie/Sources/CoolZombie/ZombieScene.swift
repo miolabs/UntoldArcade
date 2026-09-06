@@ -152,17 +152,7 @@
             // turn data in the database nobody steers in code either: the
             // engine predicts a turn-rate-limited arc toward the goal, and
             // the turn/circular clips' root yaw rotates the character.
-            for clip in [
-                "idle_3", "shamble_1",
-                "walk_1", "walk_3", "walk_6",
-                "chase_1", "chase_2", "chase_3", "chase_5",
-                "hyper_1", "hyper_2", "hyper_3", "hyper_5",
-                "hyper_1_cir_l", "hyper_1_cir_r", "hyper_3_cir_l", "hyper_3_cir_r",
-                "hyper_5_cir_l", "hyper_5_cir_r",
-                "turn_l_45", "turn_r_45", "turn_l_90", "turn_r_90",
-                "turn_l_180", "turn_r_180",
-                "start_chase", "start_hyper",
-            ] {
+            for clip in ZombieResources.chaseClips {
                 setEntityAnimations(entityId: zombie, filename: clip, withExtension: "untold", name: clip)
             }
 

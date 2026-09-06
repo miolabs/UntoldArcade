@@ -18,12 +18,17 @@ public enum ZombieResources {
         Bundle.module.resourceURL
     }
 
-    /// Clip names the chase database is built from: idles, a walk/chase
-    /// ladder (0.2-0.91 m/s), a hyper-chase ladder (2.73-5.56 m/s),
-    /// circular sprints, in-place turns and acceleration starts — all with
-    /// the pack's authored root motion.
+    /// Clip names the chase database is built from: standing idles, a
+    /// walk/chase ladder (0.2-0.91 m/s), a hyper-chase ladder (2.73-5.56
+    /// m/s), circular sprints, in-place turns and acceleration starts — all
+    /// with the pack's authored root motion.
+    ///
+    /// Standing clips must be truly in place. `idle_3` is not: it has a
+    /// shuffle step, and a zero-motion goal refuses to play through it —
+    /// the search snaps back to the stillest frame every 0.3 s and the idle
+    /// visibly restarts. `shamble_1` and the short attack idles hold.
     public static let chaseClips: [String] = [
-        "idle_3", "shamble_1",
+        "shamble_1", "hold_1", "hold_2", "hold_3", "hold_4",
         "walk_1", "walk_3", "walk_6",
         "chase_1", "chase_2", "chase_3", "chase_5",
         "hyper_1", "hyper_2", "hyper_3", "hyper_5",
