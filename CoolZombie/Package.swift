@@ -34,6 +34,7 @@ let package = Package(
             resources: [
                 .copy("Resources/Models"),
                 .copy("Resources/Animations"),
+                .copy("Resources/HDR"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

@@ -83,6 +83,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
     private var distanceStorage: Float = .infinity
     private var provokePending = false
     private var resetPending = false
+    private var lightingApplied = false
 
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
@@ -198,6 +199,14 @@ public final class ZombieChaseGame: @unchecked Sendable {
     /// `playerPosition` is the player's head in world space (nil while
     /// tracking is not available — the zombie just waits).
     public func update(deltaTime _: Float, playerPosition: simd_float3?) {
+        // The environment can only be swapped once the renderer has built
+        // its IBL resources, which on visionOS happens after scene setup —
+        // an earlier call fails and the engine's default sky bake wins.
+        // The first frame is the earliest safe point on every platform.
+        if lock.withLock({ defer { lightingApplied = true }; return !lightingApplied }) {
+            ZombieLighting.applyNeutralEnvironment()
+        }
+
         guard lock.withLock({ ready }) else { return }
 
         if lock.withLock({ defer { resetPending = false }; return resetPending }) {

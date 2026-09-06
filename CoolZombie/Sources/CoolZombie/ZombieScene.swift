@@ -86,7 +86,11 @@
             registerMouseEvents()
             setRendering(.postProcessing(.enabled))
             setRendering(.antiAliasing(.fxaa))
-            setRendering(.environment(.ibl(true)))
+            // The renderer (and its IBL resources) exists before the scene
+            // on macOS, so the environment can be swapped right here; the
+            // update callback only runs in game mode, so the paused still
+            // frame would otherwise keep the default sky's blue ambient.
+            ZombieLighting.applyNeutralEnvironment()
             setRendering(.environment(.visible(false)))
         }
 
