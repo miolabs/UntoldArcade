@@ -50,3 +50,21 @@ clips, only the code. To run the demo:
 The `ZombieAA` model comes from Studio New Punch's "Zombie Pack V1"
 (Unreal Marketplace) and is likewise not redistributable in source form —
 it ships only inside the prebuilt demo binaries.
+
+## visionOS (Apple Vision Pro)
+
+`Examples/CoolZombieVisionOS` is a mixed-reality build: the zombie waits a
+few meters in front of you in your real room; walk toward it and it comes
+for you, stopping an arm's length away. The chase logic lives in the
+`CoolZombieKit` library target (shared with the macOS demo); the app only
+feeds it the head position from ARKit world tracking.
+
+Open `Examples/CoolZombieVisionOS/CoolZombieVisionOS.xcodeproj` and run the
+`CoolZombieVisionOS-visionOS` scheme. In the simulator the floor is placed
+1 m below the head (there is no floor calibration); launch arguments
+`-autoOpenSpace` and `-autoProvoke` open the immersive space and start the
+chase without gaze-and-pinch input, for automated runs:
+
+```bash
+xcrun simctl launch <udid> com.miolabs.CoolZombieVisionOS -autoOpenSpace -autoProvoke
+```

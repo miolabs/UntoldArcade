@@ -9,6 +9,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #if os(macOS)
+    import CoolZombieKit
     import Foundation
     import simd
     import SwiftUI
@@ -78,7 +79,7 @@
             // screen recording can be armed on a clean still frame.
             gameMode = false
             setSceneReady(false)
-            if let resources = Bundle.module.resourceURL {
+            if let resources = ZombieResources.baseURL {
                 setEngine(.assetBasePath(resources))
             }
             registerKeyboardEvents()
