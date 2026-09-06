@@ -1,0 +1,15 @@
+{
+  "originHash" : "956028eada3b28dbac358ab387ea30d3065c2f031213c55e4f4aedf44fdc4e56",
+  "pins" : [
+    {
+      "identity" : "untoldengine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/miolabs/UntoldEngine.git",
+      "state" : {
+        "branch" : "develop",
+        "revision" : "e345f5ba78f124273134f8e7ae42120d758748aa"
+      }
+    }
+  ],
+  "version" : 3
+}

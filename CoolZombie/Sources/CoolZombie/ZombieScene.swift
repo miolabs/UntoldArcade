@@ -1,0 +1,297 @@
+//
+//  ZombieScene.swift
+//  CoolZombie
+//
+// Copyright (C) Untold Engine Studios
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+#if os(macOS)
+    import CoolZombieKit
+    import Foundation
+    import simd
+    import SwiftUI
+    import UntoldEngine
+
+    /// AI character locomotion with no animation state machine: a wandering
+    /// target orbits the arena, and the character chases it. Every frame the
+    /// AI states a *goal* (desired velocity + facing); motion matching picks
+    /// the animation frames, root motion moves the character, foot IK plants
+    /// the feet. Nobody ever calls changeAnimation.
+    @MainActor
+    final class ZombieScene {
+        // MARK: Rig constants (UE4 Mannequin skeleton)
+
+        private enum Rig {
+            static let leftFoot = "/root/pelvis/thigh_l/calf_l/foot_l"
+            static let rightFoot = "/root/pelvis/thigh_r/calf_r/foot_r"
+            static let leftLeg = (hip: "/root/pelvis/thigh_l", knee: "/root/pelvis/thigh_l/calf_l")
+            static let rightLeg = (hip: "/root/pelvis/thigh_r", knee: "/root/pelvis/thigh_r/calf_r")
+        }
+
+        /// The clips carry the pack's authored root motion. Two speed
+        /// clusters — walks and chases at 0.2-0.91 m/s, hyper chases at
+        /// 2.73-5.56 — with nothing in between, so the goal snaps to a
+        /// cluster with hysteresis instead of hovering in the hole and
+        /// churning transitions; within a cluster it ramps with distance.
+        private enum Locomotion {
+            static let maxSpeed: Float = 5.56 // hyper_5
+            static let walkTopSpeed: Float = 0.91 // chase_5
+            static let chaseFloorSpeed: Float = 2.73 // hyper_1
+            static let speedPerMeter: Float = 1.0
+            static let chaseEnterDistance: Float = 4.5
+            static let chaseExitDistance: Float = 3.0
+            // The stop boundary is hysteretic too: without it the orbiting
+            // target makes the goal flicker between zero and walk every few
+            // frames, and motion matching churns jumps (frozen-looking pose,
+            // residual drift).
+            static let moveEnterDistance: Float = 1.6
+            static let stopDistance: Float = 1.0
+        }
+
+        private var chasing = false
+        private var moving = true
+
+        // MARK: Entities
+
+        private var zombie: EntityID = .invalid
+        private var target: EntityID = .invalid
+        private var camera: EntityID = .invalid
+        private var zombieReady = false
+
+        private var targetAngle: Float = 0
+
+        init() {
+            configureEngine()
+            makeCamera()
+            makeSun()
+            makeGround()
+            makeTarget()
+            loadZombie()
+        }
+
+        // MARK: - Setup
+
+        private func configureEngine() {
+            // Starts paused; the play button (or Space) flips gameMode so a
+            // screen recording can be armed on a clean still frame.
+            gameMode = false
+            setSceneReady(false)
+            if let resources = ZombieResources.baseURL {
+                setEngine(.assetBasePath(resources))
+            }
+            registerKeyboardEvents()
+            registerMouseEvents()
+            setRendering(.postProcessing(.enabled))
+            setRendering(.antiAliasing(.fxaa))
+            setRendering(.environment(.ibl(true)))
+            setRendering(.environment(.visible(false)))
+        }
+
+        private func makeCamera() {
+            camera = createEntity()
+            setEntityName(entityId: camera, name: "Main Camera")
+            createGameCamera(entityId: camera)
+            cameraLookAt(
+                entityId: camera,
+                eye: simd_float3(0, 4.5, -7.5),
+                target: simd_float3(0, 0.8, 0),
+                up: simd_float3(0, 1, 0)
+            )
+            setCamera(.active(camera))
+        }
+
+        private func makeSun() {
+            let sun = createEntity()
+            setEntityName(entityId: sun, name: "Sun")
+            createDirLight(entityId: sun)
+            rotateTo(entityId: sun, angle: -50.0, axis: simd_float3(1, 0, 0))
+            setLight(entityId: sun, .color(simd_float3(1.0, 0.94, 0.86)))
+            setLight(entityId: sun, .intensity(1.5))
+            setLight(entityId: sun, .directional(.active))
+        }
+
+        private func makeGround() {
+            let ground = createEntity()
+            setEntityName(entityId: ground, name: "Ground")
+            let plane = BasicPrimitives.createPlane(width: 24, depth: 24)
+            setEntityMeshDirect(entityId: ground, meshes: plane, assetName: "ground")
+            updateMaterialColor(entityId: ground, color: Color(red: 0.55, green: 0.55, blue: 0.52))
+        }
+
+        private func makeTarget() {
+            target = createEntity()
+            setEntityName(entityId: target, name: "Target")
+            let marker = BasicPrimitives.createCube(extent: 0.125)
+            setEntityMeshDirect(entityId: target, meshes: marker, assetName: "target")
+            updateMaterialColor(entityId: target, color: Color(red: 0.85, green: 0.15, blue: 0.1))
+            translateTo(entityId: target, position: simd_float3(3.5, 0.15, 0))
+        }
+
+        private func loadZombie() {
+            zombie = createEntity()
+            setEntityName(entityId: zombie, name: "Zombie")
+            setEntityMeshAsync(entityId: zombie, filename: "ZombieAA", withExtension: "untold") { [weak self] success in
+                guard let self, success else {
+                    print("CoolZombie: failed to load ZombieAA mesh")
+                    setSceneReady(true)
+                    return
+                }
+                configureZombieAnimation()
+                setSceneReady(true)
+            }
+        }
+
+        private func configureZombieAnimation() {
+            // Idles, a walk/chase ladder (0.2-0.91), a hyper ladder
+            // (2.73-5.56), circular sprints, in-place turns at 45/90/180,
+            // and acceleration starts — all authored root motion. Motion
+            // matching picks and blends; nobody selects a clip, and with
+            // turn data in the database nobody steers in code either: the
+            // engine predicts a turn-rate-limited arc toward the goal, and
+            // the turn/circular clips' root yaw rotates the character.
+            for clip in ZombieResources.chaseClips {
+                setEntityAnimations(entityId: zombie, filename: clip, withExtension: "untold", name: clip)
+            }
+
+            // The clips' own travel moves the entity.
+            setRootMotionEnabled(entityId: zombie, enabled: true)
+
+            // Feet planted on the (flat) arena; swap the query for a terrain
+            // heightfield when the demo gains real ground.
+            setFootIKChains(entityId: zombie, chains: [
+                FootIKChainDescriptor(hipPath: Rig.leftLeg.hip, kneePath: Rig.leftLeg.knee, anklePath: Rig.leftFoot),
+                FootIKChainDescriptor(hipPath: Rig.rightLeg.hip, kneePath: Rig.rightLeg.knee, anklePath: Rig.rightFoot),
+            ])
+            setFootIKGroundQuery(entityId: zombie) { _ in
+                FootIKGroundSample(height: 0)
+            }
+            setFootIKEnabled(entityId: zombie, enabled: true)
+            // Pin planted feet in world space; absorbs the residual slide
+            // root motion cannot fix (the trailing foot in double support).
+            setFootIKStanceLocking(entityId: zombie, enabled: true)
+
+            // Motion matching: the loaded clips are the whole vocabulary.
+            // A responsive trajectory prediction plus a heavier trajectory
+            // weight let the search actually reach the fast gaits; the
+            // defaults park it on the mid gait even for sprint goals.
+            setMotionMatching(entityId: zombie, descriptor: MotionMatchingDescriptor(
+                leftFootPath: Rig.leftFoot,
+                rightFootPath: Rig.rightFoot,
+                predictionHalflife: 0.12,
+                // The pack has curved sprints and in-place pivots but no
+                // curved walk; the warp bends straight walks toward the
+                // target so the residual heading error closes instead of
+                // the zombie orbiting behind the cube.
+                headingCorrectionRate: 1.5,
+                weights: MotionMatchingWeights(trajectoryPosition: 2.5, trajectoryDirection: 1.25)
+            ))
+            setMotionMatchingEnabled(entityId: zombie, enabled: true)
+
+            zombieReady = true
+        }
+
+        // MARK: - Per-frame update
+
+        /// Free camera: WASD pans and dollies (W/S zoom, A/D strafe),
+        /// Q/E move vertically. Right-drag orbits around the zombie;
+        /// Shift+right-drag free-looks instead. Works while paused too,
+        /// so a shot can be framed before pressing play.
+        func handleInput() {
+            let input = InputSystem.shared
+            moveCameraWithInput(
+                entityId: camera,
+                input: (
+                    w: input.keyState.wPressed,
+                    a: input.keyState.aPressed,
+                    s: input.keyState.sPressed,
+                    d: input.keyState.dPressed,
+                    q: input.keyState.qPressed,
+                    e: input.keyState.ePressed
+                ),
+                speed: 3.0,
+                deltaTime: 1.0 / 60.0
+            )
+
+            if input.keyState.rightMousePressed {
+                if input.keyState.shiftPressed || zombie == .invalid {
+                    rotateCamera(
+                        entityId: camera,
+                        pitch: input.mouseDeltaY,
+                        yaw: input.mouseDeltaX,
+                        sensitivity: -0.01
+                    )
+                } else {
+                    // Re-anchor the orbit pivot to the (moving) zombie every
+                    // frame: aim at it, set the pivot at that distance, then
+                    // orbit by the drag delta.
+                    let eye = getCameraPosition(entityId: camera)
+                    let pivot = getPosition(entityId: zombie) + simd_float3(0, 0.9, 0)
+                    cameraLookAt(entityId: camera, eye: eye, target: pivot, up: simd_float3(0, 1, 0))
+                    setOrbitOffset(entityId: camera, uTargetOffset: simd_length(pivot - eye))
+                    orbitCameraAround(
+                        entityId: camera,
+                        uDelta: simd_float2(input.mouseDeltaX, input.mouseDeltaY)
+                    )
+                }
+            }
+        }
+
+        func update(deltaTime: Float) {
+            guard gameMode else { return }
+
+            moveTarget(deltaTime: deltaTime)
+
+            guard zombieReady else { return }
+
+            // The AI: chase the target. Far away → run, closing in → walk,
+            // arrived → stand. The goal is the only animation input.
+            let zombiePosition = getPosition(entityId: zombie)
+            let targetPosition = getPosition(entityId: target)
+            var toTarget = targetPosition - zombiePosition
+            toTarget.y = 0
+            let distance = simd_length(toTarget)
+
+            if distance > Locomotion.chaseEnterDistance {
+                chasing = true
+            } else if distance < Locomotion.chaseExitDistance {
+                chasing = false
+            }
+            if distance > Locomotion.moveEnterDistance {
+                moving = true
+            } else if distance < Locomotion.stopDistance {
+                moving = false
+            }
+
+            var desiredVelocity = simd_float3.zero
+            var desiredFacing: simd_float3?
+            if moving {
+                let direction = toTarget / distance
+                let ramp = (distance - Locomotion.stopDistance) * Locomotion.speedPerMeter
+                let speed = chasing
+                    ? min(Locomotion.maxSpeed, max(Locomotion.chaseFloorSpeed, ramp))
+                    : min(Locomotion.walkTopSpeed, max(0.15, ramp)) // floor at the creep
+                desiredVelocity = direction * speed
+                desiredFacing = direction
+            }
+
+            setMotionMatchingGoal(
+                entityId: zombie,
+                desiredVelocity: desiredVelocity,
+                desiredFacing: desiredFacing
+            )
+
+            // Heading is entirely motion-matched — desiredFacing steers the
+            // search, the clips' authored yaw turns the character.
+        }
+
+        private func moveTarget(deltaTime: Float) {
+            targetAngle += deltaTime * 0.35
+            let radius: Float = 3.5 + sinf(targetAngle * 0.7) * 1.5
+            let position = simd_float3(cosf(targetAngle) * radius, 0.15, sinf(targetAngle) * radius)
+            translateTo(entityId: target, position: position)
+        }
+    }
+#endif
