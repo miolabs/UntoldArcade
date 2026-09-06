@@ -30,21 +30,15 @@
             static let rightLeg = (hip: "/root/pelvis/thigh_r", knee: "/root/pelvis/thigh_r/calf_r")
         }
 
-        /// The clip vocabulary spans 0-2.55 m/s (travel injected at cook
-        /// time from the game's blend-sample speeds); the goal speed ramps
-        /// continuously with distance so the search can use the whole
-        /// ladder.
+        /// The clips carry the pack's authored root motion. Two speed
+        /// clusters — walks and chases at 0.2-0.91 m/s, hyper chases at
+        /// 2.73-5.56 — with nothing in between, so the goal snaps to a
+        /// cluster with hysteresis instead of hovering in the hole and
+        /// churning transitions; within a cluster it ramps with distance.
         private enum Locomotion {
-            // Clips carry CONTACT-MATCHED root travel: per frame the root
-            // moves by the stance foot's measured sweep, so planted feet are
-            // world-stationary by construction. Mean speeds run
-            // 0.15/0.41/0.51/0.58/0.69 (walk cluster) and 2.36/3.17/5.06
-            // (chase cluster) — nothing in between, so the goal snaps to a
-            // cluster with hysteresis instead of hovering in the hole and
-            // churning transitions.
-            static let maxSpeed: Float = 5.05 // hyperchase_5 mean travel
-            static let walkTopSpeed: Float = 0.69 // chase_2 mean travel
-            static let chaseFloorSpeed: Float = 2.36 // hyperchase_1 mean travel
+            static let maxSpeed: Float = 5.56 // hyper_5
+            static let walkTopSpeed: Float = 0.91 // chase_5
+            static let chaseFloorSpeed: Float = 2.73 // hyper_1
             static let speedPerMeter: Float = 1.0
             static let chaseEnterDistance: Float = 4.5
             static let chaseExitDistance: Float = 3.0
