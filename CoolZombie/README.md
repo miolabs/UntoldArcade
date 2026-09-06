@@ -17,18 +17,30 @@ Far from the target the character runs, closing in it walks, arrived it idles â€
 swift run CoolZombie
 ```
 
-macOS 14+. The package pins the engine to the `feature/animation_motion_matching` branch until the animation stack merges into `develop`.
+macOS 14+. The package pins the engine to the miolabs fork's `develop`
+branch (`Package.resolved` records the exact commit).
 
 ## Assets
 
-Placeholder assets while real motion data lands:
+The demo is written so assets swap without code changes: drop in new
+`.untold` clips, list them in `ZombieResources.chaseClips`, and the motion
+database rebuilds from whatever is loaded. None of the assets are in this
+repository (see the licenses below); the expected layout is:
 
-- `redplayer` rig + `idle` clip from the engine's test resources.
-- `run_forward` / `walk_forward` are generated from the engine's in-place `running` clip by injecting linear root travel (2.35 m/s and 0.94 m/s) â€” real traveling locomotion for the motion database, synthetic until mocap replaces it.
+```
+Sources/CoolZombieKit/Resources/
+  Models/ZombieAA/ZombieAA.untold
+  Models/ZombieAA/Textures/T_ZombieAA_BC_V2.png      base color
+  Models/ZombieAA/Textures/T_ZombieAA_N_V2.png       normal
+  Models/ZombieAA/Textures/T_ZombieAA_AO_R_M_V2.png  occlusion / roughness / metallic
+  Animations/<clip>/<clip>.untold                    one folder per clip
+```
 
-The demo is written so assets swap without code changes: drop in new `.untold` clips (e.g. retargeted [ChingMu MotionDecode](https://huggingface.co/datasets/CMRobot/MotionDecode) captures), list them in `configureZombieAnimation`, and the motion database rebuilds from whatever is loaded.
-
-Planned motion data attribution: *Motion data: ChingMu MotionDecode Data Openness Program* (non-commercial use with attribution, per its access terms).
+Texture paths inside a `.untold` resolve relative to the model file, so the
+`Textures/` folder must sit next to it. Cook the model with the engine's
+exporter at or after commit `872ea646`: earlier exporters collapsed packed
+textures onto the base color (the engine then sampled the albedo as a
+normal map) and exported roughness at half strength.
 
 ## License
 
@@ -43,7 +55,7 @@ clips, only the code. To run the demo:
 
 - own the pack, export the sequences as glTF, and cook them with the
   Untold Engine Blender add-on into
-  `Sources/CoolZombie/Resources/Animations/<clip>/<clip>.untold`, or
+  `Sources/CoolZombieKit/Resources/Animations/<clip>/<clip>.untold`, or
 - download a prebuilt demo binary from the Releases page, where the
   clips ship embedded in the compiled app as the license allows.
 
