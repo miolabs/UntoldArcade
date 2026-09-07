@@ -126,6 +126,10 @@ public final class ZombieChaseGame: @unchecked Sendable {
 
         zombie = createEntity()
         setEntityName(entityId: zombie, name: "Zombie")
+        // The mesh appears as soon as it loads, seconds before the clips
+        // and the motion database are ready. Park it at the spawn point
+        // now, or it sits at the world origin — inside the player's head.
+        translateTo(entityId: zombie, position: spawnPosition)
         setEntityMeshAsync(entityId: zombie, filename: "ZombieAA", withExtension: "untold") { [weak self] success in
             guard let self, success else {
                 print("CoolZombie: failed to load ZombieAA mesh")

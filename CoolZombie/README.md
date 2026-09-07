@@ -48,6 +48,33 @@ MPL-2.0, matching the engine. This demo is non-commercial.
 
 ## Animations
 
+The demo ships with two interchangeable clip sets; pick one with the
+launch argument `-clipSet pack` (default) or `-clipSet style100`.
+
+### 100STYLE Zombie (`-clipSet style100`)
+
+The Zombie style of the [100STYLE dataset](https://www.ianxmason.com/100style/)
+(Mason, Starke, Komura 2022, CC BY 4.0): one Xsens capture per locomotion
+type — idle, forward/backward/sideways walks and runs, and a transitions
+take — retargeted onto the mannequin rig and cooked with
+`Tools/retarget_100style.py`. The script imports each BVH into Blender
+headless, retargets it with a world-space delta retarget (rest poses
+aligned by bone direction, so the mannequin's A-pose meets the Xsens
+T-pose), puts the low-passed hip path and heading into the `root` bone
+(a static root for the idle), and exports through the Untold add-on:
+
+```bash
+mkdir -p ~/Downloads/100STYLE/Zombie   # Zombie_*.bvh + Frame_Cuts.csv from the dataset page
+CLIPS="ID:s100_idle,FW:s100_walk,FR:s100_run,BW:s100_walk_back,BR:s100_run_back,SW:s100_side_walk,SR:s100_side_run,TR1:s100_transitions" \
+OUT=/tmp/s100 /Applications/Blender.app/Contents/MacOS/Blender -b --python Tools/retarget_100style.py
+```
+
+then copy each `<clip>/<clip>.untold` under `Sources/CoolZombieKit/Resources/Animations/`.
+The cooked files are not committed (54 MB of binaries) but, unlike the
+pack, they may be: credit *100STYLE dataset, Mason, Starke & Komura, CC BY 4.0*.
+
+### MoCap Online Zombie Pro (`-clipSet pack`)
+
 The zombie's animation clips are cooked from [MoCap Online's Zombie Pro
 pack](https://mocaponline.com/products/ue4-zombie-pro), whose license does
 not permit redistributing animation data — so this repository contains no
