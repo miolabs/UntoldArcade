@@ -31,17 +31,21 @@ final class ZombieXRHolder: @unchecked Sendable {
     private var phaseStorage = "loading"
     private var distanceStorage: Float = .infinity
     private var trackedStorage = false
+    private var floorStorage: Float = 0
+    private var floorMeasuredStorage = false
     private var provokePending = false
     private var resetPending = false
     private var inspectionPending: ZombieChaseGame.InspectionMode?
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(phase: String, distance: Float, tracked: Bool) {
+    func setDiagnostics(phase: String, distance: Float, tracked: Bool, floor: Float, floorMeasured: Bool) {
         lock.withLock {
             phaseStorage = phase
             distanceStorage = distance
             trackedStorage = tracked
+            floorStorage = floor
+            floorMeasuredStorage = floorMeasured
         }
     }
 
@@ -50,6 +54,8 @@ final class ZombieXRHolder: @unchecked Sendable {
     var phase: String { lock.withLock { phaseStorage } }
     var distance: Float { lock.withLock { distanceStorage } }
     var headTracked: Bool { lock.withLock { trackedStorage } }
+    var floor: Float { lock.withLock { floorStorage } }
+    var floorMeasured: Bool { lock.withLock { floorMeasuredStorage } }
 
     func requestProvoke() { lock.withLock { provokePending = true } }
     func requestReset() { lock.withLock { resetPending = true } }
@@ -196,6 +202,8 @@ struct CoolZombieVisionOSXRApp: App {
                                     + (holder.distance.isFinite
                                         ? String(format: " · distance %.2f m", holder.distance)
                                         : "")
+                                    + String(format: " · floor %+.3f m (%@)", holder.floor,
+                                             holder.floorMeasured ? "detected" : "assumed")
                             )
                             .font(.footnote.monospaced())
                             .foregroundStyle(.tertiary)

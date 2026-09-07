@@ -105,9 +105,12 @@ Open `Examples/CoolZombieVisionOS/CoolZombieVisionOS.xcodeproj` and run the
 *Reset*, and an inspection mode picker — *Chase* is the game; *Roam* walks
 a circle around the spawn point at a walk/jog/run speed, *Idle* stands in
 the idle clip, *Freeze* pauses the animation on its current pose — none of
-which target you, so you can walk around the zombie and inspect it. In the
-simulator the floor is placed 1 m below the head (there is no floor
-calibration); launch arguments `-autoOpenSpace`, `-autoProvoke`,
+which target you, so you can walk around the zombie and inspect it. On the
+device the zombie stands on the floor plane ARKit detects (the world
+origin's own floor estimate can be a centimetre or two off; the footnote
+shows the height in use and whether it was detected or assumed). In the
+simulator no planes are detected and the floor is placed 1 m below the
+head; launch arguments `-autoOpenSpace`, `-autoProvoke`,
 `-autoRoam walk|jog|run` and `-autoMode idle|freeze` open the immersive
 space and start a mode without gaze-and-pinch input, for automated runs:
 

@@ -80,6 +80,12 @@ final class ZombieXRGame: @unchecked Sendable {
             }
         }
 
+        // On device the detected floor plane replaces the world origin's
+        // estimate of the floor; the simulator detects no planes and keeps
+        // the configured height.
+        if let floor = session.floorHeight() {
+            game.setFloorHeight(floor)
+        }
         let head = session.headPosition()
         game.update(deltaTime: deltaTime, playerPosition: head)
 
@@ -91,6 +97,9 @@ final class ZombieXRGame: @unchecked Sendable {
         case .idling: "idling"
         case .frozen: "frozen"
         }
-        holder.setDiagnostics(phase: phase, distance: game.distanceToPlayer, tracked: head != nil)
+        holder.setDiagnostics(
+            phase: phase, distance: game.distanceToPlayer, tracked: head != nil,
+            floor: game.floorHeight, floorMeasured: session.floorHeight() != nil
+        )
     }
 }

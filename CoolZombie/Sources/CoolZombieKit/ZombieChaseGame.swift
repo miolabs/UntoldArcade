@@ -124,10 +124,27 @@ public final class ZombieChaseGame: @unchecked Sendable {
     private var lightingApplied = false
     private var inspectionRequest: InspectionMode?
     private var roamSpeed: RoamSpeed = .walk
+    /// The floor the zombie stands on: the configured height until the host
+    /// reports a measured one (the detected floor plane on visionOS).
+    private var floorLevel: Float
+    private var appliedFloorLevel: Float
 
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
+        floorLevel = configuration.floorY
+        appliedFloorLevel = configuration.floorY
     }
+
+    /// Measured floor height in world space. The world origin's height is
+    /// only the platform's estimate of the floor and can sit a centimetre
+    /// or two off, which shows as the zombie hovering; a detected floor
+    /// plane is authoritative. Takes effect on the next frame.
+    public func setFloorHeight(_ height: Float) {
+        lock.withLock { floorLevel = height }
+    }
+
+    /// The floor currently in use (configured or measured).
+    public var floorHeight: Float { lock.withLock { floorLevel } }
 
     // MARK: - Host-facing state
 
@@ -156,7 +173,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
     }
 
     public var spawnPosition: simd_float3 {
-        simd_float3(0, configuration.floorY, -configuration.spawnDistance)
+        simd_float3(0, floorHeight, -configuration.spawnDistance)
     }
 
     // MARK: - Scene
@@ -207,9 +224,8 @@ public final class ZombieChaseGame: @unchecked Sendable {
             FootIKChainDescriptor(hipPath: Rig.leftLeg.hip, kneePath: Rig.leftLeg.knee, anklePath: Rig.leftFoot),
             FootIKChainDescriptor(hipPath: Rig.rightLeg.hip, kneePath: Rig.rightLeg.knee, anklePath: Rig.rightFoot),
         ])
-        let floor = configuration.floorY
-        setFootIKGroundQuery(entityId: zombie) { _ in
-            FootIKGroundSample(height: floor)
+        setFootIKGroundQuery(entityId: zombie) { [weak self] _ in
+            FootIKGroundSample(height: self?.floorHeight ?? 0)
         }
         setFootIKEnabled(entityId: zombie, enabled: true)
         setFootIKStanceLocking(entityId: zombie, enabled: true)
@@ -274,6 +290,19 @@ public final class ZombieChaseGame: @unchecked Sendable {
         }
         let provoked = lock.withLock { defer { provokePending = false }; return provokePending }
         let request = lock.withLock { defer { inspectionRequest = nil }; return inspectionRequest }
+
+        // Follow the measured floor: root motion only moves horizontally,
+        // so the height is ours to keep in step with the host's estimate.
+        let floorChange = lock.withLock { () -> Float? in
+            guard abs(floorLevel - appliedFloorLevel) > 0.0005 else { return nil }
+            appliedFloorLevel = floorLevel
+            return floorLevel
+        }
+        if let floorChange {
+            var position = getPosition(entityId: zombie)
+            position.y = floorChange
+            translateTo(entityId: zombie, position: position)
+        }
 
         let zombiePosition = getPosition(entityId: zombie)
         var phase = lock.withLock { phaseStorage }
