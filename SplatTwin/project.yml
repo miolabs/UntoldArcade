@@ -1,0 +1,61 @@
+name: SplatTwin
+
+packages:
+  # The swap policy is the UntoldGaussianTwins package; the engine provides the occluder shell,
+  # mesh fade and gaussianAsset link it drives.
+  UntoldEngine:
+    url: https://github.com/untoldengine/UntoldEngine.git
+    branch: develop
+  UntoldGaussianTwins:
+    url: https://github.com/miolabs/UntoldGaussianTwins.git
+    branch: main
+
+targets:
+  SplatTwin:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources
+        excludes:
+          - "SplatTwin/GameData"
+      - path: Sources/SplatTwin/GameData
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: UntoldEngine
+        product: UntoldEngine
+      - package: UntoldGaussianTwins
+        product: UntoldGaussianTwins
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.untoldengine.splattwin
+        SWIFT_VERSION: 5.0
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: NO
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: -Onone
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+        Release:
+          SWIFT_COMPILATION_MODE: wholemodule
+          SWIFT_OPTIMIZATION_LEVEL: -O
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+
+  SplatTwinTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - Tests/SplatTwinTests
+    dependencies:
+      - target: SplatTwin
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.untoldengine.splattwin.tests
+        SWIFT_VERSION: 5.0
+        GENERATE_INFOPLIST_FILE: YES
