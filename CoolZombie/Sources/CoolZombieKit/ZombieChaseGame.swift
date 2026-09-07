@@ -29,6 +29,26 @@ public final class ZombieChaseGame: @unchecked Sendable {
         case chasing
         /// Within arm's reach of the player: stopped, facing them.
         case holding
+        /// Walking a circle around the spawn point, ignoring the player —
+        /// for watching the locomotion up close without being chased.
+        case roaming
+    }
+
+    /// Roaming speeds, in metres per second. The clip set caps what the
+    /// matcher can actually deliver (100STYLE tops out at its ~1.2 m/s run).
+    public enum RoamSpeed: Float, Sendable, CaseIterable {
+        case walk = 0.6
+        case jog = 1.2
+        case run = 3.0
+
+        public init?(named name: String) {
+            switch name.lowercased() {
+            case "walk": self = .walk
+            case "jog": self = .jog
+            case "run": self = .run
+            default: return nil
+            }
+        }
     }
 
     public struct Configuration: Sendable {
@@ -49,6 +69,11 @@ public final class ZombieChaseGame: @unchecked Sendable {
         /// Gait clusters (the clip set has no coverage between them).
         public var chaseEnterDistance: Float = 4.5
         public var chaseExitDistance: Float = 3.0
+        /// Roaming circle centred on the spawn point. With the spawn 4 m
+        /// out the circle never comes closer than about 2.2 m to the player.
+        public var roamRadius: Float = 1.8
+        /// How far ahead along the circle the roaming goal sits.
+        public var roamLead: Float = 1.2
 
         public init() {}
     }
@@ -84,6 +109,8 @@ public final class ZombieChaseGame: @unchecked Sendable {
     private var provokePending = false
     private var resetPending = false
     private var lightingApplied = false
+    private var roamRequest: (enabled: Bool, speed: RoamSpeed)?
+    private var roamSpeed: RoamSpeed = .walk
 
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
@@ -101,6 +128,13 @@ public final class ZombieChaseGame: @unchecked Sendable {
 
     /// Sends the zombie back to its spawn point, waiting.
     public func reset() { lock.withLock { resetPending = true } }
+
+    /// Roaming: the zombie walks a circle around its spawn point at the
+    /// given speed and never targets the player. Turning it off hands the
+    /// zombie back to the chase.
+    public func setRoaming(_ enabled: Bool, speed: RoamSpeed = .walk) {
+        lock.withLock { roamRequest = (enabled, speed) }
+    }
 
     public var spawnPosition: simd_float3 {
         simd_float3(0, configuration.floorY, -configuration.spawnDistance)
@@ -219,26 +253,62 @@ public final class ZombieChaseGame: @unchecked Sendable {
             placeAtSpawn()
         }
         let provoked = lock.withLock { defer { provokePending = false }; return provokePending }
+        let roam = lock.withLock { defer { roamRequest = nil }; return roamRequest }
+
+        let zombiePosition = getPosition(entityId: zombie)
+        var phase = lock.withLock { phaseStorage }
+
+        if let roam {
+            if roam.enabled {
+                if phase == .waiting { startHunting() }
+                lock.withLock { roamSpeed = roam.speed }
+                phase = .roaming
+            } else if phase == .roaming {
+                phase = .chasing
+                moving = true
+            }
+        }
+
+        if phase == .roaming {
+            // Goal: a point on the circle a fixed arc ahead of the zombie.
+            // The circle is centred on the spawn point, so the zombie stays
+            // within the radius of where it stood and clear of the player.
+            let center = spawnPosition
+            var radial = zombiePosition - center
+            radial.y = 0
+            let angle = atan2(radial.z, radial.x) + configuration.roamLead / configuration.roamRadius
+            let lead = center + configuration.roamRadius * simd_float3(cos(angle), 0, sin(angle))
+            var toLead = lead - zombiePosition
+            toLead.y = 0
+            let along = simd_length(toLead) > 1e-4 ? simd_normalize(toLead) : simd_float3(0, 0, 1)
+            let speed = lock.withLock { roamSpeed.rawValue }
+            setMotionMatchingGoal(entityId: zombie, desiredVelocity: along * speed, desiredFacing: along)
+            var toPlayer = (playerPosition ?? zombiePosition) - zombiePosition
+            toPlayer.y = 0
+            lock.withLock {
+                phaseStorage = phase
+                distanceStorage = playerPosition == nil ? .infinity : simd_length(toPlayer)
+            }
+            return
+        }
 
         guard let player = playerPosition else {
             setMotionMatchingGoal(entityId: zombie, desiredVelocity: .zero, desiredFacing: nil)
             return
         }
 
-        let zombiePosition = getPosition(entityId: zombie)
         var toPlayer = player - zombiePosition
         toPlayer.y = 0
         let distance = simd_length(toPlayer)
         let direction = distance > 1e-4 ? toPlayer / distance : simd_float3(0, 0, 1)
 
-        var phase = lock.withLock { phaseStorage }
         if phase == .waiting, provoked || distance < configuration.triggerRadius {
             startHunting()
             phase = .chasing
         }
 
         switch phase {
-        case .waiting:
+        case .waiting, .roaming:
             break
         case .chasing, .holding:
             // Stop short of the player with hysteresis, and pick a gait
@@ -259,7 +329,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
 
         var desiredVelocity = simd_float3.zero
         switch phase {
-        case .waiting:
+        case .waiting, .roaming:
             break
         case .chasing:
             let ramp = (distance - configuration.stopDistance) * Locomotion.speedPerMeter

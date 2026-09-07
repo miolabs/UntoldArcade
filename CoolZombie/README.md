@@ -49,9 +49,10 @@ MPL-2.0, matching the engine. This demo is non-commercial.
 ## Animations
 
 The demo ships with two interchangeable clip sets; pick one with the
-launch argument `-clipSet pack` (default) or `-clipSet style100`.
+launch argument `-clipSet style100` (default, committed) or `-clipSet pack`
+(bring your own copy).
 
-### 100STYLE Zombie (`-clipSet style100`)
+### 100STYLE Zombie (`-clipSet style100`, default)
 
 The Zombie style of the [100STYLE dataset](https://www.ianxmason.com/100style/)
 (Mason, Starke, Komura 2022, CC BY 4.0): one Xsens capture per locomotion
@@ -70,8 +71,9 @@ OUT=/tmp/s100 /Applications/Blender.app/Contents/MacOS/Blender -b --python Tools
 ```
 
 then copy each `<clip>/<clip>.untold` under `Sources/CoolZombieKit/Resources/Animations/`.
-The cooked files are not committed (54 MB of binaries) but, unlike the
-pack, they may be: credit *100STYLE dataset, Mason, Starke & Komura, CC BY 4.0*.
+The cooked files (54 MB) are committed — CC BY 4.0 allows it; the demo
+credits *100STYLE dataset, Mason, Starke & Komura* — so a fresh clone runs
+without any pack. Only the `ZombieAA` model still has to be supplied.
 
 ### MoCap Online Zombie Pro (`-clipSet pack`)
 
@@ -99,10 +101,14 @@ for you, stopping an arm's length away. The chase logic lives in the
 feeds it the head position from ARKit world tracking.
 
 Open `Examples/CoolZombieVisionOS/CoolZombieVisionOS.xcodeproj` and run the
-`CoolZombieVisionOS-visionOS` scheme. In the simulator the floor is placed
-1 m below the head (there is no floor calibration); launch arguments
-`-autoOpenSpace` and `-autoProvoke` open the immersive space and start the
-chase without gaze-and-pinch input, for automated runs:
+`CoolZombieVisionOS-visionOS` scheme. The control window has *Provoke it*,
+*Reset*, and *Roam and ignore me* with a walk/jog/run speed — in roaming
+the zombie walks a circle around its spawn point and never targets you, so
+you can walk around it and inspect the locomotion. In the simulator the
+floor is placed 1 m below the head (there is no floor calibration); launch
+arguments `-autoOpenSpace`, `-autoProvoke` and `-autoRoam walk|jog|run`
+open the immersive space and start the chase or the roam without
+gaze-and-pinch input, for automated runs:
 
 ```bash
 xcrun simctl launch <udid> com.miolabs.CoolZombieVisionOS -autoOpenSpace -autoProvoke

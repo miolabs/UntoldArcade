@@ -33,6 +33,7 @@ final class ZombieXRHolder: @unchecked Sendable {
     private var trackedStorage = false
     private var provokePending = false
     private var resetPending = false
+    private var roamPending: (enabled: Bool, speed: ZombieChaseGame.RoamSpeed)?
 
     // MARK: Game-thread writers
 
@@ -68,6 +69,20 @@ final class ZombieXRHolder: @unchecked Sendable {
             return pending
         }
     }
+
+    /// Roaming: walk a circle around the spawn and ignore the player, so
+    /// the locomotion can be inspected without being chased.
+    func requestRoam(_ enabled: Bool, speed: ZombieChaseGame.RoamSpeed) {
+        lock.withLock { roamPending = (enabled, speed) }
+    }
+
+    func takeRoamRequest() -> (enabled: Bool, speed: ZombieChaseGame.RoamSpeed)? {
+        lock.withLock {
+            let pending = roamPending
+            roamPending = nil
+            return pending
+        }
+    }
 }
 
 struct ZombieLayerConfiguration: CompositorLayerConfiguration {
@@ -83,6 +98,8 @@ struct ZombieLayerConfiguration: CompositorLayerConfiguration {
 struct CoolZombieVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @State private var immersionStyle: ImmersionStyle = .mixed
+    @State private var roaming = false
+    @State private var roamSpeed: ZombieChaseGame.RoamSpeed = .walk
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -113,9 +130,31 @@ struct CoolZombieVisionOSXRApp: App {
                         .buttonStyle(.borderedProminent)
 
                         Button("Reset") {
+                            roaming = false
                             ZombieXRHolder.shared.requestReset()
                         }
                         .buttonStyle(.bordered)
+                    }
+
+                    // Inspection: the zombie walks a circle around its spawn
+                    // and never targets you, at the chosen speed.
+                    VStack(spacing: 10) {
+                        Toggle("Roam and ignore me", isOn: $roaming)
+                            .toggleStyle(.button)
+                            .onChange(of: roaming) { _, on in
+                                ZombieXRHolder.shared.requestRoam(on, speed: roamSpeed)
+                            }
+                        Picker("Speed", selection: $roamSpeed) {
+                            Text("Walk").tag(ZombieChaseGame.RoamSpeed.walk)
+                            Text("Jog").tag(ZombieChaseGame.RoamSpeed.jog)
+                            Text("Run").tag(ZombieChaseGame.RoamSpeed.run)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 320)
+                        .disabled(!roaming)
+                        .onChange(of: roamSpeed) { _, speed in
+                            if roaming { ZombieXRHolder.shared.requestRoam(true, speed: speed) }
+                        }
                     }
 
                     Divider()

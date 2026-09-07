@@ -54,13 +54,22 @@ final class ZombieXRGame: @unchecked Sendable {
         if holder.takeResetRequest() {
             game.reset()
         }
-        // Test hook: `-autoProvoke` starts the chase as soon as the zombie
-        // is loaded, so a simulator run shows the chase without walking.
-        if !autoProvoked, game.isReady,
-           ProcessInfo.processInfo.arguments.contains("-autoProvoke")
-        {
-            autoProvoked = true
-            game.provoke()
+        if let roam = holder.takeRoamRequest() {
+            game.setRoaming(roam.enabled, speed: roam.speed)
+        }
+        // Test hooks: `-autoProvoke` starts the chase as soon as the zombie
+        // is loaded, so a simulator run shows the chase without walking;
+        // `-autoRoam walk|jog|run` starts roaming instead.
+        if !autoProvoked, game.isReady {
+            let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("-autoProvoke") {
+                autoProvoked = true
+                game.provoke()
+            } else if let index = arguments.firstIndex(of: "-autoRoam") {
+                autoProvoked = true
+                let speed = index + 1 < arguments.count ? ZombieChaseGame.RoamSpeed(named: arguments[index + 1]) : nil
+                game.setRoaming(true, speed: speed ?? .walk)
+            }
         }
 
         let head = session.headPosition()
@@ -70,6 +79,7 @@ final class ZombieXRGame: @unchecked Sendable {
         case .waiting: game.isReady ? "waiting" : "loading"
         case .chasing: "chasing"
         case .holding: "holding"
+        case .roaming: "roaming"
         }
         holder.setDiagnostics(phase: phase, distance: game.distanceToPlayer, tracked: head != nil)
     }

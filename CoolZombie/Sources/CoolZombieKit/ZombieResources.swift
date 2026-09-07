@@ -18,11 +18,12 @@ public enum ZombieResources {
         Bundle.module.resourceURL
     }
 
-    /// Which motion data drives the demo. `pack` is MoCap Online's Zombie
-    /// Pro (binary-only license); `style100` is the Zombie style of the
-    /// 100STYLE dataset (CC BY 4.0), retargeted onto the same rig. Pick
-    /// with the launch argument `-clipSet style100`; the pack is the
-    /// default.
+    /// Which motion data drives the demo. `style100` is the Zombie style of
+    /// the 100STYLE dataset (CC BY 4.0) retargeted onto the rig — the
+    /// default, and the clips ship in the repository. `pack` is MoCap
+    /// Online's Zombie Pro (binary-only license, not in the repository;
+    /// faster sprints and pivots). Pick with the launch argument
+    /// `-clipSet pack`.
     public enum ClipSet: String, Sendable {
         case pack
         case style100
@@ -35,7 +36,7 @@ public enum ZombieResources {
         {
             return set
         }
-        return .pack
+        return .style100
     }
 
     /// The calm idle played directly while the zombie waits to be provoked
