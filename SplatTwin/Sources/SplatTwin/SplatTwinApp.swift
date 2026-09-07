@@ -40,6 +40,10 @@ final class DemoHost: ObservableObject {
         didSet { gameScene?.showcase.crossFadeDuration = crossFadeDuration }
     }
 
+    @Published var exposureOffsetEV: Float = TwinShowcase.defaultExposureOffsetEV {
+        didSet { gameScene?.showcase.exposureOffsetEV = exposureOffsetEV }
+    }
+
     init() {
         guard let renderer = UntoldRenderer.create() else {
             self.renderer = nil
@@ -113,6 +117,11 @@ struct HUDView: View {
             .font(.caption)
             LabeledContent("Fade \(Int(host.crossFadeDuration * 1000)) ms") {
                 Slider(value: $host.crossFadeDuration, in: 0.1 ... 1.0)
+                    .frame(width: 140)
+            }
+            .font(.caption)
+            LabeledContent("Splat exposure \(host.exposureOffsetEV >= 0 ? "+" : "")\(host.exposureOffsetEV, format: .number.precision(.fractionLength(1))) EV") {
+                Slider(value: $host.exposureOffsetEV, in: -2 ... 2)
                     .frame(width: 140)
             }
             .font(.caption)

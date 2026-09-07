@@ -36,13 +36,21 @@ enum SplatSynthesizer {
         }
     }
 
-    /// Where the capture's light came from; baked into the splat colours.
-    static let bakedLightDirection = simd_normalize(SIMD3<Float>(0.35, 1.0, 0.55))
+    /// The light baked into the splat colours when the caller has no scene light to match;
+    /// the demo passes its sun's direction so the "capture" agrees with the lit mesh.
+    static let defaultLightDirection = simd_normalize(SIMD3<Float>(0.35, 1.0, 0.55))
 
     /// Splats over the surface of `shape`. `spacing` is the distance between neighbouring splat
     /// centres in metres; each splat is a flat disc a little wider than the spacing so the cover
     /// closes, lying in the surface with its thin axis along the normal.
-    static func splats(for shape: Shape, baseColor: SIMD3<Float>, spacing: Float, seed: UInt64 = 1) -> [UntoldGSSplat] {
+    static func splats(
+        for shape: Shape,
+        baseColor: SIMD3<Float>,
+        spacing: Float,
+        lightDirection: SIMD3<Float> = defaultLightDirection,
+        seed: UInt64 = 1
+    ) -> [UntoldGSSplat] {
+        let light = simd_normalize(lightDirection)
         var rng = SplitMix64(seed: seed)
         var result: [UntoldGSSplat] = []
 
@@ -57,7 +65,7 @@ enum SplatSynthesizer {
                 position: position + offset,
                 scale: SIMD3(spacing * 0.8, spacing * 0.8, spacing * 0.12),
                 rotation: rotation(alignedTo: unitNormal),
-                color: shaded(baseColor, normal: unitNormal, checker: checker),
+                color: shaded(baseColor, normal: unitNormal, lightDirection: light, checker: checker),
                 opacity: 0.95
             ))
         }
@@ -132,13 +140,20 @@ enum SplatSynthesizer {
 
     /// Writes the twin of `shape` to `directory/<name>.untoldgs` unless a file with the same
     /// name and version is already there, and returns its URL.
-    static func twinFile(for shape: Shape, baseColor: SIMD3<Float>, spacing: Float, name: String, in directory: URL) throws -> URL {
+    static func twinFile(
+        for shape: Shape,
+        baseColor: SIMD3<Float>,
+        spacing: Float,
+        lightDirection: SIMD3<Float> = defaultLightDirection,
+        name: String,
+        in directory: URL
+    ) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("\(name)-v\(fileVersion).untoldgs")
         if FileManager.default.fileExists(atPath: url.path) {
             return url
         }
-        let splats = splats(for: shape, baseColor: baseColor, spacing: spacing)
+        let splats = splats(for: shape, baseColor: baseColor, spacing: spacing, lightDirection: lightDirection)
         var options = UntoldGSWriteOptions()
         options.boundingBoxMin = shape.boundingBox.min
         options.boundingBoxMax = shape.boundingBox.max
@@ -148,14 +163,16 @@ enum SplatSynthesizer {
 
     /// Bump when the synthesis changes so stale cached files are regenerated.
     static let fileVersion = 1
+    /// Shade of a face turned away from the light: a capture keeps its bounce light.
+    static let ambientFloor: Float = 0.45
 
     // MARK: - Helpers
 
     /// Lambert from the baked light plus an ambient floor, with a soft checker so the "capture"
     /// has some texture; colours are display-referred like a real capture's.
-    static func shaded(_ base: SIMD3<Float>, normal: SIMD3<Float>, checker: Float) -> SIMD3<Float> {
-        let lambert = max(0, simd_dot(normal, bakedLightDirection))
-        let shade = 0.38 + 0.62 * lambert
+    static func shaded(_ base: SIMD3<Float>, normal: SIMD3<Float>, lightDirection: SIMD3<Float>, checker: Float) -> SIMD3<Float> {
+        let lambert = max(0, simd_dot(normal, simd_normalize(lightDirection)))
+        let shade = ambientFloor + (1 - ambientFloor) * lambert
         let texture: Float = 1 - 0.08 * checker
         return simd_clamp(base * shade * texture, SIMD3(repeating: 0), SIMD3(repeating: 1))
     }

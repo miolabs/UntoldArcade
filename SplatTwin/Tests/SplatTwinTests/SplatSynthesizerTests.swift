@@ -48,10 +48,16 @@ final class SplatSynthesizerTests: XCTestCase {
     }
 
     func testShadingBakesTheLightIn() {
-        let lit = SplatSynthesizer.shaded(SIMD3(repeating: 1), normal: SplatSynthesizer.bakedLightDirection, checker: 0)
-        let dark = SplatSynthesizer.shaded(SIMD3(repeating: 1), normal: -SplatSynthesizer.bakedLightDirection, checker: 0)
+        let light = simd_normalize(SIMD3<Float>(0.2, 1, 0.4))
+        let lit = SplatSynthesizer.shaded(SIMD3(repeating: 1), normal: light, lightDirection: light, checker: 0)
+        let dark = SplatSynthesizer.shaded(SIMD3(repeating: 1), normal: -light, lightDirection: light, checker: 0)
         XCTAssertEqual(lit.x, 1, accuracy: 1e-5, "Facing the light: full colour")
-        XCTAssertEqual(dark.x, 0.38, accuracy: 1e-5, "Facing away: the ambient floor")
+        XCTAssertEqual(dark.x, SplatSynthesizer.ambientFloor, accuracy: 1e-5, "Facing away: the ambient floor")
+
+        let towardsLight = SplatSynthesizer.splats(for: .cube(extent: 1), baseColor: SIMD3(repeating: 1), spacing: 0.5, lightDirection: SIMD3(0, 1, 0))
+        let top = towardsLight.filter { $0.position.y > 0.49 }.map(\.color.x)
+        let bottom = towardsLight.filter { $0.position.y < -0.49 }.map(\.color.x)
+        XCTAssertGreaterThan(top.min()!, bottom.max()!, "The face turned to the light is the bright one")
     }
 
     func testTwinFileIsWrittenOnceAndReadsBackWithTheSplatCount() throws {

@@ -29,9 +29,9 @@ final class GameScene {
     init() {
         configureEngine()
         makeCamera()
-        makeSunLight()
+        let sun = makeSunLight()
         GaussianTwinSystem.shared.install()
-        showcase.build()
+        showcase.build(lightDirection: getDirectionalLightShaderDirection(entityId: sun))
         setSceneReady(true)
     }
 
@@ -92,7 +92,7 @@ final class GameScene {
         setOrbitOffset(entityId: camera, uTargetOffset: Constants.orbitTargetOffset)
     }
 
-    private func makeSunLight() {
+    private func makeSunLight() -> EntityID {
         let sun = createEntity()
         setEntityName(entityId: sun, name: "Key Light")
         createDirLight(entityId: sun)
@@ -100,5 +100,6 @@ final class GameScene {
         setLight(entityId: sun, .color(SIMD3(1.0, 0.94, 0.86)))
         setLight(entityId: sun, .intensity(1.6))
         setLight(entityId: sun, .directional(.active))
+        return sun
     }
 }
