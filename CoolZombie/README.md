@@ -102,13 +102,14 @@ feeds it the head position from ARKit world tracking.
 
 Open `Examples/CoolZombieVisionOS/CoolZombieVisionOS.xcodeproj` and run the
 `CoolZombieVisionOS-visionOS` scheme. The control window has *Provoke it*,
-*Reset*, and *Roam and ignore me* with a walk/jog/run speed — in roaming
-the zombie walks a circle around its spawn point and never targets you, so
-you can walk around it and inspect the locomotion. In the simulator the
-floor is placed 1 m below the head (there is no floor calibration); launch
-arguments `-autoOpenSpace`, `-autoProvoke` and `-autoRoam walk|jog|run`
-open the immersive space and start the chase or the roam without
-gaze-and-pinch input, for automated runs:
+*Reset*, and an inspection mode picker — *Chase* is the game; *Roam* walks
+a circle around the spawn point at a walk/jog/run speed, *Idle* stands in
+the idle clip, *Freeze* pauses the animation on its current pose — none of
+which target you, so you can walk around the zombie and inspect it. In the
+simulator the floor is placed 1 m below the head (there is no floor
+calibration); launch arguments `-autoOpenSpace`, `-autoProvoke`,
+`-autoRoam walk|jog|run` and `-autoMode idle|freeze` open the immersive
+space and start a mode without gaze-and-pinch input, for automated runs:
 
 ```bash
 xcrun simctl launch <udid> com.miolabs.CoolZombieVisionOS -autoOpenSpace -autoProvoke

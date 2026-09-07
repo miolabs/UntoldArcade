@@ -54,12 +54,13 @@ final class ZombieXRGame: @unchecked Sendable {
         if holder.takeResetRequest() {
             game.reset()
         }
-        if let roam = holder.takeRoamRequest() {
-            game.setRoaming(roam.enabled, speed: roam.speed)
+        if let mode = holder.takeInspectionRequest() {
+            game.setInspection(mode)
         }
         // Test hooks: `-autoProvoke` starts the chase as soon as the zombie
         // is loaded, so a simulator run shows the chase without walking;
-        // `-autoRoam walk|jog|run` starts roaming instead.
+        // `-autoRoam walk|jog|run` starts roaming, `-autoMode idle|freeze`
+        // the other inspection modes.
         if !autoProvoked, game.isReady {
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-autoProvoke") {
@@ -68,7 +69,14 @@ final class ZombieXRGame: @unchecked Sendable {
             } else if let index = arguments.firstIndex(of: "-autoRoam") {
                 autoProvoked = true
                 let speed = index + 1 < arguments.count ? ZombieChaseGame.RoamSpeed(named: arguments[index + 1]) : nil
-                game.setRoaming(true, speed: speed ?? .walk)
+                game.setInspection(.roaming(speed ?? .walk))
+            } else if let index = arguments.firstIndex(of: "-autoMode"), index + 1 < arguments.count {
+                autoProvoked = true
+                switch arguments[index + 1] {
+                case "idle": game.setInspection(.idling)
+                case "freeze": game.setInspection(.frozen)
+                default: break
+                }
             }
         }
 
@@ -80,6 +88,8 @@ final class ZombieXRGame: @unchecked Sendable {
         case .chasing: "chasing"
         case .holding: "holding"
         case .roaming: "roaming"
+        case .idling: "idling"
+        case .frozen: "frozen"
         }
         holder.setDiagnostics(phase: phase, distance: game.distanceToPlayer, tracked: head != nil)
     }

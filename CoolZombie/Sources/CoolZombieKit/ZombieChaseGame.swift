@@ -32,6 +32,19 @@ public final class ZombieChaseGame: @unchecked Sendable {
         /// Walking a circle around the spawn point, ignoring the player —
         /// for watching the locomotion up close without being chased.
         case roaming
+        /// Standing in the idle clip, ignoring the player.
+        case idling
+        /// Animation paused: the current pose held, nothing moves.
+        case frozen
+    }
+
+    /// Inspection modes for looking at the character on the headset
+    /// without being chased. `chase` is the normal game.
+    public enum InspectionMode: Sendable, Equatable {
+        case chase
+        case roaming(RoamSpeed)
+        case idling
+        case frozen
     }
 
     /// Roaming speeds, in metres per second. The clip set caps what the
@@ -109,7 +122,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
     private var provokePending = false
     private var resetPending = false
     private var lightingApplied = false
-    private var roamRequest: (enabled: Bool, speed: RoamSpeed)?
+    private var inspectionRequest: InspectionMode?
     private var roamSpeed: RoamSpeed = .walk
 
     public init(configuration: Configuration = Configuration()) {
@@ -129,11 +142,17 @@ public final class ZombieChaseGame: @unchecked Sendable {
     /// Sends the zombie back to its spawn point, waiting.
     public func reset() { lock.withLock { resetPending = true } }
 
-    /// Roaming: the zombie walks a circle around its spawn point at the
-    /// given speed and never targets the player. Turning it off hands the
-    /// zombie back to the chase.
+    /// Switches inspection mode: roaming walks a circle around the spawn
+    /// point at the given speed, idling stands in the idle clip, frozen
+    /// pauses the animation on its current pose — none of them target the
+    /// player. `chase` hands the zombie back to the game.
+    public func setInspection(_ mode: InspectionMode) {
+        lock.withLock { inspectionRequest = mode }
+    }
+
+    /// Convenience for the roaming toggle.
     public func setRoaming(_ enabled: Bool, speed: RoamSpeed = .walk) {
-        lock.withLock { roamRequest = (enabled, speed) }
+        setInspection(enabled ? .roaming(speed) : .chase)
     }
 
     public var spawnPosition: simd_float3 {
@@ -219,6 +238,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
         // Waiting is the one scripted state: a calm idle plays directly and
         // motion matching stays off until the zombie is provoked — a zero
         // goal would have it pick the aggressive attack idles instead.
+        pauseAnimationComponent(entityId: zombie, isPaused: false)
         setMotionMatchingEnabled(entityId: zombie, enabled: false)
         changeAnimation(entityId: zombie, name: ZombieResources.waitingClip, transitionHalflife: 0.3)
         lock.withLock {
@@ -253,20 +273,48 @@ public final class ZombieChaseGame: @unchecked Sendable {
             placeAtSpawn()
         }
         let provoked = lock.withLock { defer { provokePending = false }; return provokePending }
-        let roam = lock.withLock { defer { roamRequest = nil }; return roamRequest }
+        let request = lock.withLock { defer { inspectionRequest = nil }; return inspectionRequest }
 
         let zombiePosition = getPosition(entityId: zombie)
         var phase = lock.withLock { phaseStorage }
 
-        if let roam {
-            if roam.enabled {
-                if phase == .waiting { startHunting() }
-                lock.withLock { roamSpeed = roam.speed }
+        if let request {
+            let inspecting = phase == .roaming || phase == .idling || phase == .frozen
+            pauseAnimationComponent(entityId: zombie, isPaused: false)
+            switch request {
+            case let .roaming(speed):
+                if phase == .waiting || phase == .idling { startHunting() }
+                lock.withLock { roamSpeed = speed }
                 phase = .roaming
-            } else if phase == .roaming {
-                phase = .chasing
-                moving = true
+            case .idling:
+                setMotionMatchingEnabled(entityId: zombie, enabled: false)
+                changeAnimation(entityId: zombie, name: ZombieResources.waitingClip, transitionHalflife: 0.3)
+                phase = .idling
+            case .frozen:
+                pauseAnimationComponent(entityId: zombie, isPaused: true)
+                phase = .frozen
+            case .chase:
+                if inspecting {
+                    startHunting()
+                    phase = .chasing
+                    moving = true
+                }
             }
+        }
+
+        if phase == .idling || phase == .frozen {
+            // Nothing to steer: idling plays the idle clip directly and
+            // frozen holds the pose. Keep the distance readout alive.
+            if phase == .idling {
+                setMotionMatchingGoal(entityId: zombie, desiredVelocity: .zero, desiredFacing: nil)
+            }
+            var toPlayer = (playerPosition ?? zombiePosition) - zombiePosition
+            toPlayer.y = 0
+            lock.withLock {
+                phaseStorage = phase
+                distanceStorage = playerPosition == nil ? .infinity : simd_length(toPlayer)
+            }
+            return
         }
 
         if phase == .roaming {
@@ -308,7 +356,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
         }
 
         switch phase {
-        case .waiting, .roaming:
+        case .waiting, .roaming, .idling, .frozen:
             break
         case .chasing, .holding:
             // Stop short of the player with hysteresis, and pick a gait
@@ -329,7 +377,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
 
         var desiredVelocity = simd_float3.zero
         switch phase {
-        case .waiting, .roaming:
+        case .waiting, .roaming, .idling, .frozen:
             break
         case .chasing:
             let ramp = (distance - configuration.stopDistance) * Locomotion.speedPerMeter

@@ -33,7 +33,7 @@ final class ZombieXRHolder: @unchecked Sendable {
     private var trackedStorage = false
     private var provokePending = false
     private var resetPending = false
-    private var roamPending: (enabled: Bool, speed: ZombieChaseGame.RoamSpeed)?
+    private var inspectionPending: ZombieChaseGame.InspectionMode?
 
     // MARK: Game-thread writers
 
@@ -70,17 +70,36 @@ final class ZombieXRHolder: @unchecked Sendable {
         }
     }
 
-    /// Roaming: walk a circle around the spawn and ignore the player, so
-    /// the locomotion can be inspected without being chased.
-    func requestRoam(_ enabled: Bool, speed: ZombieChaseGame.RoamSpeed) {
-        lock.withLock { roamPending = (enabled, speed) }
+    /// Inspection modes (roam, idle, freeze) ignore the player so the
+    /// character can be looked at without being chased.
+    func requestInspection(_ mode: ZombieChaseGame.InspectionMode) {
+        lock.withLock { inspectionPending = mode }
     }
 
-    func takeRoamRequest() -> (enabled: Bool, speed: ZombieChaseGame.RoamSpeed)? {
+    func takeInspectionRequest() -> ZombieChaseGame.InspectionMode? {
         lock.withLock {
-            let pending = roamPending
-            roamPending = nil
+            let pending = inspectionPending
+            inspectionPending = nil
             return pending
+        }
+    }
+}
+
+/// Control-window choice; maps onto the game's inspection modes.
+enum InspectionChoice: String, CaseIterable, Identifiable {
+    case chase = "Chase"
+    case roam = "Roam"
+    case idle = "Idle"
+    case freeze = "Freeze"
+
+    var id: String { rawValue }
+
+    func mode(speed: ZombieChaseGame.RoamSpeed) -> ZombieChaseGame.InspectionMode {
+        switch self {
+        case .chase: return .chase
+        case .roam: return .roaming(speed)
+        case .idle: return .idling
+        case .freeze: return .frozen
         }
     }
 }
@@ -98,7 +117,7 @@ struct ZombieLayerConfiguration: CompositorLayerConfiguration {
 struct CoolZombieVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @State private var immersionStyle: ImmersionStyle = .mixed
-    @State private var roaming = false
+    @State private var inspection: InspectionChoice = .chase
     @State private var roamSpeed: ZombieChaseGame.RoamSpeed = .walk
 
     var body: some SwiftUI.Scene {
@@ -130,20 +149,26 @@ struct CoolZombieVisionOSXRApp: App {
                         .buttonStyle(.borderedProminent)
 
                         Button("Reset") {
-                            roaming = false
+                            inspection = .chase
                             ZombieXRHolder.shared.requestReset()
                         }
                         .buttonStyle(.bordered)
                     }
 
-                    // Inspection: the zombie walks a circle around its spawn
-                    // and never targets you, at the chosen speed.
+                    // Inspection: none of these modes target you. Roam walks
+                    // a circle around the spawn at the chosen speed, Idle
+                    // stands in the idle clip, Freeze holds the current pose.
                     VStack(spacing: 10) {
-                        Toggle("Roam and ignore me", isOn: $roaming)
-                            .toggleStyle(.button)
-                            .onChange(of: roaming) { _, on in
-                                ZombieXRHolder.shared.requestRoam(on, speed: roamSpeed)
+                        Picker("Mode", selection: $inspection) {
+                            ForEach(InspectionChoice.allCases) { choice in
+                                Text(choice.rawValue).tag(choice)
                             }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        .onChange(of: inspection) { _, choice in
+                            ZombieXRHolder.shared.requestInspection(choice.mode(speed: roamSpeed))
+                        }
                         Picker("Speed", selection: $roamSpeed) {
                             Text("Walk").tag(ZombieChaseGame.RoamSpeed.walk)
                             Text("Jog").tag(ZombieChaseGame.RoamSpeed.jog)
@@ -151,9 +176,9 @@ struct CoolZombieVisionOSXRApp: App {
                         }
                         .pickerStyle(.segmented)
                         .frame(maxWidth: 320)
-                        .disabled(!roaming)
+                        .disabled(inspection != .roam)
                         .onChange(of: roamSpeed) { _, speed in
-                            if roaming { ZombieXRHolder.shared.requestRoam(true, speed: speed) }
+                            if inspection == .roam { ZombieXRHolder.shared.requestInspection(.roaming(speed)) }
                         }
                     }
 
