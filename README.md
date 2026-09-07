@@ -7,6 +7,7 @@ The demos included are:
 
 - 🏠 **HomeDesign** – a visionOS mixed-reality demo: pick a pre-furnished floor plan, place it on your real floor, and walk through it at full scale or from a bird's-eye view. Also shows off the engine's Rendering Extension system by integrating **CoolWater** (below) to render a real-time animated pool.
 - 🛠️ **SceneBuilder** – a declarative scene-building demo using SwiftUI-style syntax to construct 3D scenes programmatically.
+- 🫧 **SplatTwin** – a macOS demo of mesh-to-Gaussian-splat twins: objects cross-fade from their mesh to a splat capture as you walk up to them and back as you leave, with the mesh kept as a shrunk depth-only occluder shell. Built on the [UntoldGaussianTwins](https://github.com/miolabs/UntoldGaussianTwins) package.
 
 ### Rendering Extensions
 
@@ -42,11 +43,14 @@ open HomeDesign/HomeDesign.xcodeproj
 # For SceneBuilder
 open SceneBuilder/SceneBuilder.xcodeproj
 
+# For SplatTwin (macOS)
+open SplatTwin/SplatTwin.xcodeproj
+
 # For the CoolWater rendering extension's own example (visionOS)
 open CoolWater/Examples/CoolWaterVisionOS/CoolWaterVisionOS.xcodeproj
 ```
 
-> HomeDesign's Xcode project is generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). If you add/remove source files or change dependencies, re-run `xcodegen generate` inside `HomeDesign/` before opening/building.
+> The HomeDesign and SplatTwin Xcode projects are generated from their `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). If you add/remove source files or change dependencies, re-run `xcodegen generate` inside the demo's folder before opening/building.
 
 ### 3. Build and run
 - Select your target device (Mac, iPhone, iPad, or Vision Pro simulator)
@@ -71,9 +75,12 @@ UntoldArcade/
 │   ├── Sources/                 # Extension source (shaders, simulation, render passes)
 │   ├── Examples/                # Standalone visionOS consumer example
 │   └── Tests/                   # Unit tests
-└── SceneBuilder/                # Declarative scene-building demo
-    ├── Sources/                  # Demo source code
-    └── Resources/                 # Demo assets
+├── SceneBuilder/                # Declarative scene-building demo
+│   ├── Sources/                  # Demo source code
+│   └── Resources/                 # Demo assets
+└── SplatTwin/                   # macOS mesh-to-splat twin demo
+    ├── Sources/                  # App source code; GameData/Twins takes an optional real capture
+    └── Tests/                    # Unit tests
 ```
 
 ## 🤝 Contributing

@@ -1,0 +1,492 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00B5D7236D459D933FE55287 /* GameScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6948C9B6F33B7524D70DE863 /* GameScene.swift */; };
+		0CB45EAAC0CC40E0E9AAEB21 /* SplatSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 741A7D8DDD102B8CA3453888 /* SplatSynthesizer.swift */; };
+		1483584F7C92D351CF0A9DD8 /* UntoldGaussianTwins in Frameworks */ = {isa = PBXBuildFile; productRef = 53F67B54E1AE8FE7DEDA1FAF /* UntoldGaussianTwins */; };
+		23971D85CD771A99E1D2F666 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = BDEAF06BC243E66EEC6B5264 /* UntoldEngine */; };
+		41F36BF56EF5743F3F4E7461 /* TwinShowcase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5513D239615EB2A0DF30165 /* TwinShowcase.swift */; };
+		4B4AE7FE3C3329E52B64AF28 /* GameData in Resources */ = {isa = PBXBuildFile; fileRef = 37B479C124E94E2243140AED /* GameData */; };
+		87F7F9D45F773F99471722C7 /* SplatTwinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 575835182E028019A4D47E6A /* SplatTwinApp.swift */; };
+		938E3A944A885C9D58CC6D68 /* SplatSynthesizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DED1A56E57C26CAD845ACCAE /* SplatSynthesizerTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		91A6B976C8706D6B969F5F54 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9DFE4CE619423449E646AB78 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F84F54F47701BC4A6FAA1639;
+			remoteInfo = SplatTwin;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		37B479C124E94E2243140AED /* GameData */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GameData; path = Sources/SplatTwin/GameData; sourceTree = SOURCE_ROOT; };
+		425C967FD66FFD45240210C7 /* SplatTwinTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SplatTwinTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		575835182E028019A4D47E6A /* SplatTwinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatTwinApp.swift; sourceTree = "<group>"; };
+		6948C9B6F33B7524D70DE863 /* GameScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameScene.swift; sourceTree = "<group>"; };
+		741A7D8DDD102B8CA3453888 /* SplatSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatSynthesizer.swift; sourceTree = "<group>"; };
+		B79C89171E8FE9BF01D10AB0 /* SplatTwin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SplatTwin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DED1A56E57C26CAD845ACCAE /* SplatSynthesizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatSynthesizerTests.swift; sourceTree = "<group>"; };
+		E5513D239615EB2A0DF30165 /* TwinShowcase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TwinShowcase.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1E4C91610C76F408570AA876 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				23971D85CD771A99E1D2F666 /* UntoldEngine in Frameworks */,
+				1483584F7C92D351CF0A9DD8 /* UntoldGaussianTwins in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		466ACEEE8FF4579217C5A9BB /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B79C89171E8FE9BF01D10AB0 /* SplatTwin.app */,
+				425C967FD66FFD45240210C7 /* SplatTwinTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		55AA24AA207809AAB6A73FF3 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				6DD94C30D142A3FCF08944B8 /* SplatTwin */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		6DD94C30D142A3FCF08944B8 /* SplatTwin */ = {
+			isa = PBXGroup;
+			children = (
+				6948C9B6F33B7524D70DE863 /* GameScene.swift */,
+				741A7D8DDD102B8CA3453888 /* SplatSynthesizer.swift */,
+				575835182E028019A4D47E6A /* SplatTwinApp.swift */,
+				E5513D239615EB2A0DF30165 /* TwinShowcase.swift */,
+			);
+			path = SplatTwin;
+			sourceTree = "<group>";
+		};
+		7DE7DCB938EE387AF6BB77D8 = {
+			isa = PBXGroup;
+			children = (
+				37B479C124E94E2243140AED /* GameData */,
+				55AA24AA207809AAB6A73FF3 /* Sources */,
+				FB0A73C29ED5C65D2BA718BD /* SplatTwinTests */,
+				466ACEEE8FF4579217C5A9BB /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FB0A73C29ED5C65D2BA718BD /* SplatTwinTests */ = {
+			isa = PBXGroup;
+			children = (
+				DED1A56E57C26CAD845ACCAE /* SplatSynthesizerTests.swift */,
+			);
+			name = SplatTwinTests;
+			path = Tests/SplatTwinTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		98237C22BB7B9816EBF660E1 /* SplatTwinTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F8592A2B0F04BCD4A875EAD0 /* Build configuration list for PBXNativeTarget "SplatTwinTests" */;
+			buildPhases = (
+				D46AF328253A61DE6B4CE095 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				746CE44BF62B56AB4E010095 /* PBXTargetDependency */,
+			);
+			name = SplatTwinTests;
+			packageProductDependencies = (
+			);
+			productName = SplatTwinTests;
+			productReference = 425C967FD66FFD45240210C7 /* SplatTwinTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		F84F54F47701BC4A6FAA1639 /* SplatTwin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D36B3F5CD5FBC06CB1302B7F /* Build configuration list for PBXNativeTarget "SplatTwin" */;
+			buildPhases = (
+				BDB641CF1AC3995E42959F20 /* Sources */,
+				0415109D8A2356E257EF179F /* Resources */,
+				1E4C91610C76F408570AA876 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SplatTwin;
+			packageProductDependencies = (
+				BDEAF06BC243E66EEC6B5264 /* UntoldEngine */,
+				53F67B54E1AE8FE7DEDA1FAF /* UntoldGaussianTwins */,
+			);
+			productName = SplatTwin;
+			productReference = B79C89171E8FE9BF01D10AB0 /* SplatTwin.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9DFE4CE619423449E646AB78 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					F84F54F47701BC4A6FAA1639 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = CCD2BF7C4A05B8A88F8FF5AE /* Build configuration list for PBXProject "SplatTwin" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 7DE7DCB938EE387AF6BB77D8;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CAB66B0A46142FE1F442DEEB /* XCRemoteSwiftPackageReference "UntoldEngine" */,
+				054F3BAF03830B650E6E52F9 /* XCRemoteSwiftPackageReference "UntoldGaussianTwins" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 466ACEEE8FF4579217C5A9BB /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F84F54F47701BC4A6FAA1639 /* SplatTwin */,
+				98237C22BB7B9816EBF660E1 /* SplatTwinTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0415109D8A2356E257EF179F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B4AE7FE3C3329E52B64AF28 /* GameData in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BDB641CF1AC3995E42959F20 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				00B5D7236D459D933FE55287 /* GameScene.swift in Sources */,
+				0CB45EAAC0CC40E0E9AAEB21 /* SplatSynthesizer.swift in Sources */,
+				87F7F9D45F773F99471722C7 /* SplatTwinApp.swift in Sources */,
+				41F36BF56EF5743F3F4E7461 /* TwinShowcase.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D46AF328253A61DE6B4CE095 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				938E3A944A885C9D58CC6D68 /* SplatSynthesizerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		746CE44BF62B56AB4E010095 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F84F54F47701BC4A6FAA1639 /* SplatTwin */;
+			targetProxy = 91A6B976C8706D6B969F5F54 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		08E52614CF4BC20EB885C67F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		52A6F813849456F1DABFFF85 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.splattwin;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		70A35BE2B0445977072DA99A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.splattwin;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		C28748EB80C339BA0ACB6B6B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		E63B8CD2EC4D6A640C9BE299 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.splattwin.tests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SplatTwin.app/Contents/MacOS/SplatTwin";
+			};
+			name = Debug;
+		};
+		EA4B933F4CC80F4F59548B39 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.splattwin.tests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SplatTwin.app/Contents/MacOS/SplatTwin";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CCD2BF7C4A05B8A88F8FF5AE /* Build configuration list for PBXProject "SplatTwin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				08E52614CF4BC20EB885C67F /* Debug */,
+				C28748EB80C339BA0ACB6B6B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D36B3F5CD5FBC06CB1302B7F /* Build configuration list for PBXNativeTarget "SplatTwin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				70A35BE2B0445977072DA99A /* Debug */,
+				52A6F813849456F1DABFFF85 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F8592A2B0F04BCD4A875EAD0 /* Build configuration list for PBXNativeTarget "SplatTwinTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E63B8CD2EC4D6A640C9BE299 /* Debug */,
+				EA4B933F4CC80F4F59548B39 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		054F3BAF03830B650E6E52F9 /* XCRemoteSwiftPackageReference "UntoldGaussianTwins" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/miolabs/UntoldGaussianTwins.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		CAB66B0A46142FE1F442DEEB /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/miolabs/UntoldEngine.git";
+			requirement = {
+				branch = develop;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		53F67B54E1AE8FE7DEDA1FAF /* UntoldGaussianTwins */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 054F3BAF03830B650E6E52F9 /* XCRemoteSwiftPackageReference "UntoldGaussianTwins" */;
+			productName = UntoldGaussianTwins;
+		};
+		BDEAF06BC243E66EEC6B5264 /* UntoldEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CAB66B0A46142FE1F442DEEB /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			productName = UntoldEngine;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 9DFE4CE619423449E646AB78 /* Project object */;
+}
