@@ -1,10 +1,10 @@
 name: SplatTwin
 
 packages:
-  # The occluder shell, mesh fade and gaussianAsset link the swap builds on are on the fork's
-  # develop until they ship upstream; the swap policy is the UntoldGaussianTwins package.
+  # The engine's develop branch carries the occluder shell, mesh fade and gaussianAsset link the
+  # swap builds on; the swap policy is the UntoldGaussianTwins package.
   UntoldEngine:
-    url: https://github.com/miolabs/UntoldEngine.git
+    url: https://github.com/untoldengine/UntoldEngine.git
     branch: develop
   UntoldGaussianTwins:
     url: https://github.com/miolabs/UntoldGaussianTwins.git
