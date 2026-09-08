@@ -164,7 +164,7 @@
 			mainGroup = 7DE7DCB938EE387AF6BB77D8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				CAB66B0A46142FE1F442DEEB /* XCRemoteSwiftPackageReference "UntoldEngine" */,
+				4A724613F8CCBA408912F275 /* XCRemoteSwiftPackageReference "UntoldEngine" */,
 				054F3BAF03830B650E6E52F9 /* XCRemoteSwiftPackageReference "UntoldGaussianTwins" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -465,9 +465,9 @@
 				kind = branch;
 			};
 		};
-		CAB66B0A46142FE1F442DEEB /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
+		4A724613F8CCBA408912F275 /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/miolabs/UntoldEngine.git";
+			repositoryURL = "https://github.com/untoldengine/UntoldEngine.git";
 			requirement = {
 				branch = develop;
 				kind = branch;
@@ -483,7 +483,7 @@
 		};
 		BDEAF06BC243E66EEC6B5264 /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = CAB66B0A46142FE1F442DEEB /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			package = 4A724613F8CCBA408912F275 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngine;
 		};
 /* End XCSwiftPackageProductDependency section */

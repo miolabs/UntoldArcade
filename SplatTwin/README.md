@@ -52,6 +52,6 @@ SplatTwin/
 
 ## Dependencies
 
-Until the occluder shell, mesh fade and scene link ship in an upstream engine release, the
-project points at the `miolabs/UntoldEngine` fork's `develop` branch and at
-`miolabs/UntoldGaussianTwins` `main`.
+The project points at the engine's `develop` branch (`untoldengine/UntoldEngine`), which
+carries the occluder shell, mesh fade and scene link the swap builds on, and at the
+`miolabs/UntoldGaussianTwins` package's `main` branch, which supplies the swap policy.
