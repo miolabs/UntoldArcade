@@ -152,7 +152,9 @@ for slot in mesh.material_slots:
     for n in list(m.node_tree.nodes):
         if n.type != 'TEX_IMAGE' or not n.image: continue
         suffix = None
-        for candidate in ("BaseColor", "Roughness", "Normal", "Metallic"):
+        # Only these three maps are used (red is cloth: metallic ≈ 0, its
+        # map is not kept in the repo).
+        for candidate in ("BaseColor", "Roughness", "Normal"):
             if candidate in n.image.name:
                 suffix = candidate
                 break
