@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import MetalKit
 import simd
 import UntoldEngine
 
@@ -22,15 +23,32 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
     private var segmentBuffers: [MTLBuffer] = []
     private var segmentBufferCursor = 0
 
-    // Glove mesh travels the same way: vertex + index ring, one slot per encode.
-    private var gloveVertexBuffers: [MTLBuffer] = []
-    private var gloveIndexBuffers: [MTLBuffer] = []
-    private var gloveBufferCursor = 0
+    // The glove mesh is static bind-space geometry uploaded once per hand;
+    // only the tiny joint palette changes per frame (setVertexBytes).
+    private struct GloveGPUAsset {
+        var vertexBuffer: MTLBuffer
+        var indexBuffer: MTLBuffer
+        var submeshes: [CoolWebGloveSubmesh]
+    }
+
+    private struct GloveTextureKey: Hashable {
+        var materialIndex: Int
+        var kind: CoolWebGloveTextureKind
+    }
+
+    private var gloveGPUAssets: [CoolWebHandSide: GloveGPUAsset] = [:]
+    private var gloveTextures: [GloveTextureKey: MTLTexture] = [:]
+    /// Neutral 1×1 stand-ins so a missing map mutes its effect instead of
+    /// sampling garbage: mid-gray roughness, flat (0.5, 0.5, 1) normal.
+    private var gloveFallbackTextures: [CoolWebGloveTextureKind: MTLTexture] = [:]
+    /// Store generation the GPU copies were built from; rebuilt on change.
+    private var gloveAssetGeneration = -1
 
     // One-shot diagnostics so a silently skipped pass is visible in the log.
     private var loggedScenePass = false
     private var loggedSceneFailure = false
     private var loggedOcclusionMeshes = false
+    private var loggedGloveFailure = false
 
     private func logOnce(_ flag: inout Bool, _ message: String) {
         guard !flag else { return }
@@ -120,7 +138,7 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
             let glove = CoolWebGloveState.shared.snapshot()
             let occlusionMeshes = CoolWebOcclusionStore.shared.snapshot()
             let hasWeb = !state.segments.isEmpty || !state.splats.isEmpty
-            guard hasWeb || !glove.vertices.isEmpty else { return }
+            guard hasWeb || !glove.isEmpty else { return }
 
             let now = ProcessInfo.processInfo.systemUptime
 
@@ -218,56 +236,180 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
         _ encoder: MTLRenderCommandEncoder,
         context: RenderPassContext,
         uniforms: inout CoolWebUniforms,
-        glove: (vertices: [CoolWebGloveVertexGPU], indices: [UInt32])
+        glove: [CoolWebGloveDrawData]
     ) {
-        guard !glove.vertices.isEmpty, !glove.indices.isEmpty,
+        guard !glove.isEmpty,
               let pipeline = context.renderPipelines.pipeline(
                   CoolWebPluginContract.glovePipelineID
               ),
-              let pipelineState = pipeline.pipelineState,
-              let buffers = nextGloveBuffers(device: context.device)
+              let pipelineState = pipeline.pipelineState
         else { return }
 
-        glove.vertices.withUnsafeBytes { source in
-            buffers.vertex.contents().copyMemory(
-                from: source.baseAddress!, byteCount: source.count
-            )
-        }
-        glove.indices.withUnsafeBytes { source in
-            buffers.index.contents().copyMemory(
-                from: source.baseAddress!, byteCount: source.count
-            )
-        }
+        ensureGloveResources(device: context.device)
 
         encoder.pushDebugGroup("CoolWeb Spider Glove")
         defer { encoder.popDebugGroup() }
 
         encoder.setRenderPipelineState(pipelineState)
         encoder.setDepthStencilState(pipeline.depthState)
-        // The lofted tubes are not a watertight solid; skip backface culling.
+        // The suit extraction is an open shell (cut at the forearm); showing
+        // backfaces there beats a hole in the arm.
         encoder.setCullMode(.none)
         encoder.setVertexBytes(
             &uniforms,
             length: MemoryLayout<CoolWebUniforms>.stride,
             index: CoolWebGloveBufferIndex.uniforms.rawValue
         )
-        encoder.setVertexBuffer(
-            buffers.vertex,
-            offset: 0,
-            index: CoolWebGloveBufferIndex.vertices.rawValue
-        )
         encoder.setFragmentBytes(
             &uniforms,
             length: MemoryLayout<CoolWebUniforms>.stride,
             index: CoolWebGloveBufferIndex.uniforms.rawValue
         )
-        encoder.drawIndexedPrimitives(
-            type: .triangle,
-            indexCount: glove.indices.count,
-            indexType: .uint32,
-            indexBuffer: buffers.index,
-            indexBufferOffset: 0
+
+        for hand in glove {
+            guard let gpu = gloveGPUAssets[hand.side],
+                  !hand.joints.isEmpty,
+                  hand.joints.count <= CoolWebShaderLimits.maxGloveJoints
+            else {
+                logOnce(
+                    &loggedGloveFailure,
+                    "glove draw skipped — asset not loaded for \(hand.side)"
+                )
+                continue
+            }
+            encoder.setVertexBuffer(
+                gpu.vertexBuffer,
+                offset: 0,
+                index: CoolWebGloveBufferIndex.vertices.rawValue
+            )
+            hand.joints.withUnsafeBytes { palette in
+                encoder.setVertexBytes(
+                    palette.baseAddress!,
+                    length: palette.count,
+                    index: CoolWebGloveBufferIndex.joints.rawValue
+                )
+            }
+            var params = SIMD4<Float>(hand.front, hand.inflate, 0, 0)
+            encoder.setVertexBytes(
+                &params,
+                length: MemoryLayout<SIMD4<Float>>.stride,
+                index: CoolWebGloveBufferIndex.params.rawValue
+            )
+            for submesh in gpu.submeshes {
+                guard let base = gloveTextures[GloveTextureKey(
+                    materialIndex: submesh.materialIndex, kind: .baseColor
+                )] else {
+                    logOnce(
+                        &loggedGloveFailure,
+                        "glove draw skipped — base texture \(submesh.materialIndex) missing"
+                    )
+                    continue
+                }
+                encoder.setFragmentTexture(base, index: 0)
+                for kind in [CoolWebGloveTextureKind.roughness, .normal] {
+                    let texture = gloveTextures[GloveTextureKey(
+                        materialIndex: submesh.materialIndex, kind: kind
+                    )] ?? gloveFallbackTextures[kind]
+                    encoder.setFragmentTexture(texture, index: kind.rawValue)
+                }
+                encoder.drawIndexedPrimitives(
+                    type: .triangle,
+                    indexCount: submesh.indexCount,
+                    indexType: .uint32,
+                    indexBuffer: gpu.indexBuffer,
+                    indexBufferOffset: submesh.indexStart
+                        * MemoryLayout<UInt32>.stride
+                )
+            }
+        }
+    }
+
+    /// (Re)builds the static GPU copies whenever the asset store changes.
+    private func ensureGloveResources(device: MTLDevice) {
+        let store = CoolWebGloveAssetStore.shared
+        let generation = store.generation
+        guard generation != gloveAssetGeneration else { return }
+        gloveAssetGeneration = generation
+        gloveGPUAssets.removeAll()
+        gloveTextures.removeAll()
+
+        for side in CoolWebHandSide.allCases {
+            guard let asset = store.asset(for: side),
+                  !asset.vertices.isEmpty, !asset.indices.isEmpty
+            else { continue }
+            let vertexLength = asset.vertices.count
+                * MemoryLayout<CoolWebSkinnedGloveVertexGPU>.stride
+            let indexLength = asset.indices.count * MemoryLayout<UInt32>.stride
+            guard let vertexBuffer = asset.vertices.withUnsafeBytes({ bytes in
+                device.makeBuffer(
+                    bytes: bytes.baseAddress!, length: vertexLength,
+                    options: .storageModeShared
+                )
+            }), let indexBuffer = asset.indices.withUnsafeBytes({ bytes in
+                device.makeBuffer(
+                    bytes: bytes.baseAddress!, length: indexLength,
+                    options: .storageModeShared
+                )
+            }) else { continue }
+            vertexBuffer.label = "CoolWeb Glove Vertices \(side)"
+            indexBuffer.label = "CoolWeb Glove Indices \(side)"
+            gloveGPUAssets[side] = GloveGPUAsset(
+                vertexBuffer: vertexBuffer,
+                indexBuffer: indexBuffer,
+                submeshes: asset.submeshes
+            )
+        }
+
+        let loader = MTKTextureLoader(device: device)
+        for materialIndex in [0, 1] {
+            for kind in CoolWebGloveTextureKind.allCases {
+                guard let url = store.textureURL(
+                    materialIndex: materialIndex, kind: kind
+                ) else { continue }
+                // Only base color is sRGB — roughness and normal are data.
+                gloveTextures[GloveTextureKey(
+                    materialIndex: materialIndex, kind: kind
+                )] = try? loader.newTexture(
+                    URL: url,
+                    options: [
+                        .SRGB: kind == .baseColor,
+                        .generateMipmaps: true,
+                        .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+                        .textureStorageMode: MTLStorageMode.private.rawValue,
+                    ]
+                )
+            }
+        }
+
+        if gloveFallbackTextures.isEmpty {
+            gloveFallbackTextures[.roughness] = makeSolidTexture(
+                device: device, value: (153, 153, 153, 255)
+            )
+            gloveFallbackTextures[.normal] = makeSolidTexture(
+                device: device, value: (128, 128, 255, 255)
+            )
+        }
+    }
+
+    private func makeSolidTexture(
+        device: MTLDevice,
+        value: (UInt8, UInt8, UInt8, UInt8)
+    ) -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false
         )
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            return nil
+        }
+        var pixel = [value.0, value.1, value.2, value.3]
+        texture.replace(
+            region: MTLRegionMake2D(0, 0, 1, 1),
+            mipmapLevel: 0,
+            withBytes: &pixel,
+            bytesPerRow: 4
+        )
+        return texture
     }
 
     private func drawOcclusion(
@@ -308,29 +450,6 @@ final class CoolWebRenderExtension: RenderExtension, @unchecked Sendable {
                 indexBufferOffset: max(0, mesh.indexOffset)
             )
         }
-    }
-
-    private func nextGloveBuffers(
-        device: MTLDevice
-    ) -> (vertex: MTLBuffer, index: MTLBuffer)? {
-        if gloveVertexBuffers.isEmpty {
-            for slot in 0 ..< Self.segmentBufferRingSize {
-                guard let vertexBuffer = device.makeBuffer(
-                    length: CoolWebShaderLimits.gloveVertexBufferLength,
-                    options: .storageModeShared
-                ), let indexBuffer = device.makeBuffer(
-                    length: CoolWebShaderLimits.gloveIndexBufferLength,
-                    options: .storageModeShared
-                ) else { return nil }
-                vertexBuffer.label = "CoolWeb Glove Vertices \(slot)"
-                indexBuffer.label = "CoolWeb Glove Indices \(slot)"
-                gloveVertexBuffers.append(vertexBuffer)
-                gloveIndexBuffers.append(indexBuffer)
-            }
-        }
-        let slot = gloveBufferCursor
-        gloveBufferCursor = (gloveBufferCursor + 1) % gloveVertexBuffers.count
-        return (gloveVertexBuffers[slot], gloveIndexBuffers[slot])
     }
 
     private func nextSegmentBuffer(device: MTLDevice) -> MTLBuffer? {

@@ -21,7 +21,10 @@ let package = Package(
             dependencies: [
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
             ],
-            exclude: ["Shaders"],
+            // Resources/Models holds the Blender SOURCE files for the glove
+            // usdz assets (cooked by Scripts/convert-gloves.sh) — repo-only,
+            // never bundled.
+            exclude: ["Shaders", "Resources/Models"],
             resources: [
                 .copy("Resources/CoolWeb-macos.metallib"),
                 .copy("Resources/CoolWeb-ios.metallib"),

@@ -23,10 +23,20 @@ struct CoolWebRandom: RandomNumberGenerator {
 public struct CoolWebCollisionSphere: Sendable, Equatable {
     public var center: SIMD3<Float>
     public var radius: Float
+    /// Where this sphere was on the previous frame, when known. Lets the
+    /// solver sweep the motion: a particle the sphere overtook in one frame
+    /// is pushed back out on the side it came from instead of the nearest
+    /// surface — otherwise a fast hand tunnels straight through the strand.
+    public var previousCenter: SIMD3<Float>?
 
-    public init(center: SIMD3<Float>, radius: Float) {
+    public init(
+        center: SIMD3<Float>,
+        radius: Float,
+        previousCenter: SIMD3<Float>? = nil
+    ) {
         self.center = center
         self.radius = radius
+        self.previousCenter = previousCenter
     }
 }
 
@@ -449,11 +459,12 @@ public final class CoolWebNet {
         }
     }
 
-    /// Leader particles this close to the root ignore the hand colliders:
-    /// the strand is tied to the wrist shooter, so its first stretch is
-    /// SUPPOSED to lie on the glove — pushing it away bends it into
-    /// unnatural kinks right at the hand.
-    private static let rootCollisionExemptParticles = 3
+    /// Only the root segment ignores the hand colliders: the strand is tied
+    /// to the emitter ON the glove, so that one stretch is supposed to touch
+    /// it. Exempting more (it used to be 3 particles — up to ~45 cm on a
+    /// room-scale shot) let a held strand pass straight through the fingers
+    /// whenever the attach point sat behind the hand.
+    private static let rootCollisionExemptParticles = 1
 
     private func isCollisionExempt(_ index: Int) -> Bool {
         index < Self.rootCollisionExemptParticles
@@ -461,55 +472,88 @@ public final class CoolWebNet {
 
     private func resolveCollisions() {
         guard !collisionSpheres.isEmpty else { return }
-        for sphere in collisionSpheres {
-            let radiusSq = sphere.radius * sphere.radius
 
-            // Particle pushout keeps endpoints out…
-            for i in 0 ..< positions.count
-            where !isPinned(i) && !isCollisionExempt(i) {
-                let delta = positions[i] - sphere.center
-                let distanceSq = simd_length_squared(delta)
-                guard distanceSq < radiusSq, distanceSq > 1e-10 else { continue }
-                let distance = sqrt(distanceSq)
-                positions[i] = sphere.center + delta * (sphere.radius / distance)
+        // Every particle and segment answers to its DEEPEST sphere only, once
+        // per step. The hand is a cloud of overlapping spheres: resolving
+        // against each one in sequence had neighbors shoving the same point
+        // back and forth every step — a visible shake on a held strand.
+
+        // Particle pushout keeps endpoints out…
+        for i in 0 ..< positions.count
+        where !isPinned(i) && !isCollisionExempt(i) {
+            var deepest: (sphere: CoolWebCollisionSphere, penetration: Float)?
+            for sphere in collisionSpheres {
+                let distance = simd_length(positions[i] - sphere.center)
+                let penetration = sphere.radius - distance
+                guard penetration > 0, distance > 1e-5 else { continue }
+                if deepest == nil || penetration > deepest!.penetration {
+                    deepest = (sphere, penetration)
+                }
             }
+            guard let deepest else { continue }
+            let sphere = deepest.sphere
+            positions[i] = sphere.center + Self.exitDirection(
+                from: positions[i], sphere: sphere,
+                fallback: positions[i] - sphere.center
+            ) * sphere.radius
+        }
 
-            // …but leader particles sit ~15 cm apart on a long shot, so a
-            // fist-sized sphere passes clean between them: the SEGMENTS must
-            // collide too, pushing both endpoints by the closest-point
-            // penetration (weighted, pinned ends exempt).
-            for constraint in constraints where constraint.active {
-                let i = constraint.i
-                let j = constraint.j
-                if isCollisionExempt(i) || isCollisionExempt(j) { continue }
-                let a = positions[i]
-                let b = positions[j]
-                let ab = b - a
-                let abLengthSq = simd_length_squared(ab)
-                guard abLengthSq > 1e-10 else { continue }
+        // …but leader particles sit far apart on a long shot, so a fist-sized
+        // sphere passes clean between them: the SEGMENTS must collide too,
+        // pushing both endpoints by the closest-point penetration (weighted,
+        // pinned ends exempt).
+        for constraint in constraints where constraint.active {
+            let i = constraint.i
+            let j = constraint.j
+            let iPinned = isPinned(i)
+            let jPinned = isPinned(j)
+            if iPinned && jPinned { continue }
+            let a = positions[i]
+            let b = positions[j]
+            let ab = b - a
+            let abLengthSq = simd_length_squared(ab)
+            guard abLengthSq > 1e-10 else { continue }
+
+            var best: (push: SIMD3<Float>, t: Float, penetration: Float)?
+            for sphere in collisionSpheres {
+                let radiusSq = sphere.radius * sphere.radius
+                // The root segment is exempt only from the sphere(s) that
+                // contain the root itself (the emitter sits inside the wrist
+                // sphere); every other sphere — palm, thumb — still deflects
+                // it, so the strand leaves the device without crossing the
+                // hand.
+                if (isCollisionExempt(i)
+                        && simd_length_squared(a - sphere.center) < radiusSq)
+                    || (isCollisionExempt(j)
+                        && simd_length_squared(b - sphere.center) < radiusSq) {
+                    continue
+                }
                 let t = min(max(
                     simd_dot(sphere.center - a, ab) / abLengthSq, 0
                 ), 1)
                 let closest = a + ab * t
                 let delta = closest - sphere.center
-                let distanceSq = simd_length_squared(delta)
-                guard distanceSq < radiusSq, distanceSq > 1e-10 else { continue }
-                let distance = sqrt(distanceSq)
-                let push = delta * ((sphere.radius - distance) / distance)
-
-                let iPinned = isPinned(i)
-                let jPinned = isPinned(j)
-                switch (iPinned, jPinned) {
-                case (true, true):
-                    continue
-                case (true, false):
-                    positions[j] += push
-                case (false, true):
-                    positions[i] += push
-                case (false, false):
-                    positions[i] += push * (1 - t)
-                    positions[j] += push * t
+                let distance = simd_length(delta)
+                let penetration = sphere.radius - distance
+                guard penetration > 0, distance > 1e-5 else { continue }
+                if best == nil || penetration > best!.penetration {
+                    // Push the closest point to the surface on the side the
+                    // segment came from (swept), not merely the nearest one.
+                    let exit = Self.exitDirection(
+                        from: closest, sphere: sphere, fallback: delta
+                    )
+                    best = (sphere.center + exit * sphere.radius - closest, t, penetration)
                 }
+            }
+            guard let best else { continue }
+            switch (iPinned, jPinned) {
+            case (true, false):
+                positions[j] += best.push
+            case (false, true):
+                positions[i] += best.push
+            default:
+                positions[i] += best.push * (1 - best.t)
+                positions[j] += best.push * best.t
             }
         }
     }
@@ -520,15 +564,21 @@ public final class CoolWebNet {
         // branch constraints after them keep their build-time layout and the
         // cross-links appended last keep their attach-time rest.
         let leaderSegments = Float(params.leaderParticles - 1)
-        let flyingRest: Float
+        let totalRest: Float
         if phase == .flying {
             let tip = leaderTipPosition()
-            flyingRest = simd_length(tip - handPosition) / leaderSegments
+            totalRest = simd_length(tip - handPosition)
         } else {
-            flyingRest = leaderRest
+            totalRest = leaderRest * leaderSegments
         }
+        // Leader spacing grows geometrically away from the hand: the first
+        // segments are a few cm so the strand wraps around the glove's
+        // colliders in a curve instead of kinking at one far-apart particle,
+        // while the far end still spans the room with the same particle
+        // budget.
+        let weights = Self.leaderSegmentWeights(count: params.leaderParticles - 1)
         for i in 0 ..< (params.leaderParticles - 1) {
-            constraints[i].rest = flyingRest
+            constraints[i].rest = totalRest * weights[i]
         }
 
         var index = params.leaderParticles - 1
@@ -539,6 +589,36 @@ public final class CoolWebNet {
                 index += 1
             }
         }
+    }
+
+    /// Unit direction to push a point found inside `sphere` out along. With
+    /// sweep history, a point that was OUTSIDE relative to the sphere's
+    /// previous center keeps that side — the sphere moved onto it, so it
+    /// must exit the way it was overtaken. Otherwise the nearest surface.
+    static func exitDirection(
+        from point: SIMD3<Float>,
+        sphere: CoolWebCollisionSphere,
+        fallback: SIMD3<Float>
+    ) -> SIMD3<Float> {
+        if let previous = sphere.previousCenter {
+            let before = point - previous
+            if simd_length_squared(before) > sphere.radius * sphere.radius {
+                return simd_normalize(before)
+            }
+        }
+        return simd_normalize(fallback)
+    }
+
+    /// Normalized leader segment lengths, ratio 1.15 per segment root→tip:
+    /// for 19 segments the root one is ~1.1 % of the strand and the last
+    /// ~14 %, so a 3 m shot starts with ~3 cm segments at the hand.
+    static func leaderSegmentWeights(count: Int) -> [Float] {
+        guard count > 0 else { return [] }
+        let ratio: Float = 1.15
+        var weights = (0 ..< count).map { pow(ratio, Float($0)) }
+        let sum = weights.reduce(0, +)
+        for i in 0 ..< count { weights[i] /= sum }
+        return weights
     }
 
     private func leaderTipPosition() -> SIMD3<Float> {
@@ -649,12 +729,25 @@ public final class CoolWebNet {
         // and a local stress spike can't take a healthy thread with it.
         var worstIndex = -1
         var worstRatio: Float = 0
+        // Leader segments are graded geometrically (short at the hand, long
+        // at the wall): judge them against the MEAN leader rest, or the
+        // 3 cm root segments would snap from a displacement a 15 cm one
+        // absorbs unnoticed — every leader segment tolerates the same
+        // absolute elongation.
+        let leaderCount = min(params.leaderParticles - 1, constraints.count)
+        let meanLeaderRest = leaderCount > 0
+            ? (0 ..< leaderCount).reduce(Float(0)) { $0 + constraints[$1].rest }
+                / Float(leaderCount)
+            : 0
         for index in 0 ..< constraints.count {
             guard constraints[index].active, constraints[index].rest > 0 else { continue }
             let length = simd_length(
                 positions[constraints[index].j] - positions[constraints[index].i]
             )
-            let stretch = length / constraints[index].rest
+            let rest = constraints[index].rest
+            let stretch = index < leaderCount
+                ? 1 + (length - rest) / max(rest, meanLeaderRest)
+                : length / rest
             // Cross-links are deliberately the weakest link: snapping them
             // first relieves stress concentration so the main threads only
             // tear on a genuine hard pull.

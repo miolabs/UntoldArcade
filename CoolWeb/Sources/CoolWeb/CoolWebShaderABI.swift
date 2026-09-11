@@ -6,19 +6,13 @@ import simd
 public enum CoolWebShaderLimits {
     public static let maxSegments = 4096
     public static let maxSplats = 4
-    /// Both gloves combined; a full two-hand glove is ~1200 vertices.
-    public static let maxGloveVertices = 4096
-    public static let maxGloveIndices = 24576
+    /// Palette cap of the glove skeleton: 17 deform bones + fingertip and
+    /// muzzle markers, with headroom.
+    public static let maxGloveJoints = 32
 
     /// Bytes of the shared segment buffer: CoolWebSegmentGPU[maxSegments].
     public static let segmentBufferLength =
         maxSegments * MemoryLayout<CoolWebSegmentGPU>.stride
-
-    /// Bytes of the glove vertex/index ring buffers.
-    public static let gloveVertexBufferLength =
-        maxGloveVertices * MemoryLayout<CoolWebGloveVertexGPU>.stride
-    public static let gloveIndexBufferLength =
-        maxGloveIndices * MemoryLayout<UInt32>.stride
 }
 
 /// One drawable thread segment. Everything on screen — flying cone threads,
@@ -31,20 +25,19 @@ public struct CoolWebSegmentGPU: Sendable, Equatable {
     public init() {}
 }
 
-/// One skinned glove vertex, regenerated from the tracked hand every frame.
-public struct CoolWebGloveVertexGPU: Sendable, Equatable {
-    public var position = SIMD4<Float>.zero // xyz world, w = u (0…1 around the limb)
-    public var normal = SIMD4<Float>.zero   // xyz world normal, w = v (m along the limb)
-    /// x material (0 palm fabric — radial web, 1 metal shooter,
-    ///   2 finger fabric — ring stripes),
-    /// y ring radius (m),
-    /// z coverage distance from the wrist (m — suit-up animation coordinate),
-    /// w build front (m): fragments beyond it dissolve; huge = fully covered.
-    public var params = SIMD4<Float>.zero
-    /// xy web-pattern coordinates (m): palm = planar offset from the
-    /// back-of-hand web center, finger = (around, along) unrolled;
-    /// z baked ambient occlusion (0 dark … 1 open), w unused.
-    public var extra = SIMD4<Float>(0, 0, 1, 0)
+/// One static bind-space vertex of the rigged glove. Uploaded once per hand;
+/// the vertex shader skins it (4 influences) with the per-frame palette.
+public struct CoolWebSkinnedGloveVertexGPU: Sendable, Equatable {
+    /// xyz bind-space position, w = coverage distance from wrist (m).
+    public var position = SIMD4<Float>.zero
+    /// xyz bind-space normal, w = material (0 red fabric, 1 shooter metal).
+    public var normal = SIMD4<Float>.zero
+    /// xy = uv (v already flipped for Metal), zw = joint indices 0/1 as floats.
+    public var texJoint = SIMD4<Float>.zero
+    /// The four joint weights.
+    public var weights = SIMD4<Float>(1, 0, 0, 0)
+    /// xy = joint indices 2/3 as floats, zw unused.
+    public var extra = SIMD4<Float>.zero
 
     public init() {}
 }
@@ -86,7 +79,10 @@ public enum CoolWebBufferIndex: Int {
 }
 
 /// Buffer slots of the glove pipeline (separate pipeline, separate table).
+/// The joint palette and per-hand params ride setVertexBytes — they are tiny.
 public enum CoolWebGloveBufferIndex: Int {
     case uniforms = 0
     case vertices = 1
+    case joints = 2
+    case params = 3
 }

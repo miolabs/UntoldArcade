@@ -126,6 +126,91 @@ final class CoolWebNetTests: XCTestCase {
         }
     }
 
+    func testFastColliderSweepsTheStrandInsteadOfTunnelingThroughIt() throws {
+        // Regression for the on-device "force the hand through the web":
+        // a small collider that jumps past the strand in ONE frame (faster
+        // than its own radius) must push the strand ahead of it — on its
+        // leading side — not find the strand "nearest" its trailing surface
+        // and spit it out behind, which reads as the web passing through
+        // the hand.
+        let shooter = makeShooter()
+        let net = try XCTUnwrap(shooter.fire(
+            hand: .right,
+            origin: handOrigin,
+            direction: SIMD3<Float>(0, 0, -1),
+            now: 0,
+            randomSeed: 11
+        ))
+        var now = run(shooter, from: 0, seconds: 1, hand: handOrigin)
+        XCTAssertEqual(net.phase, .attached)
+
+        let dt: Float = 1 / 90
+        let radius: Float = 0.05
+        // Where the settled (sagging) strand actually passes 0.6 m out: the
+        // segment point nearest that depth is the crossing reference.
+        var settled: [CoolWebSegmentDesc] = []
+        net.appendSegments(into: &settled)
+        let depth = handOrigin.z - 0.6
+        var crossing = handOrigin + SIMD3<Float>(0, 0, -0.6)
+        var bestDepthError = Float.infinity
+        for segment in settled {
+            for point in [segment.a, segment.b] {
+                let error = abs(point.z - depth)
+                if error < bestDepthError {
+                    bestDepthError = error
+                    crossing = point
+                }
+            }
+        }
+        XCTAssertLessThan(bestDepthError, 0.2, "no strand point near the crossing depth")
+        // Frame A: the collider sits clear of the strand on +x…
+        for _ in 0 ..< 5 {
+            now += Double(dt)
+            shooter.updateHand(.right, position: handOrigin, collision: [
+                CoolWebCollisionSphere(
+                    center: crossing + SIMD3<Float>(0.07, 0, 0), radius: radius
+                ),
+            ])
+            shooter.step(now: now, dt: dt)
+        }
+        // …then in one frame it has moved 10 cm to -x, overtaking the strand
+        // (which lies at x = 0, now 3 cm inside — nearer the trailing face).
+        let jumped = CoolWebCollisionSphere(
+            center: crossing + SIMD3<Float>(-0.03, 0, 0), radius: radius
+        )
+        for _ in 0 ..< 30 {
+            now += Double(dt)
+            shooter.updateHand(.right, position: handOrigin, collision: [jumped])
+            shooter.step(now: now, dt: dt)
+        }
+
+        var segments: [CoolWebSegmentDesc] = []
+        net.appendSegments(into: &segments)
+        var touched = 0
+        for segment in segments
+        where simd_length(segment.a - handOrigin) > 0.35
+            && simd_length(segment.b - handOrigin) > 0.35 {
+            let ab = segment.b - segment.a
+            let abLengthSq = simd_length_squared(ab)
+            guard abLengthSq > 1e-10 else { continue }
+            let t = min(max(
+                simd_dot(jumped.center - segment.a, ab) / abLengthSq, 0
+            ), 1)
+            let closest = segment.a + ab * t
+            guard simd_length(closest - jumped.center) < radius + 0.03 else {
+                continue
+            }
+            touched += 1
+            // Leading side of the collider's motion, never behind it.
+            XCTAssertLessThan(
+                closest.x, jumped.center.x,
+                "strand tunneled to the trailing side of a fast collider"
+            )
+        }
+        XCTAssertGreaterThan(touched, 0, "the collider must actually reach the strand")
+        shooter.reset()
+    }
+
     func testFireFliesAndAttachesTheWholeCone() throws {
         setCoolWebSplatsEnabled(true)
         defer { setCoolWebSplatsEnabled(false) }

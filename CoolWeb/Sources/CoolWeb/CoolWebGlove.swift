@@ -2,36 +2,27 @@
 //  CoolWebGlove.swift
 //  CoolWeb
 //
-//  Procedural Spider-Man glove, rebuilt from the tracked hand skeleton every
-//  frame — no asset, no rig retargeting, auto-fits any hand. Geometry is
-//  world-space tubes: tapered finger tubes with parallel-transported frames,
-//  one flattened elliptical loft from the cuff through the palm to the
-//  knuckles, and a small metal web-shooter barrel on the inner wrist. The red
-//  fabric + black webbing look is painted procedurally in the fragment shader
-//  from the (u around, v along) coordinates emitted here.
+//  Spider-Man glove, driven from the tracked hand skeleton every frame. The
+//  geometry is the rigged movie-suit extraction loaded by
+//  `CoolWebGloveAssetLoader` (17-bone ARKit-named skeleton, PBR textures);
+//  this file owns the per-frame retarget (pose → joint palette via
+//  `CoolWebGloveRig`) and the suit-up state machine (gaze gating, progress,
+//  tracking-blip grace) whose output the render extension draws.
 //
 //  Pure math over `CoolWebHandPose` — deliberately free of ARKit and Metal
-//  types so the whole mesh can be built and asserted on in host unit tests.
+//  types so everything can be asserted on in host unit tests.
 //
 
 import Foundation
 import simd
 
-/// Tunables for the procedural glove. Distances are meters.
+/// Tunables for the glove system. Distances are meters.
 public struct CoolWebGloveConfig: Sendable, Equatable {
-    /// Radial vertices per tube ring.
-    public var radialSides = 18
-    /// Base finger radii, ordered thumb, index, middle, ring, little.
-    public var fingerRadii: [Float] = [0.0115, 0.0102, 0.0102, 0.0096, 0.0088]
-    /// Extra radius so the glove sits over the real finger, not inside it.
-    public var fabricPadding: Float = 0.002
-    /// Palm half-thickness at the wrist end / at the knuckle end.
+    /// Palm half-thickness at the wrist — fallback web-shooter muzzle offset
+    /// off the inner wrist when the glove asset carries no muzzle marker.
     public var palmHalfThicknessWrist: Float = 0.018
-    public var palmHalfThicknessKnuckles: Float = 0.0145
-    /// How far the cuff extends behind the wrist toward the forearm.
-    public var cuffLength: Float = 0.055
-    /// Whether the metal web-shooter barrel is added on the inner wrist.
-    public var showWebShooter = true
+    /// How the asset's proportions are stretched over the tracked hand.
+    public var fit = CoolWebGloveFit()
     /// Seconds the suit-up animation takes to sweep from the wrist to the
     /// fingertips (and back when reversing). 0 makes it instant.
     public var buildDuration: Float = 0.9
@@ -43,28 +34,50 @@ public struct CoolWebGloveConfig: Sendable, Equatable {
     public init() {}
 }
 
-/// One frame of glove geometry, ready for the GPU.
-public struct CoolWebGloveMesh: Sendable, Equatable {
-    public var vertices: [CoolWebGloveVertexGPU] = []
-    public var indices: [UInt32] = []
-    /// Largest per-vertex coverage distance (m) — the suit-up animation's
-    /// front sweeps 0 → this value.
-    public var coverageExtent: Float = 0
+/// Per-region fit of the glove mesh over the tracked hand. Bone LENGTHS
+/// always follow the tracked joints, and every cross-section is first
+/// scaled by the tracked hand's size (knuckle-span ratio vs the asset —
+/// thickness tracks hand size closely and tracking can't measure it
+/// directly). These knobs are relative corrections on top, plus the
+/// fingertip overshoot, so the glove fully envelops the real hand (the
+/// real hand shows through wherever the glove doesn't cover it). Tune live
+/// from the example app's Glove fit sliders.
+public struct CoolWebGloveFit: Sendable, Equatable {
+    // Defaults: the values dialed in on device against the Mixamo suit
+    // hands (2026-09-11) — the asset runs thick, the shell inflate does the
+    // covering instead.
+    /// Meters the glove's fingertips reach past the tracked tips.
+    public var fingertipPadding: Float = 0.010
+    /// Finger cross-section multiplier (1 = size-scaled asset thickness).
+    public var fingerGirth: Float = 0.76
+    /// Palm scale across the back-normal (1 = size-scaled asset thickness);
+    /// width always follows the tracked knuckle span.
+    public var palmThickness: Float = 0.5
+    /// Cuff/forearm cross-section multiplier (width and thickness).
+    public var cuffGirth: Float = 0.97
+    /// Meters every vertex is pushed out along its normal — a uniform shell
+    /// thickening that closes the gaps no bone scale reaches (finger
+    /// crotches, the glove/gauntlet seam).
+    public var inflate: Float = 0.0087
 
     public init() {}
-}
 
-public enum CoolWebGloveMaterial {
-    /// Palm/cuff fabric: red with the big radial silver web.
-    public static let fabric: Float = 0
-    public static let metal: Float = 1
-    /// Finger fabric: red with silver rings wrapping the finger.
-    public static let fingerFabric: Float = 2
+    /// Exactly the asset's proportions, no overshoot — what tests use to
+    /// prove the retarget reproduces the bind pose.
+    public static var neutral: CoolWebGloveFit {
+        var fit = CoolWebGloveFit()
+        fit.fingertipPadding = 0
+        fit.fingerGirth = 1
+        fit.palmThickness = 1
+        fit.cuffGirth = 1
+        fit.inflate = 0
+        return fit
+    }
 }
 
 /// Orthonormal palm frame derived from the joint cloud (the pose carries no
-/// orientation data). Shared by the glove builder and the web-shooter origin
-/// so the strand fires exactly out of the drawn barrel.
+/// orientation data). Shared by the retarget solver and the web-shooter
+/// origin so the strand fires exactly out of the drawn barrel.
 struct CoolWebHandFrame {
     var wrist: SIMD3<Float>
     var knuckleCenter: SIMD3<Float>
@@ -111,21 +124,33 @@ struct CoolWebHandFrame {
 }
 
 public enum CoolWebGloveBuild {
-    /// params.w front value meaning "fully covered, no animation": far beyond
-    /// any real coverage distance, so the shader's front test never trips.
+    /// Front value meaning "fully covered, no animation": far beyond any real
+    /// coverage distance, so the shader's front test never trips.
     public static let coveredFront: Float = 1_000_000
 }
 
-// MARK: - Builder
+// MARK: - Web-shooter muzzle
 
 public enum CoolWebGloveBuilder {
-    /// Where the drawn barrel's muzzle sits — strands should fire from here
-    /// so the web visually leaves the gray device on the inner wrist.
+    /// Where the glove's emitter sits — strands should fire from here so the
+    /// web visually leaves the device on the inner wrist. Uses the loaded
+    /// asset's skinned `webMuzzle` marker; falls back to a fitted offset off
+    /// the wrist when no asset (or no marker) is available.
     public static func webShooterMuzzle(
         pose: CoolWebHandPose,
         side: CoolWebHandSide,
         config: CoolWebGloveConfig = CoolWebGloveConfig()
     ) -> SIMD3<Float>? {
+        if let asset = CoolWebGloveAssetStore.shared.asset(for: side),
+           let matrices = CoolWebGloveRig.skinningMatrices(
+               skeleton: asset.skeleton, pose: pose, side: side,
+               fit: config.fit
+           ),
+           let muzzle = CoolWebGloveRig.muzzlePosition(
+               skeleton: asset.skeleton, matrices: matrices
+           ) {
+            return muzzle
+        }
         guard let frame = CoolWebHandFrame(pose: pose, side: side) else {
             return nil
         }
@@ -147,473 +172,6 @@ public enum CoolWebGloveBuilder {
         config: CoolWebGloveConfig
     ) -> SIMD3<Float> {
         barrelCenter(frame: frame, config: config) + frame.forward * 0.026
-    }
-
-    /// Inserts a Catmull-Rom midpoint between every pair of stations
-    /// (weights -1/16, 9/16, 9/16, -1/16) so tube bends round off instead of
-    /// kinking at the joints. Radii are linearly interpolated.
-    static func subdivided(
-        stations: [SIMD3<Float>],
-        radii: [Float]
-    ) -> ([SIMD3<Float>], [Float]) {
-        guard stations.count >= 3 else { return (stations, radii) }
-        func radius(_ i: Int) -> Float { radii[min(i, radii.count - 1)] }
-        var outStations: [SIMD3<Float>] = []
-        var outRadii: [Float] = []
-        for i in 0 ..< stations.count - 1 {
-            outStations.append(stations[i])
-            outRadii.append(radius(i))
-            let p0 = stations[max(i - 1, 0)]
-            let p3 = stations[min(i + 2, stations.count - 1)]
-            let mid = (stations[i] + stations[i + 1]) * (9.0 / 16.0)
-                - (p0 + p3) * (1.0 / 16.0)
-            outStations.append(mid)
-            outRadii.append((radius(i) + radius(i + 1)) * 0.5)
-        }
-        outStations.append(stations[stations.count - 1])
-        outRadii.append(radius(stations.count - 1))
-        return (outStations, outRadii)
-    }
-
-    /// Builds the world-space glove mesh for one tracked hand pose.
-    public static func build(
-        pose: CoolWebHandPose,
-        side: CoolWebHandSide,
-        config: CoolWebGloveConfig = CoolWebGloveConfig()
-    ) -> CoolWebGloveMesh {
-        var accumulator = GloveMeshAccumulator()
-
-        guard let frame = CoolWebHandFrame(pose: pose, side: side) else {
-            return CoolWebGloveMesh()
-        }
-        let wrist = frame.wrist
-        let knuckleCenter = frame.knuckleCenter
-        let forward = frame.forward
-        let lateral = frame.lateral
-        let backNormal = frame.backNormal
-
-        // The big radial web is centered on the back of the hand, a bit past
-        // mid-palm (matches the reference glove); web-plane coordinates are
-        // planar offsets from it so the pattern is continuous over the loft.
-        let webCenter = wrist + forward * (frame.palmLength * 0.45)
-        let palmWeb = GloveWebFrame.planar(
-            center: webCenter, xAxis: lateral, yAxis: forward
-        )
-
-        // MARK: cuff → palm loft (one flattened elliptical tube)
-        let knuckleSpan = simd_length(pose.little.points[1] - pose.index.points[1])
-        let knuckleHalfWidth = knuckleSpan * 0.5
-            + (config.fingerRadii[1] + config.fabricPadding) * 1.55
-        let wristHalfWidth = knuckleHalfWidth * 0.86
-        let palmLength = simd_length(knuckleCenter - wrist)
-
-        var palmRings: [Int] = []
-        let cuffStations = 3
-        let palmStations = 5
-        var firstRingInfo: (center: SIMD3<Float>, radius: Float) = (wrist, 0)
-        var lastRingInfo: (center: SIMD3<Float>, radius: Float) = (wrist, 0)
-        for i in 0 ..< (cuffStations + palmStations + 1) {
-            let center: SIMD3<Float>
-            let halfWidth: Float
-            let halfThickness: Float
-            let v: Float
-            if i < cuffStations {
-                // Cuff: behind the wrist, flaring slightly toward the forearm.
-                let f = Float(cuffStations - i) / Float(cuffStations)
-                center = wrist - forward * (config.cuffLength * f)
-                halfWidth = wristHalfWidth * (1 + 0.12 * f)
-                halfThickness = config.palmHalfThicknessWrist * (1 + 0.18 * f)
-                v = config.cuffLength * (1 - f)
-            } else {
-                // Palm: wrist toward the knuckle line.
-                let f = Float(i - cuffStations) / Float(palmStations)
-                center = mix(wrist, knuckleCenter, t: f)
-                halfWidth = mix(wristHalfWidth, knuckleHalfWidth, t: f)
-                halfThickness = mix(
-                    config.palmHalfThicknessWrist,
-                    config.palmHalfThicknessKnuckles,
-                    t: f
-                )
-                v = config.cuffLength + palmLength * f
-            }
-            let ring = accumulator.addRing(
-                center: center,
-                sAxis: lateral,
-                tAxis: backNormal,
-                sRadius: halfWidth,
-                tRadius: halfThickness,
-                v: v,
-                coverage: abs(v - config.cuffLength),
-                material: CoolWebGloveMaterial.fabric,
-                sides: config.radialSides,
-                web: palmWeb,
-                shapeExponent: 3.2
-            )
-            palmRings.append(ring)
-            if i == 0 { firstRingInfo = (center, (halfWidth + halfThickness) * 0.5) }
-            lastRingInfo = (center, (halfWidth + halfThickness) * 0.5)
-        }
-        for i in 1 ..< palmRings.count {
-            accumulator.stitch(palmRings[i - 1], palmRings[i], sides: config.radialSides)
-        }
-        // Close both loft ends so the tube never shows its inside.
-        accumulator.addFan(
-            apex: firstRingInfo.center,
-            normal: -forward,
-            ring: palmRings[0],
-            sides: config.radialSides,
-            v: 0,
-            coverage: config.cuffLength,
-            material: CoolWebGloveMaterial.fabric,
-            web: palmWeb
-        )
-        accumulator.addFan(
-            apex: lastRingInfo.center,
-            normal: forward,
-            ring: palmRings[palmRings.count - 1],
-            sides: config.radialSides,
-            v: config.cuffLength + palmLength,
-            coverage: palmLength,
-            material: CoolWebGloveMaterial.fabric,
-            web: palmWeb,
-            ao: 0.85
-        )
-
-        // MARK: fingers
-        // Taper multipliers root → tip; the root station sits back along the
-        // metacarpal so the tube disappears into the palm loft with no gap.
-        // The thumb gets a much fatter root to cover the thenar mound.
-        let fingerTaper: [Float] = [1.30, 1.10, 1.0, 0.93, 0.86]
-        let thumbTaper: [Float] = [1.65, 1.25, 1.05, 0.95, 0.86]
-        let chains = [pose.thumb, pose.index, pose.middle, pose.ring, pose.little]
-        for (fingerIndex, chain) in chains.enumerated() {
-            let taper = fingerIndex == 0 ? thumbTaper : fingerTaper
-            let baseRadius = config.fingerRadii[
-                min(fingerIndex, config.fingerRadii.count - 1)
-            ] + config.fabricPadding
-            let points = chain.points
-            // Thumb chain starts at the wrist; sink its root deeper so the
-            // fat thumb base blends into the palm side. Finger roots reach
-            // well into the palm loft so no knuckle skin peeks through.
-            let rootBias: Float = fingerIndex == 0 ? 0.20 : 0.35
-            var stations = [mix(points[0], points[1], t: rootBias)]
-            stations.append(contentsOf: points[1...4])
-            let radii = taper.map { $0 * baseRadius }
-            // Catmull-Rom midpoints double the ring count: a curled finger
-            // bends as a smooth arc instead of a segmented worm.
-            let (smoothStations, smoothRadii) = Self.subdivided(
-                stations: stations, radii: radii
-            )
-            // Roots sit in the crotch between fingers: bake them darker.
-            accumulator.addTube(
-                stations: smoothStations,
-                radii: smoothRadii,
-                referenceSide: lateral,
-                coverageOffset: simd_length(stations[0] - wrist),
-                material: CoolWebGloveMaterial.fingerFabric,
-                sides: config.radialSides,
-                capEnd: true,
-                web: .cylindrical,
-                stationAO: [0.62, 0.70, 0.78, 0.89, 1, 1, 1, 1, 1]
-            )
-        }
-
-        // MARK: web-shooter barrel (metal, inner wrist — where strands fire)
-        if config.showWebShooter {
-            // Kept in sync with webShooterMuzzle: strands fire from the
-            // front end of this barrel.
-            let barrelCenter = Self.barrelCenter(frame: frame, config: config)
-            let barrelStations: [(d: Float, a: Float, b: Float)] = [
-                (-0.016, 0.013, 0.0075),
-                (0.008, 0.014, 0.008),
-                (0.026, 0.010, 0.006),
-            ]
-            var barrelRings: [Int] = []
-            for station in barrelStations {
-                let ring = accumulator.addRing(
-                    center: barrelCenter + forward * station.d,
-                    sAxis: lateral,
-                    tAxis: frame.palmNormal,
-                    sRadius: station.a,
-                    tRadius: station.b,
-                    v: station.d + 0.016,
-                    coverage: abs(station.d),
-                    material: CoolWebGloveMaterial.metal,
-                    sides: config.radialSides,
-                    web: .none
-                )
-                barrelRings.append(ring)
-            }
-            for i in 1 ..< barrelRings.count {
-                accumulator.stitch(
-                    barrelRings[i - 1], barrelRings[i], sides: config.radialSides
-                )
-            }
-            accumulator.addFan(
-                apex: barrelCenter + forward * barrelStations[0].d,
-                normal: -forward,
-                ring: barrelRings[0],
-                sides: config.radialSides,
-                v: 0,
-                coverage: abs(barrelStations[0].d),
-                material: CoolWebGloveMaterial.metal
-            )
-            accumulator.addFan(
-                apex: barrelCenter + forward * barrelStations[2].d,
-                normal: forward,
-                ring: barrelRings[2],
-                sides: config.radialSides,
-                v: 0.05,
-                coverage: abs(barrelStations[2].d),
-                material: CoolWebGloveMaterial.metal
-            )
-        }
-
-        var mesh = CoolWebGloveMesh()
-        mesh.vertices = accumulator.vertices
-        mesh.indices = accumulator.indices
-        mesh.coverageExtent = accumulator.maxCoverage
-        return mesh
-    }
-}
-
-// MARK: - Mesh accumulator
-
-/// How a ring's vertices get their web-pattern coordinates (extra.xy).
-enum GloveWebFrame {
-    /// Planar projection onto (xAxis, yAxis) relative to `center` — the
-    /// radial back-of-hand web.
-    case planar(center: SIMD3<Float>, xAxis: SIMD3<Float>, yAxis: SIMD3<Float>)
-    /// Unrolled tube coords (m around, m along) — finger ring stripes.
-    case cylindrical
-    /// No pattern (metal barrel).
-    case none
-}
-
-private struct GloveMeshAccumulator {
-    var vertices: [CoolWebGloveVertexGPU] = []
-    var indices: [UInt32] = []
-    /// Largest coverage distance written so far (suit-up animation extent).
-    var maxCoverage: Float = 0
-
-    /// Adds one elliptical ring in the (sAxis, tAxis) plane. `axialLean`
-    /// tilts the normals toward `leanAxis` for hemisphere cap rings.
-    /// `coverage` is the vertex's distance from the wrist along the glove —
-    /// the suit-up animation front sweeps through it.
-    /// Returns the index of the ring's first vertex.
-    mutating func addRing(
-        center: SIMD3<Float>,
-        sAxis: SIMD3<Float>,
-        tAxis: SIMD3<Float>,
-        sRadius: Float,
-        tRadius: Float,
-        v: Float,
-        coverage: Float,
-        material: Float,
-        sides: Int,
-        web: GloveWebFrame,
-        ao: Float = 1,
-        leanAxis: SIMD3<Float> = .zero,
-        axialLean: Float = 0,
-        shapeExponent: Float = 2
-    ) -> Int {
-        let base = vertices.count
-        let meanRadius = (sRadius + tRadius) * 0.5
-        maxCoverage = max(maxCoverage, coverage)
-        let n = max(shapeExponent, 2)
-        for k in 0 ..< sides {
-            let theta = 2 * Float.pi * Float(k) / Float(sides)
-            let c = cos(theta)
-            let s = sin(theta)
-            // Superellipse |x/a|ⁿ + |y/b|ⁿ = 1: n = 2 is the plain ellipse,
-            // higher n flattens the faces into a slab with rounded sides —
-            // a palm is a slab, not a lens.
-            let px = Float(signOf: c, magnitudeOf: pow(abs(c), 2 / n))
-            let py = Float(signOf: s, magnitudeOf: pow(abs(s), 2 / n))
-            let position = center + sAxis * (px * sRadius) + tAxis * (py * tRadius)
-            // Implicit-gradient normal, then optionally leaned axially.
-            let gx = Float(signOf: px, magnitudeOf: pow(abs(px), n - 1))
-                / max(sRadius, 1e-5)
-            let gy = Float(signOf: py, magnitudeOf: pow(abs(py), n - 1))
-                / max(tRadius, 1e-5)
-            var normal = safeNormalize(
-                sAxis * gx + tAxis * gy,
-                fallback: sAxis
-            )
-            if axialLean > 0 {
-                normal = safeNormalize(
-                    normal * (1 - axialLean) + leanAxis * axialLean,
-                    fallback: normal
-                )
-            }
-            var vertex = CoolWebGloveVertexGPU()
-            vertex.position = SIMD4<Float>(position, Float(k) / Float(sides))
-            vertex.normal = SIMD4<Float>(normal, v)
-            vertex.params = SIMD4<Float>(
-                material, meanRadius, coverage, CoolWebGloveBuild.coveredFront
-            )
-            let webCoord = Self.webCoord(
-                web, position: position, k: k, sides: sides,
-                meanRadius: meanRadius, v: v
-            )
-            vertex.extra = SIMD4<Float>(webCoord.x, webCoord.y, ao, 0)
-            vertices.append(vertex)
-        }
-        return base
-    }
-
-    static func webCoord(
-        _ web: GloveWebFrame,
-        position: SIMD3<Float>,
-        k: Int,
-        sides: Int,
-        meanRadius: Float,
-        v: Float
-    ) -> SIMD2<Float> {
-        switch web {
-        case let .planar(center, xAxis, yAxis):
-            let offset = position - center
-            return SIMD2<Float>(
-                simd_dot(offset, xAxis), simd_dot(offset, yAxis)
-            )
-        case .cylindrical:
-            return SIMD2<Float>(
-                Float(k) / Float(sides) * 2 * .pi * meanRadius, v
-            )
-        case .none:
-            return .zero
-        }
-    }
-
-    /// Quad-stitches two rings of the same side count.
-    mutating func stitch(_ ringA: Int, _ ringB: Int, sides: Int) {
-        for k in 0 ..< sides {
-            let k2 = (k + 1) % sides
-            let a0 = UInt32(ringA + k), a1 = UInt32(ringA + k2)
-            let b0 = UInt32(ringB + k), b1 = UInt32(ringB + k2)
-            indices.append(contentsOf: [a0, b0, b1, a0, b1, a1])
-        }
-    }
-
-    /// Closes a ring with a triangle fan to an apex point.
-    mutating func addFan(
-        apex: SIMD3<Float>,
-        normal: SIMD3<Float>,
-        ring: Int,
-        sides: Int,
-        v: Float,
-        coverage: Float,
-        material: Float,
-        web: GloveWebFrame = .none,
-        ao: Float = 1
-    ) {
-        var apexVertex = CoolWebGloveVertexGPU()
-        apexVertex.position = SIMD4<Float>(apex, 0)
-        apexVertex.normal = SIMD4<Float>(normal, v)
-        apexVertex.params = SIMD4<Float>(
-            material, 0.01, coverage, CoolWebGloveBuild.coveredFront
-        )
-        let webCoord = Self.webCoord(
-            web, position: apex, k: 0, sides: sides, meanRadius: 0.01, v: v
-        )
-        apexVertex.extra = SIMD4<Float>(webCoord.x, webCoord.y, ao, 0)
-        maxCoverage = max(maxCoverage, coverage)
-        let apexIndex = UInt32(vertices.count)
-        vertices.append(apexVertex)
-        for k in 0 ..< sides {
-            let k2 = (k + 1) % sides
-            indices.append(contentsOf: [apexIndex, UInt32(ring + k), UInt32(ring + k2)])
-        }
-    }
-
-    /// A tapered tube along `stations` with parallel-transported ring frames
-    /// (no twist), optionally closed with a hemisphere cap at the last station.
-    /// `coverageOffset` is the first station's distance from the wrist; each
-    /// ring's coverage grows with arc length from there.
-    mutating func addTube(
-        stations: [SIMD3<Float>],
-        radii: [Float],
-        referenceSide: SIMD3<Float>,
-        coverageOffset: Float,
-        material: Float,
-        sides: Int,
-        capEnd: Bool,
-        web: GloveWebFrame = .cylindrical,
-        stationAO: [Float] = []
-    ) {
-        guard stations.count >= 2 else { return }
-        var rings: [Int] = []
-        var v: Float = 0
-        var sideAxis = referenceSide
-        var lastAxis = SIMD3<Float>(0, 0, 1)
-        for i in 0 ..< stations.count {
-            let prev = stations[max(i - 1, 0)]
-            let next = stations[min(i + 1, stations.count - 1)]
-            let axis = safeNormalize(next - prev, fallback: lastAxis)
-            lastAxis = axis
-            // Parallel transport: keep the previous side vector, minus its
-            // component along the new axis.
-            sideAxis = safeNormalize(
-                sideAxis - axis * simd_dot(sideAxis, axis),
-                fallback: perpendicular(to: axis)
-            )
-            let tAxis = simd_cross(axis, sideAxis)
-            if i > 0 { v += simd_length(stations[i] - stations[i - 1]) }
-            let radius = radii[min(i, radii.count - 1)]
-            let ring = addRing(
-                center: stations[i],
-                sAxis: sideAxis,
-                tAxis: tAxis,
-                sRadius: radius,
-                tRadius: radius,
-                v: v,
-                coverage: coverageOffset + v,
-                material: material,
-                sides: sides,
-                web: web,
-                ao: stationAO.isEmpty
-                    ? 1
-                    : stationAO[min(i, stationAO.count - 1)]
-            )
-            rings.append(ring)
-        }
-        for i in 1 ..< rings.count {
-            stitch(rings[i - 1], rings[i], sides: sides)
-        }
-        guard capEnd, let tip = stations.last else { return }
-        let tipRadius = radii[min(stations.count - 1, radii.count - 1)]
-        let axis = lastAxis
-        let tAxis = simd_cross(axis, sideAxis)
-        var previousRing = rings[rings.count - 1]
-        // Two lat rings + apex make a rounded fingertip.
-        for phi in [Float.pi * 0.22, Float.pi * 0.38] {
-            let ring = addRing(
-                center: tip + axis * (tipRadius * sin(phi)),
-                sAxis: sideAxis,
-                tAxis: tAxis,
-                sRadius: tipRadius * cos(phi),
-                tRadius: tipRadius * cos(phi),
-                v: v + tipRadius * sin(phi),
-                coverage: coverageOffset + v + tipRadius * sin(phi),
-                material: material,
-                sides: sides,
-                web: web,
-                leanAxis: axis,
-                axialLean: sin(phi)
-            )
-            stitch(previousRing, ring, sides: sides)
-            previousRing = ring
-        }
-        addFan(
-            apex: tip + axis * tipRadius,
-            normal: axis,
-            ring: previousRing,
-            sides: sides,
-            v: v + tipRadius,
-            coverage: coverageOffset + v + tipRadius,
-            material: material,
-            web: web
-        )
     }
 }
 
@@ -637,12 +195,18 @@ private func perpendicular(to axis: SIMD3<Float>) -> SIMD3<Float> {
     )
 }
 
-private func mix(_ a: SIMD3<Float>, _ b: SIMD3<Float>, t: Float) -> SIMD3<Float> {
-    a + (b - a) * t
-}
+// MARK: - Draw data
 
-private func mix(_ a: Float, _ b: Float, t: Float) -> Float {
-    a + (b - a) * t
+/// One hand's worth of glove drawing input for the render extension.
+public struct CoolWebGloveDrawData: Sendable {
+    public var side: CoolWebHandSide
+    /// Skinning matrices ordered like the asset skeleton's joints.
+    public var joints: [simd_float4x4]
+    /// Suit-up front distance (m); `CoolWebGloveBuild.coveredFront` when the
+    /// glove is fully on.
+    public var front: Float
+    /// Shell thickening along the normals (m), from the fit.
+    public var inflate: Float
 }
 
 // MARK: - Shared state (game thread writes, render thread reads)
@@ -657,7 +221,9 @@ final class CoolWebGloveState: @unchecked Sendable {
     private static let frontOverscan: Float = 0.015
 
     private struct Entry {
-        var mesh: CoolWebGloveMesh
+        var joints: [simd_float4x4]
+        var coverageExtent: Float
+        var inflate: Float
         /// 0 = bare hand … 1 = fully covered. Advances toward the suit-up
         /// target each game-thread update, so a mid-flight toggle simply
         /// reverses from wherever the front currently is.
@@ -712,7 +278,9 @@ final class CoolWebGloveState: @unchecked Sendable {
 
     func update(
         side: CoolWebHandSide,
-        mesh: CoolWebGloveMesh,
+        joints: [simd_float4x4],
+        coverageExtent: Float,
+        inflate: Float,
         lookedAt: Bool,
         buildDuration: Float,
         gazeDelay: Float,
@@ -731,7 +299,9 @@ final class CoolWebGloveState: @unchecked Sendable {
                 }
                 removedAt[side] = nil
                 entries[side] = Entry(
-                    mesh: mesh,
+                    joints: joints,
+                    coverageExtent: coverageExtent,
+                    inflate: inflate,
                     progress: progress,
                     lastNow: now,
                     // The gaze timer arms from the very first looked-at frame.
@@ -740,7 +310,9 @@ final class CoolWebGloveState: @unchecked Sendable {
                 )
                 return
             }
-            entry.mesh = mesh
+            entry.joints = joints
+            entry.coverageExtent = coverageExtent
+            entry.inflate = inflate
             entry.buildDuration = buildDuration
             let dt = Float(max(0, now - entry.lastNow))
             entry.lastNow = now
@@ -793,45 +365,33 @@ final class CoolWebGloveState: @unchecked Sendable {
         }
     }
 
-    /// Both hands combined into one vertex/index list (indices rebased), or
-    /// empty arrays when disabled/bare. While a glove is partway on, the
-    /// per-vertex front distance (params.w) is stamped from the eased
-    /// progress; covered gloves keep the builder's sentinel untouched.
-    func snapshot(
-        now _: TimeInterval = ProcessInfo.processInfo.systemUptime
-    ) -> (vertices: [CoolWebGloveVertexGPU], indices: [UInt32]) {
+    /// Per-hand draw data, or empty when disabled/bare. While a glove is
+    /// partway on, the front distance is derived from the eased progress;
+    /// covered gloves report the sentinel.
+    func snapshot() -> [CoolWebGloveDrawData] {
         lock.withLock {
-            guard enabled, !entries.isEmpty else { return ([], []) }
-            var vertices: [CoolWebGloveVertexGPU] = []
-            var indices: [UInt32] = []
+            guard enabled, !entries.isEmpty else { return [] }
+            var out: [CoolWebGloveDrawData] = []
             for side in CoolWebHandSide.allCases {
                 guard let entry = entries[side], entry.progress > 0 else {
                     continue
                 }
-                let mesh = entry.mesh
-                guard vertices.count + mesh.vertices.count
-                    <= CoolWebShaderLimits.maxGloveVertices,
-                    indices.count + mesh.indices.count
-                    <= CoolWebShaderLimits.maxGloveIndices
-                else { continue }
-                let base = UInt32(vertices.count)
+                let front: Float
                 if entry.progress < 1 {
                     // smoothstep easing: the front accelerates off the wrist
                     // and settles at the fingertips (mirrored on reverse).
                     let t = entry.progress
                     let eased = t * t * (3 - 2 * t)
-                    let front = eased * (mesh.coverageExtent + Self.frontOverscan)
-                    vertices.append(contentsOf: mesh.vertices.map {
-                        var vertex = $0
-                        vertex.params.w = front
-                        return vertex
-                    })
+                    front = eased * (entry.coverageExtent + Self.frontOverscan)
                 } else {
-                    vertices.append(contentsOf: mesh.vertices)
+                    front = CoolWebGloveBuild.coveredFront
                 }
-                indices.append(contentsOf: mesh.indices.map { $0 + base })
+                out.append(CoolWebGloveDrawData(
+                    side: side, joints: entry.joints, front: front,
+                    inflate: entry.inflate
+                ))
             }
-            return (vertices, indices)
+            return out
         }
     }
 }
@@ -860,10 +420,11 @@ public func coolWebGloveMaxProgress() -> Float {
     CoolWebGloveState.shared.maxProgress()
 }
 
-/// Rebuilds one hand's glove from the latest pose. Call every frame from the
-/// game update; pass nil (or an untracked pose) to hide that hand's glove.
-/// `lookedAt` reports whether the user's gaze is on this hand — it gates
-/// when a bare hand starts building.
+/// Retargets one hand's glove onto the latest pose. Call every frame from
+/// the game update; pass nil (or an untracked pose) to hide that hand's
+/// glove. `lookedAt` reports whether the user's gaze is on this hand — it
+/// gates when a bare hand starts building. No-op until
+/// `loadCoolWebGloveAssets` has provided this side's rigged asset.
 public func updateCoolWebGlove(
     side: CoolWebHandSide,
     pose: CoolWebHandPose?,
@@ -875,10 +436,20 @@ public func updateCoolWebGlove(
         CoolWebGloveState.shared.remove(side: side, now: now)
         return
     }
-    let mesh = CoolWebGloveBuilder.build(pose: pose, side: side, config: config)
+    guard let asset = CoolWebGloveAssetStore.shared.asset(for: side),
+          let joints = CoolWebGloveRig.skinningMatrices(
+              skeleton: asset.skeleton, pose: pose, side: side,
+              fit: config.fit
+          )
+    else {
+        CoolWebGloveState.shared.remove(side: side, now: now)
+        return
+    }
     CoolWebGloveState.shared.update(
         side: side,
-        mesh: mesh,
+        joints: joints,
+        coverageExtent: asset.coverageExtent,
+        inflate: config.fit.inflate,
         lookedAt: lookedAt,
         buildDuration: config.buildDuration,
         gazeDelay: config.suitUpGazeDelay,

@@ -13,12 +13,14 @@
 		0381AEBD2FF56BC900219038 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 0381AEBC2FF56BC900219038 /* UntoldEngineXR */; };
 		AEEF779EA5664684FED5A349 /* WebXRGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8305CF5771FC5CB5D3AB39E3 /* WebXRGame.swift */; };
 		C00000000000000000000001 /* CoolWeb in Frameworks */ = {isa = PBXBuildFile; productRef = C00000000000000000000003 /* CoolWeb */; };
+		C00000000000000000000010 /* Models in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000011 /* Models */; };
 		E86F705EBDEC6F06F3A9548D /* CoolWebVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E415EA5C6AC6B2F8E6D53682 /* CoolWebVisionOSXRApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		8305CF5771FC5CB5D3AB39E3 /* WebXRGame.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = WebXRGame.swift; path = visionOS/WebXRGame.swift; sourceTree = "<group>"; };
 		BB77BBC36715D839F6983304 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = visionOS/Info.plist; sourceTree = "<group>"; };
+		C00000000000000000000011 /* Models */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Models; path = visionOS/Resources/Models; sourceTree = "<group>"; };
 		DC2407AD362C1A348AE76BAD /* CoolWebVisionOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoolWebVisionOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E415EA5C6AC6B2F8E6D53682 /* CoolWebVisionOSXRApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CoolWebVisionOSXRApp.swift; path = visionOS/CoolWebVisionOSXRApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -54,6 +56,7 @@
 				E415EA5C6AC6B2F8E6D53682 /* CoolWebVisionOSXRApp.swift */,
 				8305CF5771FC5CB5D3AB39E3 /* WebXRGame.swift */,
 				BB77BBC36715D839F6983304 /* Info.plist */,
+				C00000000000000000000011 /* Models */,
 			);
 			path = CoolWebVisionOS;
 			sourceTree = "<group>";
@@ -136,6 +139,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C00000000000000000000010 /* Models in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

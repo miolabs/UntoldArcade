@@ -40,6 +40,14 @@ final class WebXRHolder: @unchecked Sendable {
     private var surfaceTriangleStorage = 0
     private var testFirePending = false
     private var releaseAllPending = false
+    private var gloveFitStorage = CoolWebGloveFit()
+
+    /// Glove fit knobs, set from the control window's sliders and read by
+    /// the game thread every frame.
+    var gloveFit: CoolWebGloveFit {
+        get { lock.withLock { gloveFitStorage } }
+        set { lock.withLock { gloveFitStorage = newValue } }
+    }
 
     // MARK: Game-thread writers
 
@@ -117,6 +125,7 @@ struct CoolWebVisionOSXRApp: App {
     @State private var tensionHeatmap = false
     @State private var impactSplat = false
     @State private var suitUp = false
+    @State private var gloveFit = CoolWebGloveFit()
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -183,6 +192,32 @@ struct CoolWebVisionOSXRApp: App {
                         .onChange(of: impactSplat) { _, enabled in
                             setCoolWebSplatsEnabled(enabled)
                         }
+
+                    Divider()
+
+                    // Glove fit: how the suit hand's proportions stretch over
+                    // the real hand. Bone lengths always track the joints;
+                    // these shape the cross-sections and fingertip overshoot
+                    // so the glove fully envelops the hand.
+                    VStack(spacing: 8) {
+                        Text("Glove fit").font(.headline)
+                        fitSlider("Fingertip pad", value: $gloveFit.fingertipPadding,
+                                  range: 0 ... 0.03, format: "%.0f mm", scale: 1000)
+                        fitSlider("Finger girth", value: $gloveFit.fingerGirth,
+                                  range: 0.4 ... 1.6, format: "×%.2f")
+                        fitSlider("Palm thickness", value: $gloveFit.palmThickness,
+                                  range: 0.25 ... 1.5, format: "×%.2f")
+                        fitSlider("Cuff girth", value: $gloveFit.cuffGirth,
+                                  range: 0.7 ... 1.8, format: "×%.2f")
+                        fitSlider("Shell inflate", value: $gloveFit.inflate,
+                                  range: 0 ... 0.012, format: "%.1f mm", scale: 1000)
+                        Button("Reset fit") { gloveFit = CoolWebGloveFit() }
+                            .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: 420)
+                    .onChange(of: gloveFit) { _, fit in
+                        WebXRHolder.shared.gloveFit = fit
+                    }
 
                     Divider()
 
@@ -269,6 +304,24 @@ struct CoolWebVisionOSXRApp: App {
     }
 
     @ViewBuilder
+    /// One labeled fit slider with its live value; `scale` converts the
+    /// stored value for display (e.g. meters → mm).
+    private func fitSlider(
+        _ label: String,
+        value: Binding<Float>,
+        range: ClosedRange<Float>,
+        format: String,
+        scale: Float = 1
+    ) -> some View {
+        HStack(spacing: 12) {
+            Text(label).frame(width: 120, alignment: .leading)
+            Slider(value: value, in: range)
+            Text(String(format: format, value.wrappedValue * scale))
+                .monospacedDigit()
+                .frame(width: 64, alignment: .trailing)
+        }
+    }
+
     private func handDiagnosticsRow(
         label: String,
         diagnostics: WebXRHolder.HandDiagnostics

@@ -101,7 +101,16 @@ public final class CoolWebShooter {
         position: SIMD3<Float>,
         collision: [CoolWebCollisionSphere] = []
     ) {
-        handColliders[hand] = collision
+        // Same sphere layout every frame: pair each sphere with where it was
+        // last frame so the solver can sweep its motion (index-matched; a
+        // different count means the layout changed and history is dropped).
+        var swept = collision
+        if let previous = handColliders[hand], previous.count == collision.count {
+            for i in swept.indices where swept[i].previousCenter == nil {
+                swept[i].previousCenter = previous[i].center
+            }
+        }
+        handColliders[hand] = swept
         heldNet(for: hand)?.updateHand(position)
     }
 

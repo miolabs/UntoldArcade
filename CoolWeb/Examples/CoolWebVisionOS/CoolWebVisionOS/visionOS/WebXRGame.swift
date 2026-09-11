@@ -62,8 +62,45 @@ final class WebXRGame: @unchecked Sendable {
     func start() {
         guard !started else { return }
         started = true
+        loadGloveAssets()
         session.start()
         WebXRHolder.shared.resetDiagnostics()
+    }
+
+    /// Loads the rigged movie-suit gloves the render extension draws. Missing
+    /// assets only disable the glove visuals — webs still work bare-handed.
+    private func loadGloveAssets() {
+        // Folder reference lands at the bundle root. NOTE: it must NOT be
+        // named "Resources" — a root folder of that name breaks codesign's
+        // sealed-resource rules in shallow (iOS-style) bundles.
+        let models = "Models"
+        guard
+            let right = Bundle.main.url(
+                forResource: "techglove_right", withExtension: "usdz",
+                subdirectory: models
+            ),
+            let left = Bundle.main.url(
+                forResource: "techglove_left", withExtension: "usdz",
+                subdirectory: models
+            ),
+            let textures = Bundle.main.url(
+                forResource: "GloveTextures", withExtension: nil,
+                subdirectory: models
+            )
+        else {
+            print("CoolWeb: glove assets missing from the app bundle — gloves disabled")
+            return
+        }
+        do {
+            try loadCoolWebGloveAssets(
+                rightURL: right,
+                leftURL: left,
+                texturesDirectory: textures
+            )
+            print("CoolWeb: rigged glove assets loaded")
+        } catch {
+            print("CoolWeb: glove asset load failed — \(error)")
+        }
     }
 
     func shutdown() {
@@ -111,9 +148,12 @@ final class WebXRGame: @unchecked Sendable {
             // the palm center).
             let palmCenter = (pose.wrist
                 + (pose.index.points[1] + pose.little.points[1]) * 0.5) * 0.5
+            var gloveConfig = CoolWebGloveConfig()
+            gloveConfig.fit = holder.gloveFit
             updateCoolWebGlove(
                 side: side,
                 pose: pose,
+                config: gloveConfig,
                 lookedAt: isLookingAt(palmCenter, head: head),
                 now: now
             )
@@ -131,27 +171,47 @@ final class WebXRGame: @unchecked Sendable {
             // barrel on the inner wrist, matching the drawn glove geometry.
             // A few spheres approximate the gloved hand so the held strand
             // drapes over a closed fist instead of clipping the fingers.
-            let muzzle = CoolWebGloveBuilder.webShooterMuzzle(pose: pose, side: side)
-                ?? pose.wrist
-            let knuckleCenter = (pose.index.points[1] + pose.little.points[1]) * 0.5
-            let midFingers = [pose.index, pose.middle, pose.ring, pose.little]
-                .compactMap { $0.points.count > 2 ? $0.points[2] : nil }
-            let midCenter = midFingers.isEmpty
-                ? knuckleCenter
-                : midFingers.reduce(.zero, +) / Float(midFingers.count)
-            let tips = [pose.index, pose.middle, pose.ring, pose.little]
-                .compactMap { $0.points.last }
-            let tipCenter = tips.isEmpty
-                ? knuckleCenter
-                : tips.reduce(.zero, +) / Float(tips.count)
-            let palmCenter2 = (pose.wrist + knuckleCenter) * 0.5
-            shooter.updateHand(side, position: muzzle, collision: [
-                CoolWebCollisionSphere(center: pose.wrist, radius: 0.042),
-                CoolWebCollisionSphere(center: palmCenter2, radius: 0.05),
-                CoolWebCollisionSphere(center: knuckleCenter, radius: 0.05),
-                CoolWebCollisionSphere(center: midCenter, radius: 0.046),
-                CoolWebCollisionSphere(center: tipCenter, radius: 0.042),
-            ])
+            let muzzle = CoolWebGloveBuilder.webShooterMuzzle(
+                pose: pose, side: side, config: gloveConfig
+            ) ?? pose.wrist
+            // Colliders hug the glove surface: a few big spheres read as an
+            // invisible cushion the strand hovers over, so the hand is a
+            // cloud of small ones — wrist, a palm slab from the wrist toward
+            // each knuckle, then every finger joint down to the tips.
+            var colliders = [
+                CoolWebCollisionSphere(center: pose.wrist, radius: 0.028),
+            ]
+            for chain in [pose.index, pose.middle, pose.ring, pose.little]
+            where chain.points.count >= 5 {
+                let knuckle = chain.points[1]
+                for t in [Float(0.45), 0.75] {
+                    colliders.append(CoolWebCollisionSphere(
+                        center: pose.wrist + (knuckle - pose.wrist) * t,
+                        radius: 0.024
+                    ))
+                }
+                colliders += [
+                    CoolWebCollisionSphere(center: knuckle, radius: 0.02),
+                    CoolWebCollisionSphere(center: chain.points[2], radius: 0.016),
+                    CoolWebCollisionSphere(center: chain.points[3], radius: 0.014),
+                    CoolWebCollisionSphere(center: chain.points[4], radius: 0.013),
+                ]
+            }
+            // The thumb splays away from the palm: cover it and the thenar
+            // mound so a strand leaving the emitter can't slice through it.
+            if pose.thumb.points.count >= 5 {
+                let thumb = pose.thumb.points
+                colliders += [
+                    CoolWebCollisionSphere(
+                        center: (pose.wrist + thumb[1]) * 0.5, radius: 0.026
+                    ),
+                    CoolWebCollisionSphere(center: thumb[1], radius: 0.02),
+                    CoolWebCollisionSphere(center: thumb[2], radius: 0.017),
+                    CoolWebCollisionSphere(center: thumb[3], radius: 0.015),
+                    CoolWebCollisionSphere(center: thumb[4], radius: 0.013),
+                ]
+            }
+            shooter.updateHand(side, position: muzzle, collision: colliders)
 
             switch classifiers[side]?.update(pose: pose) {
             case let .webShooterFired(_, direction):

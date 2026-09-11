@@ -205,73 +205,91 @@ fragment float4 coolWebStrandFragment(WebVertexOut in [[stage_in]]) {
     return float4(rgb, alpha);
 }
 
-// MARK: - Spider-Man glove (opaque, depth-writing)
+// MARK: - Spider-Man glove (opaque, depth-writing, GPU-skinned)
 
-// The glove mesh arrives as world-space vertices rebuilt from the tracked
-// hand every frame; the red-fabric + black-webbing suit look is painted here
-// procedurally from the tube coordinates (u around the limb, v meters along).
+// The glove is the rigged movie-suit asset: static bind-space vertices
+// uploaded once per hand, skinned here against the per-frame joint palette
+// the retarget solver derives from hand tracking. The suit look comes from
+// the asset's baked baseColor textures.
 
 struct GloveVertexOut {
     float4 position [[position]];
     float3 worldPos;
     float3 normal;
-    float2 uv;              // x = u (0…1 around), y = v (m along)
-    float2 matAndRadius;    // x = material (0 palm, 1 metal, 2 finger), y = ring radius (m)
+    float2 uv;
+    float material;         // 0 = red fabric, 1 = shooter metal
     float2 cover;           // x = coverage distance from wrist (m),
                             // y = suit-up front (m); huge = fully covered
-    float2 webCoord;        // web-pattern coords in meters (planar / unrolled)
-    float ao;               // baked ambient occlusion
 };
 
 vertex GloveVertexOut coolWebGloveVertex(
     uint vid [[vertex_id]],
     constant CoolWebUniforms &u [[buffer(CoolWebGloveUniformIndex)]],
-    device const CoolWebGloveVertexGPU *vertices [[buffer(CoolWebGloveVertexIndex)]]
+    device const CoolWebSkinnedGloveVertexGPU *vertices [[buffer(CoolWebGloveVertexIndex)]],
+    constant float4x4 *joints [[buffer(CoolWebGloveJointsIndex)]],
+    constant float4 &gloveParams [[buffer(CoolWebGloveParamsIndex)]]
 ) {
-    const CoolWebGloveVertexGPU v = vertices[vid];
-    GloveVertexOut out;
-    out.worldPos = v.position.xyz;
-    out.position = u.viewProj * float4(v.position.xyz, 1.0);
-    out.normal = v.normal.xyz;
-    out.uv = float2(v.position.w, v.normal.w);
-    out.matAndRadius = float2(v.params.x, v.params.y);
-    out.cover = float2(v.params.z, v.params.w);
-    out.webCoord = v.extra.xy;
-    out.ao = v.extra.z;
-    return out;
-}
+    const CoolWebSkinnedGloveVertexGPU v = vertices[vid];
+    const uint maxJoint = uint(COOLWEB_GLOVE_JOINTS - 1);
+    const uint j0 = clamp(uint(v.texJoint.z), 0u, maxJoint);
+    const uint j1 = clamp(uint(v.texJoint.w), 0u, maxJoint);
+    const uint j2 = clamp(uint(v.extra.x), 0u, maxJoint);
+    const uint j3 = clamp(uint(v.extra.y), 0u, maxJoint);
+    // Weighted matrix blend — fine for affine transforms.
+    const float4x4 skin = joints[j0] * v.weights.x + joints[j1] * v.weights.y
+        + joints[j2] * v.weights.z + joints[j3] * v.weights.w;
 
-// Signed distance (m) to the nearest raised web line for the two fabric
-// looks, modeled on the reference glove: the palm/back of hand carries one
-// big radial spiderweb (spokes + sagging rings from a center), the fingers
-// carry plain rings wrapping the tube.
-static float gloveWebLineDist(float material, float2 wc) {
-    constexpr float twoPi = 6.28318530718;
-    if (material > 1.5) {
-        // Finger: rings every 11.5 mm along the tube.
-        const float spacing = 0.0115;
-        const float phase = fract(wc.y / spacing);
-        return min(phase, 1.0 - phase) * spacing;
-    }
-    // Palm: radial web. Spoke distance grows with radius; rings sag between
-    // spokes like sewn-on cord.
-    const float r = length(wc);
-    const float theta = atan2(wc.y, wc.x);
-    const float spokes = 10.0;
-    const float angTo = (fract(theta / twoPi * spokes) - 0.5) * (twoPi / spokes);
-    const float spokeDist = abs(sin(angTo)) * r;
-    const float spacing = 0.017;
-    const float sag = 0.22 * (0.5 - 0.5 * cos(angTo * spokes));
-    const float phase = fract(r / spacing + sag);
-    const float ringDist = min(phase, 1.0 - phase) * spacing;
-    return min(spokeDist, ringDist);
+    // Shell inflate: thicken the glove along its bind-space normals before
+    // skinning so the real hand never shows through gaps between bones.
+    const float3 bindPos = v.position.xyz + v.normal.xyz * gloveParams.y;
+    const float3 worldPos = (skin * float4(bindPos, 1.0)).xyz;
+    const float3 worldNormal = (skin * float4(v.normal.xyz, 0.0)).xyz;
+
+    GloveVertexOut out;
+    out.worldPos = worldPos;
+    out.position = u.viewProj * float4(worldPos, 1.0);
+    out.normal = worldNormal;
+    out.uv = v.texJoint.xy;
+    out.material = v.normal.w;
+    out.cover = float2(v.position.w, gloveParams.x);
+    return out;
 }
 
 fragment float4 coolWebGloveFragment(
     GloveVertexOut in [[stage_in]],
-    constant CoolWebUniforms &u [[buffer(CoolWebGloveUniformIndex)]]
+    constant CoolWebUniforms &u [[buffer(CoolWebGloveUniformIndex)]],
+    texture2d<float> baseColor [[texture(0)]],
+    texture2d<float> roughnessMap [[texture(1)]],
+    texture2d<float> normalMap [[texture(2)]]
 ) {
-    const float3 normal = normalize(in.normal);
+    constexpr sampler suitSampler(
+        mag_filter::linear, min_filter::linear, mip_filter::linear,
+        address::repeat
+    );
+    const float3 geoNormal = normalize(in.normal);
+
+    // Tangent-free normal mapping: cotangent frame from screen-space
+    // derivatives (no tangents in the vertex data). The uv passed here is
+    // the same (v-flipped) uv the map is sampled with, so the frame and the
+    // texel content stay consistent. Maps are OpenGL-convention (Y+), as
+    // authored for Blender.
+    const float3 dp1 = dfdx(in.worldPos);
+    const float3 dp2 = dfdy(in.worldPos);
+    const float2 duv1 = dfdx(in.uv);
+    const float2 duv2 = dfdy(in.uv);
+    const float3 dp2perp = cross(dp2, geoNormal);
+    const float3 dp1perp = cross(geoNormal, dp1);
+    const float3 tangent = dp2perp * duv1.x + dp1perp * duv2.x;
+    const float3 bitangent = dp2perp * duv1.y + dp1perp * duv2.y;
+    const float invMax = rsqrt(max(dot(tangent, tangent),
+                                   max(dot(bitangent, bitangent), 1e-12)));
+    const float3 texel = normalMap.sample(suitSampler, in.uv).xyz * 2.0 - 1.0;
+    const float3 normal = normalize(
+        tangent * (invMax * texel.x)
+        + bitangent * (invMax * texel.y)
+        + geoNormal * texel.z
+    );
+
     const float3 view = normalize(u.cameraWorld.xyz - in.worldPos);
     const float3 key = normalize(float3(0.30, 0.85, 0.35));
 
@@ -280,7 +298,7 @@ fragment float4 coolWebGloveFragment(
     // built yet, and a hot band right behind it reads as the material
     // assembling. When fully covered the front sits at +1e6 and this whole
     // block is a no-op.
-    const float2 cell = floor(float2(in.uv.x * 48.0, in.uv.y * 420.0));
+    const float2 cell = floor(in.uv * 220.0);
     const float ragged = fract(
         sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453
     );
@@ -291,66 +309,29 @@ fragment float4 coolWebGloveFragment(
     const float bandDist = localFront - in.cover.x;
     const float buildGlow = 1.0 - smoothstep(0.0, 0.012, bandDist);
 
-    float3 color;
-    if (in.matAndRadius.x > 0.5 && in.matAndRadius.x < 1.5) {
-        // Web-shooter barrel: brushed metal with a hot Blinn glint.
-        const float3 albedo = float3(0.30, 0.31, 0.34);
-        const float diffuse = saturate(dot(normal, key)) * 0.6 + 0.30;
-        const float3 half_ = normalize(key + view);
-        const float spec = pow(saturate(dot(normal, half_)), 60.0) * 1.1;
-        const float fresnel = pow(1.0 - saturate(dot(normal, view)), 3.0);
-        color = albedo * diffuse + spec + fresnel * 0.25;
-    } else {
-        // Suit fabric, modeled on the reference glove: red cloth with a
-        // THICK RAISED SILVER web cord. The cord gets a height bump so it
-        // catches light three-dimensionally instead of reading as a print.
-        const float lineDist = gloveWebLineDist(in.matAndRadius.x, in.webCoord);
-        const float lineWidth = in.matAndRadius.x > 1.5 ? 0.0013 : 0.0019;
-        const float aa = max(fwidth(lineDist), 0.0002);
-        float web = 1.0 - smoothstep(lineWidth - aa, lineWidth + aa, lineDist);
-        if (in.matAndRadius.x < 0.5) {
-            // Small solid hub where the spokes converge, like the sewn center.
-            const float r = length(in.webCoord);
-            web = max(web, 1.0 - smoothstep(0.003, 0.0055, r));
-        }
+    const float3 albedo = baseColor.sample(suitSampler, in.uv).rgb;
+    const float rough = roughnessMap.sample(suitSampler, in.uv).r;
+    const bool metal = in.material > 0.5;
 
-        // Height-field bump: the cord stands ~1.5 mm proud of the cloth.
-        const float height = web * 0.0015;
-        const float3 sigmaX = dfdx(in.worldPos);
-        const float3 sigmaY = dfdy(in.worldPos);
-        const float3 r1 = cross(sigmaY, normal);
-        const float3 r2 = cross(normal, sigmaX);
-        const float det = dot(sigmaX, r1);
-        const float3 surfGrad = sign(det)
-            * (dfdx(height) * r1 + dfdy(height) * r2);
-        const float3 bumped = normalize(abs(det) * normal - surfGrad * 1.6);
+    // Key + hemispheric ambient + view fill keeps the shape readable from
+    // every angle in passthrough; the roughness map drives the Blinn lobe
+    // so panel edges and the weave read differently from flat cloth.
+    const float hemi = mix(0.18, 0.34, normal.y * 0.5 + 0.5);
+    const float diffuse = saturate(dot(normal, key) * 0.5 + 0.5);
+    const float fill = saturate(dot(normal, view)) * 0.20;
+    const float3 half_ = normalize(key + view);
+    const float shininess = exp2(mix(7.5, 2.5, rough));
+    const float specStrength = mix(0.65, 0.05, rough) * (metal ? 1.4 : 1.0);
+    const float spec = pow(saturate(dot(normal, half_)), shininess)
+        * specStrength;
+    const float rim = pow(1.0 - saturate(dot(normal, view)), 3.0)
+        * mix(0.22, 0.08, rough);
+    const float3 specTint = metal
+        ? float3(1.0, 1.0, 1.05)
+        : mix(float3(0.6, 0.2, 0.18), float3(1.0), 0.3);
+    float3 color = albedo * (hemi + 0.72 * diffuse + fill)
+        + (spec + rim) * specTint;
 
-        // Red cloth with a faint honeycomb weave (the reference fabric).
-        // The cord is a muted pewter — bright silver read as white stripes
-        // on device.
-        const float2 hp = in.webCoord / 0.0028;
-        const float honey = sin(hp.x * 3.14159) * sin(hp.y * 3.14159);
-        const float3 red = float3(0.52, 0.035, 0.05) * (0.94 + 0.06 * honey);
-        const float3 silver = float3(0.33, 0.33, 0.36);
-        const float3 albedo = mix(red, silver, web);
-
-        // Lighting on the bumped normal sells the relief; baked AO darkens
-        // the finger crotches and the knuckle crease. Hemispheric ambient
-        // (brighter looking up than down) keeps the shape readable where
-        // neither key nor fill reaches.
-        const float hemi = mix(0.18, 0.34, bumped.y * 0.5 + 0.5);
-        const float diffuse = saturate(dot(bumped, key) * 0.5 + 0.5);
-        const float fill = saturate(dot(bumped, view)) * 0.20;
-        const float3 half_ = normalize(key + view);
-        const float shininess = mix(20.0, 64.0, web);
-        const float specStrength = mix(0.06, 0.55, web);
-        const float spec = pow(saturate(dot(bumped, half_)), shininess)
-            * specStrength;
-        const float rim = pow(1.0 - saturate(dot(bumped, view)), 3.0)
-            * mix(0.08, 0.18, web);
-        color = albedo * in.ao * (hemi + 0.70 * diffuse + fill)
-            + (spec + rim) * mix(float3(0.5, 0.12, 0.10), float3(1.0, 1.0, 1.05), web);
-    }
     // Hot ember edge where the suit is materializing — HDR lift so the
     // engine bloom makes the front sizzle.
     color = mix(color, float3(2.4, 0.55, 0.12), buildGlow * 0.9);

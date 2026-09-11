@@ -29,16 +29,22 @@ typedef struct {
     metal::float4 params; // x = seed, y = age (s), zw unused
 } CoolWebSplatGPU;
 
-// One skinned glove vertex, regenerated from the tracked hand every frame.
+// Palette cap of the glove skeleton: 17 deform bones + fingertip and muzzle
+// markers, with headroom. The palette upload carries the asset's count.
+#define COOLWEB_GLOVE_JOINTS 32
+
+// One static bind-space vertex of the rigged glove. Uploaded once per hand;
+// the vertex shader skins it (4 influences) with the per-frame palette.
 typedef struct {
-    metal::float4 position; // xyz world, w = u (0…1 around the limb)
-    metal::float4 normal;   // xyz world normal, w = v (m along the limb)
-    metal::float4 params;   // x = material (0 palm fabric, 1 metal, 2 finger fabric),
-                            // y = ring radius (m),
-                            // z = coverage distance from wrist (m),
-                            // w = suit-up front (m); huge = fully covered
-    metal::float4 extra;    // xy = web-pattern coords (m), z = baked AO, w unused
-} CoolWebGloveVertexGPU;
+    metal::float4 position; // xyz bind-space position,
+                            // w = coverage distance from wrist (m)
+    metal::float4 normal;   // xyz bind-space normal,
+                            // w = material (0 red fabric, 1 shooter metal)
+    metal::float4 texJoint; // xy = uv (v already flipped for Metal),
+                            // zw = joint indices 0/1, as floats
+    metal::float4 weights;  // the four joint weights
+    metal::float4 extra;    // xy = joint indices 2/3 as floats, zw unused
+} CoolWebSkinnedGloveVertexGPU;
 
 typedef struct {
     metal::float4x4 viewProj;    // per-eye view-projection
@@ -54,10 +60,14 @@ enum CoolWebBufferIndex {
     CoolWebSegmentIndex = 1,
 };
 
-// Glove pipeline slots (separate pipeline, separate table).
+// Glove pipeline slots (separate pipeline, separate table). The joint
+// palette and the per-hand params ride setVertexBytes — they are tiny.
 enum CoolWebGloveBufferIndex {
     CoolWebGloveUniformIndex = 0,
     CoolWebGloveVertexIndex = 1,
+    CoolWebGloveJointsIndex = 2,  // float4x4[COOLWEB_GLOVE_JOINTS]
+    CoolWebGloveParamsIndex = 3,  // float4: x = suit-up front (m),
+                                  //         y = shell inflate along normals (m)
 };
 
 #endif /* CoolWebShaderTypes_h */
