@@ -1,8 +1,7 @@
 # SplatTwin
 
-A macOS demo built with [UntoldEngine](https://github.com/untoldengine/UntoldEngine) and the
-[UntoldGaussianTwins](https://github.com/miolabs/UntoldGaussianTwins) package: three objects
-stand on a floor, each a mesh linked to a Gaussian-splat twin. Walk up to one and the mesh
+A macOS demo built with [UntoldEngine](https://github.com/untoldengine/UntoldEngine): three
+objects stand on a floor, each a mesh linked to a Gaussian-splat twin. Walk up to one and the mesh
 cross-fades to its splat with no popping; walk away and it fades back. While the splat shows,
 the mesh keeps writing depth as a shrunk occluder shell, so the splat is hidden behind the
 object's far side but never by its own surface, and it keeps casting its shadow.
@@ -16,7 +15,8 @@ xcodegen generate
 open SplatTwin.xcodeproj
 ```
 
-Select the `SplatTwin` scheme and press `Cmd+R` (macOS 26.0+, a Metal GPU).
+Select the `SplatTwin` scheme and press `Cmd+R` (macOS 26.0+, a Metal GPU). `Cmd+U` runs both
+test bundles, the swap policy's included.
 
 Controls: `WASD` move, `Q`/`E` up and down, right-drag to orbit. The HUD lists each object's
 state (mesh, loading, fading, splat), the swap distance and the fade length as live sliders,
@@ -28,9 +28,10 @@ is swapped and its far side shows through.
 - The twins are synthesised at first launch: `SplatSynthesizer` scatters flat splats over each
   primitive's surface, bakes a fixed light into their colours the way a real capture does, and
   writes a `.untoldgs` payload to the caches folder. No downloads, no large assets.
-- `GaussianTwinSystem` (from the package) loads a payload when the camera comes within the swap
-  distance, runs the cross-fade through the engine's `MeshFadeComponent` and the splat's
-  `opacityScale`, and switches the mesh's colour off behind its `MeshOccluderComponent` shell.
+- `GaussianTwinSystem` (the demo's own code, in `Sources/SplatTwin/GaussianTwins/`) loads a
+  payload when the camera comes within the swap distance, runs the cross-fade through the
+  engine's `MeshFadeComponent` and the splat's `opacityScale`, and switches the mesh's colour
+  off behind its `MeshOccluderComponent` shell.
 - To try a real capture, put `capture.untold` (the mesh) and `capture.untoldgs` (its cooked
   splat) into `Sources/SplatTwin/GameData/Twins/`; the demo adds it as a fourth object.
 
@@ -45,13 +46,23 @@ SplatTwin/
 │   ├── GameScene.swift         # Engine setup, camera, light, input
 │   ├── TwinShowcase.swift      # The objects and their twins
 │   ├── SplatSynthesizer.swift  # Splat covers for primitives, written as .untoldgs
+│   ├── GaussianTwins/          # The swap policy: component, state machine, system
 │   └── GameData/Twins/         # Optional real capture pair
-└── Tests/SplatTwinTests/
-    └── SplatSynthesizerTests.swift
+├── Tests/SplatTwinTests/
+│   └── SplatSynthesizerTests.swift
+└── Tests/GaussianTwinTests/    # The policy on its own, without the app around it
+    ├── GaussianTwinStateMachineTests.swift  # The swap's decisions, no scene needed
+    ├── GaussianTwinSwapRenderTests.swift    # The whole swap against the engine (Metal GPU)
+    └── Resources/test_gaussians.ply
 ```
 
 ## Dependencies
 
-The engine's `develop` branch (the occluder shell, mesh fade and `gaussianAsset` link the swap
-drives) and the [UntoldGaussianTwins](https://github.com/miolabs/UntoldGaussianTwins) package,
-which holds the swap policy and depends on the engine only through its public API.
+Only the engine's `develop` branch. The engine stays a renderer: it provides the mechanisms, a
+mesh entity that carries a Gaussian splat beside its geometry, the depth-only occluder shell,
+the mesh fade and the `gaussianAsset` link a `.untold` scene carries. The swap policy that
+drives them (when a twin loads, from what distance it swaps, how fast it fades, how it comes
+back) is this demo's own code in `Sources/SplatTwin/GaussianTwins/`, written against the
+engine's public API only. That is the point of the demo: an app extends the engine from
+outside, without the policy living in the engine; it also served as the test bed for the
+engine's new Gaussian implementation.

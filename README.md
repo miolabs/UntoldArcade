@@ -104,7 +104,7 @@ open SceneBuilder/SceneBuilder.xcodeproj
 
 ![SplatTwin demo: the same view as meshes and after the swap](docs/media/SplatTwin/demo.png)
 
-Mesh-to-Gaussian-splat twins: three objects cross-fade from their mesh to a splat "capture" as you walk up to them and back as you leave, while the mesh keeps writing depth as a shrunk occluder shell and keeps casting its shadow. The captures are synthesised at first launch, so nothing large ships. Built on the [UntoldGaussianTwins](https://github.com/miolabs/UntoldGaussianTwins) package; a HUD exposes the swap distance, fade, splat exposure and the occluder shells.
+Mesh-to-Gaussian-splat twins: three objects cross-fade from their mesh to a splat "capture" as you walk up to them and back as you leave, while the mesh keeps writing depth as a shrunk occluder shell and keeps casting its shadow. The captures are synthesised at first launch, so nothing large ships. The swap policy is the demo's own code on the engine's public API, an example of extending the engine from outside; a HUD exposes the swap distance, fade, splat exposure and the occluder shells.
 
 ```bash
 open SplatTwin/SplatTwin.xcodeproj

@@ -1,14 +1,12 @@
 name: SplatTwin
 
 packages:
-  # The swap policy is the UntoldGaussianTwins package; the engine provides the occluder shell,
-  # mesh fade and gaussianAsset link it drives.
+  # The engine provides the mechanisms (a mesh entity that carries a splat beside its geometry,
+  # the occluder shell, the mesh fade, the gaussianAsset link); the swap policy that drives them
+  # is this demo's own code, in Sources/SplatTwin/GaussianTwins.
   UntoldEngine:
     url: https://github.com/untoldengine/UntoldEngine.git
     branch: develop
-  UntoldGaussianTwins:
-    url: https://github.com/miolabs/UntoldGaussianTwins.git
-    branch: main
 
 targets:
   SplatTwin:
@@ -25,8 +23,6 @@ targets:
     dependencies:
       - package: UntoldEngine
         product: UntoldEngine
-      - package: UntoldGaussianTwins
-        product: UntoldGaussianTwins
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.untoldengine.splattwin
@@ -59,3 +55,47 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.untoldengine.splattwin.tests
         SWIFT_VERSION: 5.0
         GENERATE_INFOPLIST_FILE: YES
+
+  # The swap policy on its own, without the app around it: the policy sources are compiled
+  # into this bundle and the tests drive the ticks themselves against a renderer they create,
+  # so the app's frame loop cannot tick the system underneath them.
+  GaussianTwinTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/SplatTwin/GaussianTwins
+      - path: Tests/GaussianTwinTests
+        excludes:
+          - "Resources"
+      - path: Tests/GaussianTwinTests/Resources
+        buildPhase: resources
+    dependencies:
+      - package: UntoldEngine
+        product: UntoldEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.untoldengine.splattwin.gaussiantwintests
+        SWIFT_VERSION: 5.0
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  SplatTwin:
+    build:
+      targets:
+        SplatTwin: all
+        SplatTwinTests: [test]
+        GaussianTwinTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SplatTwinTests
+        - GaussianTwinTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

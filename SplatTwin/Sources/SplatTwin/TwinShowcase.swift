@@ -11,7 +11,6 @@ import Foundation
 import simd
 import SwiftUI
 import UntoldEngine
-import UntoldGaussianTwins
 
 /// One object on show, and what its twin is doing this frame.
 struct TwinReadout: Identifiable, Equatable {

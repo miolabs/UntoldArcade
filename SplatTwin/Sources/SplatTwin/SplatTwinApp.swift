@@ -7,7 +7,6 @@
 
 import SwiftUI
 import UntoldEngine
-import UntoldGaussianTwins
 
 @main
 struct SplatTwinApp: App {
