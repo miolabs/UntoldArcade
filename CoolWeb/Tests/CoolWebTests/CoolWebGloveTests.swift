@@ -347,6 +347,36 @@ final class CoolWebGloveTests: XCTestCase {
         }
     }
 
+    func testCuffFollowsTheTrackedForearm() throws {
+        // With ARKit's forearm joint in the pose, the forearm bone must point
+        // from the wrist toward the tracked elbow (bind length kept) instead
+        // of trailing wherever the palm faces.
+        let asset = try rightAsset()
+        let skeleton = asset.skeleton
+        var pose = makeHand()
+        let towardElbow = simd_normalize(SIMD3<Float>(0.3, -0.2, 1.0))
+        pose.forearm = pose.wrist + towardElbow * 0.25
+
+        let matrices = try XCTUnwrap(CoolWebGloveRig.skinningMatrices(
+            skeleton: skeleton, pose: pose, side: .right, fit: .neutral
+        ))
+        let forearm = try XCTUnwrap(skeleton.jointIndex(named: "forearmArm"))
+        let wrist = try XCTUnwrap(skeleton.jointIndex(named: "wrist"))
+        let bindLength = simd_length(
+            skeleton.bindPositions[forearm] - skeleton.bindPositions[wrist]
+        )
+        let mapped4 = matrices[forearm] * SIMD4<Float>(skeleton.bindPositions[forearm], 1)
+        let mapped = SIMD3(mapped4.x, mapped4.y, mapped4.z)
+        let expected = pose.wrist + towardElbow * bindLength
+        XCTAssertLessThan(simd_length(mapped - expected), 1e-3)
+
+        // Without a forearm the cuff still resolves (rigid with the palm).
+        pose.forearm = nil
+        XCTAssertNotNil(CoolWebGloveRig.skinningMatrices(
+            skeleton: skeleton, pose: pose, side: .right
+        ))
+    }
+
     func testDegeneratePoseReturnsNilInsteadOfNaNs() throws {
         let asset = try rightAsset()
         let point = SIMD3<Float>(0, 1, 0)

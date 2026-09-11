@@ -30,6 +30,9 @@ public struct CoolWebFingerChain: Sendable, Equatable {
 public struct CoolWebHandPose: Sendable, Equatable {
     public var isTracked: Bool
     public var wrist: SIMD3<Float>
+    /// ARKit's forearm joint (toward the elbow), when tracked — the glove's
+    /// cuff follows it instead of the palm's heading.
+    public var forearm: SIMD3<Float>?
     public var thumb: CoolWebFingerChain
     public var index: CoolWebFingerChain
     public var middle: CoolWebFingerChain
@@ -39,6 +42,7 @@ public struct CoolWebHandPose: Sendable, Equatable {
     public init(
         isTracked: Bool,
         wrist: SIMD3<Float>,
+        forearm: SIMD3<Float>? = nil,
         thumb: CoolWebFingerChain,
         index: CoolWebFingerChain,
         middle: CoolWebFingerChain,
@@ -47,6 +51,7 @@ public struct CoolWebHandPose: Sendable, Equatable {
     ) {
         self.isTracked = isTracked
         self.wrist = wrist
+        self.forearm = forearm
         self.thumb = thumb
         self.index = index
         self.middle = middle

@@ -169,6 +169,7 @@ public final class CoolWebSpatialSession: @unchecked Sendable {
         return CoolWebHandPose(
             isTracked: anchor.isTracked,
             wrist: wrist,
+            forearm: world(.forearmArm),
             thumb: CoolWebFingerChain(points: [
                 wrist,
                 world(.thumbKnuckle),

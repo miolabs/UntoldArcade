@@ -90,18 +90,37 @@ public enum CoolWebGloveRig {
         }
 
         stamp(wristIndex, linear: palmLinear, head: wristTarget)
-        // The forearm head keeps its bind offset from the wrist so the cuff
-        // trails naturally.
+
+        // The cuff points at the tracked elbow, not wherever the palm faces:
+        // otherwise bending the wrist swings the gauntlet along with the
+        // hand. Bind length kept (the cuff is as long as the asset's); the
+        // cross-section takes the cuff girth. Without a tracked forearm the
+        // cuff trails the palm rigidly.
+        let bindForearm = bind[forearmIndex] - bind[wristIndex]
+        let forearmLinear: simd_float3x3
+        if let forearm = pose.forearm,
+           simd_length_squared(forearm - wristTarget) > 1e-8 {
+            let rotation = shortestArc(
+                from: rootRotation * bindForearm,
+                to: forearm - wristTarget
+            ) * rootRotation
+            forearmLinear = rotation * axialScale(
+                axis: bindForearm, along: 1, across: cuffGirth
+            )
+        } else {
+            forearmLinear = cuffLinear
+        }
         stamp(
             forearmIndex,
-            linear: cuffLinear,
-            head: wristTarget + cuffLinear * (bind[forearmIndex] - bind[wristIndex])
+            linear: forearmLinear,
+            head: wristTarget + forearmLinear * bindForearm
         )
+        // The emitter sits on the gauntlet: it rides with the cuff.
         if let muzzle = skeleton.jointIndex(named: CoolWebGloveSkeleton.muzzleJoint) {
             stamp(
                 muzzle,
-                linear: palmLinear,
-                head: wristTarget + palmLinear * (bind[muzzle] - bind[wristIndex])
+                linear: forearmLinear,
+                head: wristTarget + forearmLinear * (bind[muzzle] - bind[wristIndex])
             )
         }
 
