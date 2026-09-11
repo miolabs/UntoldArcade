@@ -17,21 +17,21 @@ final class CoolWebGloveTests: XCTestCase {
 
     private static let loadedRight: CoolWebGloveAsset? =
         try? CoolWebGloveAssetLoader.load(
-            url: modelsDirectory.appendingPathComponent("techglove_right.usdz"),
+            url: modelsDirectory.appendingPathComponent("hand_right.usdz"),
             side: .right
         )
     private static let loadedLeft: CoolWebGloveAsset? =
         try? CoolWebGloveAssetLoader.load(
-            url: modelsDirectory.appendingPathComponent("techglove_left.usdz"),
+            url: modelsDirectory.appendingPathComponent("hand_left.usdz"),
             side: .left
         )
 
     private func rightAsset() throws -> CoolWebGloveAsset {
-        try XCTUnwrap(Self.loadedRight, "techglove_right.usdz failed to load")
+        try XCTUnwrap(Self.loadedRight, "hand_right.usdz failed to load")
     }
 
     private func leftAsset() throws -> CoolWebGloveAsset {
-        try XCTUnwrap(Self.loadedLeft, "techglove_left.usdz failed to load")
+        try XCTUnwrap(Self.loadedLeft, "hand_left.usdz failed to load")
     }
 
     /// A pose whose joints sit exactly at the asset's bind positions — the

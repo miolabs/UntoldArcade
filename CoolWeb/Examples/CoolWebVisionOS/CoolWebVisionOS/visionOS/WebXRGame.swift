@@ -76,11 +76,11 @@ final class WebXRGame: @unchecked Sendable {
         let models = "Models"
         guard
             let right = Bundle.main.url(
-                forResource: "techglove_right", withExtension: "usdz",
+                forResource: "hand_right", withExtension: "usdz",
                 subdirectory: models
             ),
             let left = Bundle.main.url(
-                forResource: "techglove_left", withExtension: "usdz",
+                forResource: "hand_left", withExtension: "usdz",
                 subdirectory: models
             ),
             let textures = Bundle.main.url(

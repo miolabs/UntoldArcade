@@ -1,6 +1,6 @@
 # Converts a Mixamo-rigged suit hand blend (hand_R.blend / hand_L.blend) into
 # the CoolWeb glove usdz: 17 ARKit-named bones, <=4 influences, 2 materials.
-# Usage: blender --background hand_R.blend --python convert_hand.py -- Right /out/techglove_right.usdz /path/GloveTextures
+# Usage: blender --background hand_R.blend --python convert_hand.py -- Right /out/hand_right.usdz /path/GloveTextures
 import bpy
 import sys
 from mathutils import Vector
