@@ -1,0 +1,119 @@
+# CoolZombie
+
+AI character locomotion demo for [Untold Engine](https://github.com/untoldengine/UntoldEngine) — **no animation state machine**.
+
+A wandering target orbits the arena and the character chases it. Every frame the AI states a *goal* (desired velocity and facing, straight from steering); the engine's animation stack does the rest:
+
+- **Motion matching** searches the loaded clips for the frame that best matches the current pose and predicted trajectory — nobody calls `changeAnimation`.
+- **Inertialized transitions** smooth every clip jump.
+- **Root motion** moves the entity: the clips' own travel is authoritative, so there is no foot sliding from mismatched speeds.
+- **Foot IK** plants the feet on the ground.
+
+Far from the target the character runs, closing in it walks, arrived it idles — all emergent from one `setMotionMatchingGoal` call per frame.
+
+## Run
+
+```bash
+swift run CoolZombie
+```
+
+macOS 14+. The package pins the engine to the miolabs fork's `develop`
+branch (`Package.resolved` records the exact commit).
+
+## Assets
+
+The demo is written so assets swap without code changes: drop in new
+`.untold` clips, list them in `ZombieResources.chaseClips`, and the motion
+database rebuilds from whatever is loaded. None of the assets are in this
+repository (see the licenses below); the expected layout is:
+
+```
+Sources/CoolZombieKit/Resources/
+  Models/ZombieAA/ZombieAA.untold
+  Models/ZombieAA/Textures/T_ZombieAA_BC_V2.png      base color
+  Models/ZombieAA/Textures/T_ZombieAA_N_V2.png       normal
+  Models/ZombieAA/Textures/T_ZombieAA_AO_R_M_V2.png  occlusion / roughness / metallic
+  Animations/<clip>/<clip>.untold                    one folder per clip
+```
+
+Texture paths inside a `.untold` resolve relative to the model file, so the
+`Textures/` folder must sit next to it. Cook the model with the engine's
+exporter at or after commit `872ea646`: earlier exporters collapsed packed
+textures onto the base color (the engine then sampled the albedo as a
+normal map) and exported roughness at half strength.
+
+## License
+
+MPL-2.0, matching the engine. This demo is non-commercial.
+
+## Animations
+
+The demo ships with two interchangeable clip sets; pick one with the
+launch argument `-clipSet style100` (default, committed) or `-clipSet pack`
+(bring your own copy).
+
+### 100STYLE Zombie (`-clipSet style100`, default)
+
+The Zombie style of the [100STYLE dataset](https://www.ianxmason.com/100style/)
+(Mason, Starke, Komura 2022, CC BY 4.0): one Xsens capture per locomotion
+type — idle, forward/backward/sideways walks and runs, and a transitions
+take — retargeted onto the mannequin rig and cooked with
+`Tools/retarget_100style.py`. The script imports each BVH into Blender
+headless, retargets it with a world-space delta retarget (rest poses
+aligned by bone direction, so the mannequin's A-pose meets the Xsens
+T-pose), puts the low-passed hip path and heading into the `root` bone
+(a static root for the idle), and exports through the Untold add-on:
+
+```bash
+mkdir -p ~/Downloads/100STYLE/Zombie   # Zombie_*.bvh + Frame_Cuts.csv from the dataset page
+CLIPS="ID:s100_idle,FW:s100_walk,FR:s100_run,BW:s100_walk_back,BR:s100_run_back,SW:s100_side_walk,SR:s100_side_run,TR1:s100_transitions" \
+OUT=/tmp/s100 /Applications/Blender.app/Contents/MacOS/Blender -b --python Tools/retarget_100style.py
+```
+
+then copy each `<clip>/<clip>.untold` under `Sources/CoolZombieKit/Resources/Animations/`.
+The cooked files (54 MB) are committed — CC BY 4.0 allows it; the demo
+credits *100STYLE dataset, Mason, Starke & Komura* — so a fresh clone runs
+without any pack. Only the `ZombieAA` model still has to be supplied.
+
+### MoCap Online Zombie Pro (`-clipSet pack`)
+
+The zombie's animation clips are cooked from [MoCap Online's Zombie Pro
+pack](https://mocaponline.com/products/ue4-zombie-pro), whose license does
+not permit redistributing animation data — so this repository contains no
+clips, only the code. To run the demo:
+
+- own the pack, export the sequences as glTF, and cook them with the
+  Untold Engine Blender add-on into
+  `Sources/CoolZombieKit/Resources/Animations/<clip>/<clip>.untold`, or
+- download a prebuilt demo binary from the Releases page, where the
+  clips ship embedded in the compiled app as the license allows.
+
+The `ZombieAA` model comes from Studio New Punch's "Zombie Pack V1"
+(Unreal Marketplace) and is likewise not redistributable in source form —
+it ships only inside the prebuilt demo binaries.
+
+## visionOS (Apple Vision Pro)
+
+`Examples/CoolZombieVisionOS` is a mixed-reality build: the zombie waits a
+few meters in front of you in your real room; walk toward it and it comes
+for you, stopping an arm's length away. The chase logic lives in the
+`CoolZombieKit` library target (shared with the macOS demo); the app only
+feeds it the head position from ARKit world tracking.
+
+Open `Examples/CoolZombieVisionOS/CoolZombieVisionOS.xcodeproj` and run the
+`CoolZombieVisionOS-visionOS` scheme. The control window has *Provoke it*,
+*Reset*, and an inspection mode picker — *Chase* is the game; *Roam* walks
+a circle around the spawn point at a walk/jog/run speed, *Idle* stands in
+the idle clip, *Freeze* pauses the animation on its current pose — none of
+which target you, so you can walk around the zombie and inspect it. On the
+device the zombie stands on the floor plane ARKit detects (the world
+origin's own floor estimate can be a centimetre or two off; the footnote
+shows the height in use and whether it was detected or assumed). In the
+simulator no planes are detected and the floor is placed 1 m below the
+head; launch arguments `-autoOpenSpace`, `-autoProvoke`,
+`-autoRoam walk|jog|run` and `-autoMode idle|freeze` open the immersive
+space and start a mode without gaze-and-pinch input, for automated runs:
+
+```bash
+xcrun simctl launch <udid> com.miolabs.CoolZombieVisionOS -autoOpenSpace -autoProvoke
+```
