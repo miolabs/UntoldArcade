@@ -15,7 +15,7 @@ Clone it, open a folder, hit `⌘R`, and you're looking at the feature instead o
 
 ## 📺 Demos
 
-Each demo is a **standalone Xcode project** with its own README, tutorial, and bundled assets — no setup beyond opening the `.xcodeproj`. The three Rendering Extensions (CoolSaber, CoolWater, CoolCloth) are reusable plugins — each ships its own shader library, pipelines, and render-graph passes, and can be dropped into any project.
+Each demo is a **standalone Xcode project** with its own README, tutorial, and bundled assets — no setup beyond opening the `.xcodeproj`. The three Rendering Extensions (CoolSaber, CoolWater, CoolCloth) are reusable plugins — each ships its own shader library, pipelines, and render-graph passes, and can be dropped into any project. CoolBall does the same for physics: it ships a `PhysicsBackend` plugin the engine drives through its physics coordinator.
 
 ### ⚔️ CoolSaber — *visionOS · Rendering Extension*
 
@@ -45,6 +45,21 @@ GPU cloth simulation (XPBD, small-steps scheme) hanging in your real room — pi
 
 ```bash
 open CoolCloth/Examples/CoolClothVisionOS/CoolClothVisionOS.xcodeproj
+```
+
+### 🏀 CoolBall — *visionOS · Physics Backend*
+
+<!-- MEDIA: docs/media/CoolBall/demo.gif -->
+<!-- ![CoolBall demo](docs/media/CoolBall/demo.gif) -->
+
+Mixed-reality basketball, and the first consumer of the engine's physics backend plugin seam: a pure-Swift `PhysicsBackend` simulates the ball against your real floor, walls and furniture (ARKit plane detection), the hoop you place in your room, and your hands. Look at the floor and pinch to place the hoop, pinch near the ball to pick it up, flick to throw — a shot only counts when it comes down through the rim.
+
+- `PhysicsBackendPlugin` installed before renderer creation, driven by the engine's `PhysicsCoordinator` — zero engine changes
+- Rigid bodies, static colliders and trigger volumes expressed with the engine-owned `RigidBodyComponent`/`ColliderComponent`
+- Contact and trigger events delivered through `PhysicsEvents`
+
+```bash
+open CoolBall/Examples/CoolBallVisionOS/CoolBallVisionOS.xcodeproj
 ```
 
 ### 🏛️ ArchvizViewer — *visionOS*
