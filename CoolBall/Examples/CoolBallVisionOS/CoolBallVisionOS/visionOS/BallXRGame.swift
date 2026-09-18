@@ -38,11 +38,8 @@ final class BallXRGame: @unchecked Sendable {
         if holder.takeMoveHoopRequest() {
             game.requestHoopMove()
         }
-        if holder.takeResetBallRequest() {
-            game.resetBall()
-        }
-        if holder.takeLooseBallsRequest() {
-            game.requestLooseBalls()
+        if holder.takeDropBallRequest() {
+            game.requestDropBall()
         }
         if holder.takeResetScoreRequest() {
             game.resetScore()
@@ -52,6 +49,7 @@ final class BallXRGame: @unchecked Sendable {
 
         holder.setDiagnostics(
             score: game.currentScore,
+            balls: game.ballCount,
             planes: game.worldPlaneCount,
             impulse: game.lastImpulse,
             placing: game.currentPhase == .placingHoop,

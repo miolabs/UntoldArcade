@@ -2,7 +2,7 @@
 //  CoolBallScene.swift
 //  CoolBall
 //
-//  Entity construction for the basketball demo: the ball (dynamic body), the
+//  Entity construction for the basketball demo: the balls (dynamic bodies), the
 //  hoop (static pole + backboard boxes, a rim made of a ring of static sphere
 //  colliders, and an invisible trigger volume under the rim), and two
 //  invisible kinematic hand bodies. Visuals use the engine's primitive nodes;
@@ -17,7 +17,6 @@ import UntoldEngine
 /// Node creation is main-actor (the DSL requirement); runtime mutation uses
 /// the engine's lock-backed nonisolated API, callable from the XR game thread.
 public final class CoolBallScene: @unchecked Sendable {
-    public private(set) var ballEntity: EntityID = .invalid
     public private(set) var basketTriggerEntity: EntityID = .invalid
     public private(set) var leftHandEntity: EntityID = .invalid
     public private(set) var rightHandEntity: EntityID = .invalid
@@ -30,8 +29,6 @@ public final class CoolBallScene: @unchecked Sendable {
     public private(set) var rimCenter: SIMD3<Float>?
     /// Horizontal direction from the hoop toward the player while it stands.
     public private(set) var hoopForward: SIMD3<Float>?
-    /// Extra balls with no grab and no scoring: a physics showcase.
-    private var looseBallEntities: [EntityID] = []
 
     /// Size-7 basketball: radius ~0.12 m, mass ~0.62 kg — and bouncy.
     public static let ballRadius: Float = 0.121
@@ -113,22 +110,31 @@ public final class CoolBallScene: @unchecked Sendable {
         }
     }
 
-    // MARK: - Ball
+    // MARK: - Balls
 
-    /// Creates the ball at `position` as a dynamic body, at rest.
-    @MainActor public func spawnBall(at position: SIMD3<Float>) {
-        if ballEntity != .invalid {
-            destroyEntity(entityId: ballEntity)
-        }
+    /// Every ball in play, oldest first. All balls are equal: any can be
+    /// grabbed, thrown and scored with.
+    public private(set) var balls: [EntityID] = []
+    private var ballSet: Set<EntityID> = []
+
+    public var ballCount: Int { balls.count }
+
+    public func isBall(_ entity: EntityID) -> Bool {
+        ballSet.contains(entity)
+    }
+
+    /// Creates a ball at `position` as a dynamic body, at rest.
+    @MainActor @discardableResult
+    public func spawnBall(at position: SIMD3<Float>) -> EntityID {
         let node = SphereNode(
             radius: Self.ballRadius,
             segments: [32, 24],
-            name: "CoolBall.ball"
+            name: "CoolBall.ball\(balls.count)"
         )
         .baseColor(1.0, 1.0, 1.0)
         .roughness(0.7)
         .metallic(0.0)
-        ballEntity = node.entityID
+        let entity = node.entityID
 
         // Classic orange-with-black-channels artwork, equirectangular to
         // match the sphere primitive's UVs. The engine resolves texture paths
@@ -142,15 +148,33 @@ public final class CoolBallScene: @unchecked Sendable {
             forResource: "basketball_baseColor", withExtension: "png"
         ) {
             updateMaterialTexture(
-                entityId: ballEntity, textureType: .baseColor, path: textureURL
+                entityId: entity, textureType: .baseColor, path: textureURL
             )
         } else {
             print("CoolBall: ball texture missing from bundle — plain white ball")
         }
 
-        fitSphereVisual(entity: ballEntity, radius: Self.ballRadius)
-        translateTo(entityId: ballEntity, position: position)
-        attachBallBody(velocity: .zero, at: position)
+        fitSphereVisual(entity: entity, radius: Self.ballRadius)
+        translateTo(entityId: entity, position: position)
+        balls.append(entity)
+        ballSet.insert(entity)
+        attachBallBody(entity: entity, velocity: .zero, at: position)
+        return entity
+    }
+
+    /// Destroys one ball (callable from the game thread).
+    public func removeBall(_ entity: EntityID) {
+        guard ballSet.remove(entity) != nil else { return }
+        balls.removeAll { $0 == entity }
+        destroyEntity(entityId: entity)
+    }
+
+    public func removeAllBalls() {
+        for entity in balls {
+            destroyEntity(entityId: entity)
+        }
+        balls.removeAll()
+        ballSet.removeAll()
     }
 
     /// Makes a sphere node's visual match `radius`. The engine builds spheres
@@ -169,43 +193,44 @@ public final class CoolBallScene: @unchecked Sendable {
         scaleTo(entityId: entity, scale: SIMD3<Float>(repeating: factor))
     }
 
-    /// Makes the ball a simulated body again (used on spawn and on throw
+    /// Makes a ball a simulated body again (used on spawn and on throw
     /// release). Position is the current transform; `velocity` is imparted.
-    public func attachBallBody(velocity: SIMD3<Float>, at position: SIMD3<Float>) {
-        guard ballEntity != .invalid else { return }
-        translateTo(entityId: ballEntity, position: position)
+    public func attachBallBody(entity: EntityID, velocity: SIMD3<Float>, at position: SIMD3<Float>) {
+        guard isBall(entity) else { return }
+        translateTo(entityId: entity, position: position)
 
-        registerComponent(entityId: ballEntity, componentType: ColliderComponent.self)
-        registerComponent(entityId: ballEntity, componentType: RigidBodyComponent.self)
-        if let collider = scene.get(component: ColliderComponent.self, for: ballEntity) {
+        registerComponent(entityId: entity, componentType: ColliderComponent.self)
+        registerComponent(entityId: entity, componentType: RigidBodyComponent.self)
+        if let collider = scene.get(component: ColliderComponent.self, for: entity) {
             collider.shape = .sphere(radius: Self.ballRadius)
             collider.restitution = Self.ballRestitution
             collider.friction = 0.4
         }
-        if let body = scene.get(component: RigidBodyComponent.self, for: ballEntity) {
+        if let body = scene.get(component: RigidBodyComponent.self, for: entity) {
             body.motionType = .dynamic
             body.mass = Self.ballMass
             body.initialLinearVelocity = velocity
         }
     }
 
-    /// Takes the ball out of simulation (while held in the hand). The next
+    /// Takes a ball out of simulation (while held in the hand). The next
     /// coordinator substep removes the body from the backend via the query
     /// diff — no backend-specific call needed.
-    public func detachBallBody() {
-        guard ballEntity != .invalid else { return }
-        scene.remove(component: RigidBodyComponent.self, from: ballEntity)
-        scene.remove(component: ColliderComponent.self, from: ballEntity)
+    public func detachBallBody(entity: EntityID) {
+        guard isBall(entity) else { return }
+        scene.remove(component: RigidBodyComponent.self, from: entity)
+        scene.remove(component: ColliderComponent.self, from: entity)
     }
 
-    /// Directly places the ball (held state — not simulated).
-    public func moveBall(to position: SIMD3<Float>) {
-        guard ballEntity != .invalid else { return }
-        translateTo(entityId: ballEntity, position: position)
+    /// Directly places a ball (held state — not simulated).
+    public func moveBall(_ entity: EntityID, to position: SIMD3<Float>) {
+        guard isBall(entity) else { return }
+        translateTo(entityId: entity, position: position)
     }
 
-    public func ballPosition() -> SIMD3<Float>? {
-        scene.get(component: LocalTransformComponent.self, for: ballEntity)?.position
+    public func ballPosition(_ entity: EntityID) -> SIMD3<Float>? {
+        guard isBall(entity) else { return nil }
+        return scene.get(component: LocalTransformComponent.self, for: entity)?.position
     }
 
     // MARK: - Lighting
@@ -401,60 +426,6 @@ public final class CoolBallScene: @unchecked Sendable {
         hoopForward = nil
     }
 
-    // MARK: - Loose balls
-
-    public var looseBallCount: Int {
-        looseBallEntities.count
-    }
-
-    /// Drops `count` extra balls in a loose vertical stack above `center`.
-    /// They are plain dynamic bodies — no grab, no scoring — and exist to
-    /// show the backends apart: the demo's built-in backend resolves no
-    /// ball-against-ball contact, so they fall through each other and pile
-    /// into one spot; Jolt makes them collide, tumble and scatter.
-    @MainActor public func spawnLooseBalls(count: Int, above center: SIMD3<Float>) {
-        let textureURL = Bundle.module.url(forResource: "basketball_baseColor", withExtension: "png")
-        for index in 0 ..< count {
-            // A slight spiral so no two balls share a column exactly.
-            let angle = Float(index) * 2.4
-            let offset = SIMD3<Float>(cosf(angle) * 0.03, Float(index) * (Self.ballRadius * 2.2), sinf(angle) * 0.03)
-            let node = SphereNode(
-                radius: Self.ballRadius,
-                segments: [24, 16],
-                name: "CoolBall.loose\(looseBallEntities.count)"
-            )
-            .baseColor(1.0, 1.0, 1.0)
-            .roughness(0.7)
-            .metallic(0.0)
-            let entity = node.entityID
-            if let textureURL {
-                updateMaterialTexture(entityId: entity, textureType: .baseColor, path: textureURL)
-            }
-            fitSphereVisual(entity: entity, radius: Self.ballRadius)
-            translateTo(entityId: entity, position: center + offset)
-            registerComponent(entityId: entity, componentType: ColliderComponent.self)
-            registerComponent(entityId: entity, componentType: RigidBodyComponent.self)
-            if let collider = scene.get(component: ColliderComponent.self, for: entity) {
-                collider.shape = .sphere(radius: Self.ballRadius)
-                collider.restitution = Self.ballRestitution
-                collider.friction = 0.4
-            }
-            if let body = scene.get(component: RigidBodyComponent.self, for: entity) {
-                body.motionType = .dynamic
-                body.mass = Self.ballMass
-            }
-            looseBallEntities.append(entity)
-        }
-    }
-
-    /// Removes every loose ball (callable from the game thread).
-    public func clearLooseBalls() {
-        for entity in looseBallEntities {
-            destroyEntity(entityId: entity)
-        }
-        looseBallEntities.removeAll()
-    }
-
     // MARK: - Body proxies
 
     /// Invisible kinematic sphere bodies the backend collides the ball
@@ -492,16 +463,14 @@ public final class CoolBallScene: @unchecked Sendable {
     // MARK: - Teardown
 
     public func clear() {
-        if ballEntity != .invalid { destroyEntity(entityId: ballEntity) }
+        removeAllBalls()
         if leftHandEntity != .invalid { destroyEntity(entityId: leftHandEntity) }
         if rightHandEntity != .invalid { destroyEntity(entityId: rightHandEntity) }
         if sunEntity != .invalid { destroyEntity(entityId: sunEntity) }
-        ballEntity = .invalid
         leftHandEntity = .invalid
         rightHandEntity = .invalid
         sunEntity = .invalid
         removeHoopGhost()
-        clearLooseBalls()
         clearHoop()
     }
 }

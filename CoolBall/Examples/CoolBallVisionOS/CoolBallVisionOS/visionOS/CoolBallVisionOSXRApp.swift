@@ -32,18 +32,19 @@ final class BallXRHolder: @unchecked Sendable {
     private var planeStorage = 0
     private var impulseStorage: Float = 0
     private var engineStorage = "—"
-    private var resetBallPending = false
+    private var dropBallPending = false
     private var resetScorePending = false
-    private var looseBallsPending = false
+    private var ballStorage = 0
     private var placeHoopPending = false
     private var moveHoopPending = false
     private var placingStorage = true
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(score: Int, planes: Int, impulse: Float, placing: Bool, engine: String) {
+    func setDiagnostics(score: Int, balls: Int, planes: Int, impulse: Float, placing: Bool, engine: String) {
         lock.withLock {
             scoreStorage = score
+            ballStorage = balls
             planeStorage = planes
             impulseStorage = impulse
             placingStorage = placing
@@ -66,14 +67,14 @@ final class BallXRHolder: @unchecked Sendable {
     var planeCount: Int { lock.withLock { planeStorage } }
     var lastImpulse: Float { lock.withLock { impulseStorage } }
     var engineName: String { lock.withLock { engineStorage } }
+    var ballCount: Int { lock.withLock { ballStorage } }
 
-    func requestResetBall() { lock.withLock { resetBallPending = true } }
-    func requestLooseBalls() { lock.withLock { looseBallsPending = true } }
+    func requestDropBall() { lock.withLock { dropBallPending = true } }
 
-    func takeLooseBallsRequest() -> Bool {
+    func takeDropBallRequest() -> Bool {
         lock.withLock {
-            let pending = looseBallsPending
-            looseBallsPending = false
+            let pending = dropBallPending
+            dropBallPending = false
             return pending
         }
     }
@@ -93,14 +94,6 @@ final class BallXRHolder: @unchecked Sendable {
         lock.withLock {
             let pending = moveHoopPending
             moveHoopPending = false
-            return pending
-        }
-    }
-
-    func takeResetBallRequest() -> Bool {
-        lock.withLock {
-            let pending = resetBallPending
-            resetBallPending = false
             return pending
         }
     }
@@ -138,7 +131,7 @@ struct CoolBallVisionOSXRApp: App {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Ball 🏀").font(.extraLargeTitle).fontWeight(.bold)
-                    Text("First, place your hoop: look where you want it — the ghost follows your gaze —\nand pinch (or press Place hoop here). Then pinch near the ball to pick it up\nand throw. Put it down through the rim to score!")
+                    Text("First, place your hoop: look where you want it — the ghost follows your gaze —\nand pinch (or press Place hoop here). Then pinch near a ball to pick it up\nand throw. Put it down through the rim to score!")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Button {
@@ -182,30 +175,26 @@ struct CoolBallVisionOSXRApp: App {
                     }
 
                     HStack(spacing: 16) {
-                        Button("Reset ball") {
-                            BallXRHolder.shared.requestResetBall()
+                        Button("Drop ball") {
+                            BallXRHolder.shared.requestDropBall()
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderedProminent)
 
                         Button("Reset score") {
                             BallXRHolder.shared.requestResetScore()
                         }
                         .buttonStyle(.bordered)
-
-                        Button("Drop 5 balls") {
-                            BallXRHolder.shared.requestLooseBalls()
-                        }
-                        .buttonStyle(.bordered)
                     }
-                    Text("Extra balls show the backends apart: the built-in one has no ball-vs-ball contact, Jolt piles them up.")
+                    Text("Drop as many as you like — every ball can be grabbed, thrown and scored with. Balls show the backends apart: the built-in one has no ball-vs-ball contact, Jolt piles them up.")
                         .font(.footnote).foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
 
                     Divider()
 
                     TimelineView(.periodic(from: .now, by: 0.25)) { _ in
                         let holder = BallXRHolder.shared
                         VStack(spacing: 8) {
-                            Text(holder.isPlacingHoop ? "Placing the hoop…" : "Baskets: \(holder.score)")
+                            Text(holder.isPlacingHoop ? "Placing the hoop…" : "Baskets: \(holder.score) · balls: \(holder.ballCount)")
                                 .font(.title2.monospacedDigit()).fontWeight(.semibold)
                             Text(
                                 "Space \(holder.spaceOpen ? "OPEN" : "closed")"

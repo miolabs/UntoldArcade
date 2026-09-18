@@ -3,12 +3,13 @@
 //  CoolBall
 //
 //  Frame-driven basketball logic. The hands are kinematic sphere bodies fed
-//  from hand tracking: they dribble and swat the ball through plain
-//  collisions, and a pinch near the ball grabs it (the body's components are
+//  from hand tracking: they dribble and swat the balls through plain
+//  collisions, and a pinch near a ball grabs it (the body's components are
 //  removed — the coordinator diff takes it out of the backend), carrying it
-//  until release throws it with the tracked hand velocity. Score by putting
-//  the ball down through the rim: a downward crossing of the rim plane inside
-//  the ring, confirmed by the under-rim trigger firing through PhysicsEvents.
+//  until release throws it with the tracked hand velocity. Drop as many
+//  balls as you like; every ball is equal. Score by putting one down through
+//  the rim: a downward crossing of the rim plane inside the ring, confirmed
+//  by the under-rim trigger firing through PhysicsEvents.
 //
 
 import Foundation
@@ -51,16 +52,17 @@ public final class CoolBallGame: @unchecked Sendable {
     private var contactSubscription: EventSubscription?
     private var lastContactImpulse: Float = 0
 
-    // Ring-crossing state (guarded by `lock`: written by the per-frame update,
-    // read by the trigger handler).
-    private var previousBallCenter: SIMD3<Float>?
-    private var throughRingAt: TimeInterval?
+    // Ring-crossing state per ball (guarded by `lock`: written by the
+    // per-frame update, read by the trigger handler).
+    private var previousCenters: [EntityID: SIMD3<Float>] = [:]
+    private var throughRingAt: [EntityID: TimeInterval] = [:]
     /// A made basket must reach the under-rim trigger within this long after
     /// crossing the rim plane downward inside the ring.
     private let basketWindow: TimeInterval = 0.6
 
     // Grab state (game thread only).
     private var grabbingSide: CoolBallHandSide?
+    private var heldBall: EntityID?
     private var grabSamples: [(position: SIMD3<Float>, time: TimeInterval)] = []
     /// The hand that just threw is parked briefly so the ball, re-added at
     /// the pinch point, isn't shoved by that hand's own collider.
@@ -69,8 +71,11 @@ public final class CoolBallGame: @unchecked Sendable {
     /// Pinch tighter than this grabs; wider than this releases (hysteresis).
     private let pinchGrabDistance: Float = 0.025
     private let pinchReleaseDistance: Float = 0.045
-    /// Palm must be this close to the ball to pick it up.
+    /// Palm must be this close to a ball to pick it up.
     private let grabReach: Float = 0.30
+    /// A size-7 ball is never thrown faster indoors; the built-in backend
+    /// enforces the same ceiling on every dynamic body.
+    private let maxThrowSpeed: Float = 10.0
 
     /// Floor height in the world frame. On device the ARKit world origin sits
     /// on the floor beneath the user, so 0 is right. The SIMULATOR has no
@@ -81,22 +86,17 @@ public final class CoolBallGame: @unchecked Sendable {
     #else
     public static let floorY: Float = 0.0
     #endif
-    /// Ball spawns chest-high, drops in and settles on the floor — visibly in
-    /// front of the player (and inside the simulator's fixed view).
+    /// Fallback drop point when the head isn't tracked: chest-high, in front
+    /// of the player (and inside the simulator's fixed view).
     public var ballSpawnPosition = SIMD3<Float>(
         0.0, CoolBallGame.floorY + 1.1, -1.6
     )
-    /// Ball this far below the floor is considered lost and respawns.
-    private var respawnDepth: Float = 3.0
-    /// Loose balls per drop, and the most the scene keeps at once.
-    private let looseBallsPerDrop = 5
-    private let looseBallLimit = 15
-    /// …or this far from where it spawned (through a wall, on the far side
-    /// of the safety floor).
+    /// A ball this far below the floor, or this far from the court, is lost
+    /// and comes back at the drop point.
+    private let respawnDepth: Float = 3.0
     private let respawnRange: Float = 15.0
-    /// A size-7 ball is never thrown faster indoors; the built-in backend
-    /// enforces the same ceiling on every dynamic body.
-    private let maxThrowSpeed: Float = 10.0
+    /// Balls in play at once; dropping one more retires the oldest.
+    private let maxBalls = 24
 
     #if os(visionOS)
     public let session = CoolBallSpatialSession()
@@ -192,7 +192,7 @@ public final class CoolBallGame: @unchecked Sendable {
 
         // Test hooks: `-autoPlaceHoop` confirms placement after a short beat,
         // so automated simulator runs reach the playing phase unattended;
-        // `-autoDropBalls` then drops the loose balls right after the build.
+        // `-autoDropBalls` then drops five balls in front of the hoop.
         if ProcessInfo.processInfo.arguments.contains("-autoPlaceHoop") {
             lock.withLock {
                 autoPlaceDeadline = ProcessInfo.processInfo.systemUptime + 1.5
@@ -220,8 +220,8 @@ public final class CoolBallGame: @unchecked Sendable {
             guard phase == .playing else { return false }
             phase = .placingHoop
             placementGeneration &+= 1
-            throughRingAt = nil
-            previousBallCenter = nil
+            throughRingAt.removeAll()
+            previousCenters.removeAll()
             return true
         }
         guard shouldReset else { return }
@@ -259,12 +259,29 @@ public final class CoolBallGame: @unchecked Sendable {
         let grounded = SIMD3<Float>(position.x, floorLevel.value, position.z)
         scene.buildHoop(at: grounded, facing: facing)
 
-        // Ball appears chest-high right in front of the player, ready to
-        // pick up — fall back to a spot between player and hoop when the
-        // head isn't tracked yet.
-        var spawn = grounded
+        // The first ball appears in front of the player, ready to pick up.
+        ballSpawnPosition = grounded
             + simd_normalize(SIMD3<Float>(facing.x, 0, facing.z)) * 1.5
             + SIMD3<Float>(0, 1.1, 0)
+        scene.spawnBall(at: dropPoint())
+        pushWorldPlanes()
+        coolBallLog.log("hoop placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
+
+        if ProcessInfo.processInfo.arguments.contains("-autoDropBalls"),
+           let rimCenter = scene.rimCenter, let forward = scene.hoopForward
+        {
+            // In front of the hoop and in the simulator's fixed view.
+            let base = SIMD3<Float>(rimCenter.x, floorLevel.value + 0.35, rimCenter.z) + forward * 0.9
+            for index in 0 ..< 5 {
+                let angle = Float(index) * 2.4
+                scene.spawnBall(at: base + SIMD3<Float>(cosf(angle) * 0.03, Float(index) * CoolBallScene.ballRadius * 2.2, sinf(angle) * 0.03))
+            }
+        }
+    }
+
+    /// Where a new ball appears: chest-high, 0.7 m in front of the player's
+    /// head; the fallback spot when the head isn't tracked.
+    private func dropPoint() -> SIMD3<Float> {
         #if os(visionOS)
         if let head = session.headTransform() {
             let headPosition = SIMD3<Float>(
@@ -276,7 +293,7 @@ public final class CoolBallGame: @unchecked Sendable {
             let horizontal = SIMD3<Float>(forward.x, 0, forward.z)
             if simd_length(horizontal) > 0.05 {
                 let direction = simd_normalize(horizontal)
-                spawn = SIMD3<Float>(
+                return SIMD3<Float>(
                     headPosition.x + direction.x * 0.7,
                     floorLevel.value + 1.1,
                     headPosition.z + direction.z * 0.7
@@ -284,40 +301,35 @@ public final class CoolBallGame: @unchecked Sendable {
             }
         }
         #endif
-        ballSpawnPosition = spawn
-        scene.spawnBall(at: spawn)
-        pushWorldPlanes()
-        coolBallLog.log("hoop placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
-        if ProcessInfo.processInfo.arguments.contains("-autoDropBalls"), let drop = looseBallDropPoint() {
-            scene.spawnLooseBalls(count: looseBallsPerDrop, above: drop)
-        }
+        return ballSpawnPosition
     }
 
-    /// Where loose balls are dropped: in front of the hoop, clear of the
-    /// rim, low enough that they pile up instead of bouncing away.
-    private func looseBallDropPoint() -> SIMD3<Float>? {
-        guard let rimCenter = scene.rimCenter, let forward = scene.hoopForward else { return nil }
-        let floor = rimCenter.y - CoolBallScene.rimHeight
-        return SIMD3<Float>(rimCenter.x, floor + 0.35, rimCenter.z) + forward * 0.9
-    }
-
-    /// Drops five extra balls in front of the hoop (control-window button).
-    /// A backend showcase: see `CoolBallScene.spawnLooseBalls`.
-    public func requestLooseBalls() {
-        guard currentPhase == .playing,
-              scene.looseBallCount < looseBallLimit,
-              let drop = looseBallDropPoint()
-        else { return }
+    /// Drops one more ball in front of the player (control-window button).
+    /// Beyond `maxBalls` the oldest ball not in hand is retired first.
+    public func requestDropBall() {
+        guard currentPhase == .playing else { return }
         let generation = lock.withLock { placementGeneration }
-        let count = looseBallsPerDrop
+        let point = dropPoint()
         Task { @MainActor in
             withWorldAccessGate {
                 let stillPlaying = self.lock.withLock {
                     self.phase == .playing && generation == self.placementGeneration
                 }
                 guard stillPlaying else { return }
-                self.scene.spawnLooseBalls(count: count, above: drop)
+                self.retireOldestBallIfNeeded()
+                self.scene.spawnBall(at: point)
             }
+        }
+    }
+
+    private func retireOldestBallIfNeeded() {
+        guard scene.ballCount >= maxBalls else { return }
+        let held = heldBall
+        guard let oldest = scene.balls.first(where: { $0 != held }) else { return }
+        scene.removeBall(oldest)
+        lock.withLock {
+            previousCenters.removeValue(forKey: oldest)
+            throughRingAt.removeValue(forKey: oldest)
         }
     }
 
@@ -356,8 +368,8 @@ public final class CoolBallGame: @unchecked Sendable {
         lock.withLock {
             started = false
             placementGeneration &+= 1
-            throughRingAt = nil
-            previousBallCenter = nil
+            throughRingAt.removeAll()
+            previousCenters.removeAll()
         }
         cancelGrab()
         audio.stop()
@@ -383,42 +395,21 @@ public final class CoolBallGame: @unchecked Sendable {
         lock.withLock { lastContactImpulse }
     }
 
-    public func resetScore() {
-        lock.withLock { score = 0 }
+    public var ballCount: Int {
+        scene.ballCount
     }
 
-    /// Puts the ball back at the spawn point, at rest — the control window's
-    /// 'Reset ball' and the lost-ball recovery. Game thread.
-    public func resetBall() {
-        let wasHeld = grabbingSide != nil
-        cancelGrab()
-        scene.clearLooseBalls()
-        lock.withLock {
-            throughRingAt = nil
-            previousBallCenter = nil
-        }
-        let spawn = ballSpawnPosition
-        scene.moveBall(to: spawn)
-        // The teleport goes through the backend: removing and re-adding the
-        // body's components within one frame never reaches it (the
-        // coordinator diffs the component set per substep and sees no
-        // change). A held ball has its components detached, so those are
-        // re-registered as well — whichever backend body still exists gets
-        // moved, and a missing one is re-added by the next diff.
-        if wasHeld {
-            scene.attachBallBody(velocity: .zero, at: spawn)
-            backendStore.value?.resetBody(entity: scene.ballEntity, position: spawn, velocity: .zero)
-        } else if backendStore.value?.resetBody(entity: scene.ballEntity, position: spawn, velocity: .zero) != true {
-            scene.attachBallBody(velocity: .zero, at: spawn)
-        }
+    public func resetScore() {
+        lock.withLock { score = 0 }
     }
 
     private func subscribeEvents() {
         basketSubscription = PhysicsEvents.shared.onTrigger { [weak self] event in
             guard let self, event.phase == .entered,
                   event.triggerEntity == self.scene.basketTriggerEntity,
-                  event.otherEntity == self.scene.ballEntity
+                  self.scene.isBall(event.otherEntity)
             else { return }
+            let ball = event.otherEntity
             // The box under the rim is open on every side: only a ball that
             // just crossed the rim plane downward INSIDE the ring has scored.
             // The crossing is normally recorded by the per-frame update; when
@@ -427,11 +418,11 @@ public final class CoolBallGame: @unchecked Sendable {
             let now = ProcessInfo.processInfo.systemUptime
             let total: Int? = self.lock.withLock {
                 var armed = false
-                if let at = self.throughRingAt, now - at < self.basketWindow {
+                if let at = self.throughRingAt[ball], now - at < self.basketWindow {
                     armed = true
-                } else if let previous = self.previousBallCenter,
+                } else if let previous = self.previousCenters[ball],
                           let rimCenter = self.scene.rimCenter,
-                          let state = self.backendStore.value?.bodyState(for: self.scene.ballEntity),
+                          let state = self.backendStore.value?.bodyState(for: ball),
                           Self.crossedRimDownward(
                               previous: previous, current: state.position,
                               rimCenter: rimCenter,
@@ -442,7 +433,7 @@ public final class CoolBallGame: @unchecked Sendable {
                     armed = true
                 }
                 guard armed else { return nil }
-                self.throughRingAt = nil
+                self.throughRingAt.removeValue(forKey: ball)
                 self.score += 1
                 return self.score
             }
@@ -453,12 +444,14 @@ public final class CoolBallGame: @unchecked Sendable {
         contactSubscription = PhysicsEvents.shared.onContact { [weak self] event in
             // Only impacts make a sound: Jolt also reports contacts ending.
             guard let self, event.phase == .began else { return }
+            let ballIsA = self.scene.isBall(event.entityA)
+            guard ballIsA || self.scene.isBall(event.entityB) else { return }
             self.lock.withLock { self.lastContactImpulse = event.impulse }
 
             // The bounce. A hand hit sounds at full strength; bounces off the
-            // world and the hoop are softer. Impulse for a firm throw-down is
-            // ~1-2 N·s; a dying bounce ~0.05.
-            let other = event.entityA == self.scene.ballEntity ? event.entityB : event.entityA
+            // world, the hoop and other balls are softer. Impulse for a firm
+            // throw-down is ~1-2 N·s; a dying bounce ~0.05.
+            let other = ballIsA ? event.entityB : event.entityA
             let isHandContact = other == self.scene.leftHandEntity
                 || other == self.scene.rightHandEntity
             let scale: Float = isHandContact ? 1.0 : 0.5
@@ -466,7 +459,7 @@ public final class CoolBallGame: @unchecked Sendable {
         }
     }
 
-    /// True when the ball center moved from on/above the rim plane to below
+    /// True when a ball center moved from on/above the rim plane to below
     /// it, and the interpolated crossing point lies inside the ring with a
     /// ball radius to spare — the geometric test for "went through the hoop".
     static func crossedRimDownward(
@@ -497,40 +490,44 @@ public final class CoolBallGame: @unchecked Sendable {
         #if os(visionOS)
         updateHands(now: now)
         #endif
-        trackRingCrossing(now: now)
+        trackRingCrossings(now: now)
 
         // TEMP diagnostics: ball state heartbeat (os_log reaches `log stream`).
         heartbeatAccumulator += deltaTime
         if heartbeatAccumulator > 1.0 {
             heartbeatAccumulator = 0
-            if let state = backendStore.value?.bodyState(for: scene.ballEntity) {
-                coolBallLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) loose=\(self.scene.looseBallCount)")
+            if let first = scene.balls.first, let state = backendStore.value?.bodyState(for: first) {
+                coolBallLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) balls=\(self.scene.ballCount)")
             }
         }
 
-        respawnIfLost()
+        recoverLostBalls()
     }
 
-    /// Records a downward crossing of the rim plane inside the ring (arms the
-    /// basket for `basketWindow`), and disarms when the ball climbs back
-    /// above the rim.
-    private func trackRingCrossing(now: TimeInterval) {
-        guard let state = backendStore.value?.bodyState(for: scene.ballEntity) else {
-            lock.withLock { previousBallCenter = nil }
-            return
-        }
-        lock.withLock {
-            defer { previousBallCenter = state.position }
-            guard let previous = previousBallCenter, let rimCenter = scene.rimCenter else { return }
-            if Self.crossedRimDownward(
-                previous: previous, current: state.position,
-                rimCenter: rimCenter,
-                rimRadius: CoolBallScene.rimRadius,
-                ballRadius: CoolBallScene.ballRadius
-            ) {
-                throughRingAt = now
-            } else if previous.y < rimCenter.y, state.position.y >= rimCenter.y {
-                throughRingAt = nil
+    /// Records a downward crossing of the rim plane inside the ring for each
+    /// ball (arms its basket for `basketWindow`), and disarms when a ball
+    /// climbs back above the rim.
+    private func trackRingCrossings(now: TimeInterval) {
+        guard let backend = backendStore.value else { return }
+        let rimCenter = scene.rimCenter
+        for ball in scene.balls {
+            guard let state = backend.bodyState(for: ball) else {
+                lock.withLock { _ = previousCenters.removeValue(forKey: ball) }
+                continue
+            }
+            lock.withLock {
+                defer { previousCenters[ball] = state.position }
+                guard let previous = previousCenters[ball], let rimCenter else { return }
+                if Self.crossedRimDownward(
+                    previous: previous, current: state.position,
+                    rimCenter: rimCenter,
+                    rimRadius: CoolBallScene.rimRadius,
+                    ballRadius: CoolBallScene.ballRadius
+                ) {
+                    throughRingAt[ball] = now
+                } else if previous.y < rimCenter.y, state.position.y >= rimCenter.y {
+                    throughRingAt.removeValue(forKey: ball)
+                }
             }
         }
     }
@@ -649,13 +646,13 @@ public final class CoolBallGame: @unchecked Sendable {
     }
 
     private func updateGrab(side: CoolBallHandSide, pose: CoolBallHandPose, now: TimeInterval) {
-        if grabbingSide == side {
+        if grabbingSide == side, let held = heldBall {
             if pose.pinchDistance > pinchReleaseDistance {
                 releaseBall(at: pose.pinchPoint, now: now)
             } else {
-                let held = pose.pinchPoint
-                scene.moveBall(to: held)
-                grabSamples.append((held, now))
+                let position = pose.pinchPoint
+                scene.moveBall(held, to: position)
+                grabSamples.append((position, now))
                 // Keep ~120 ms of motion history for the throw velocity.
                 while let first = grabSamples.first, now - first.time > 0.12 {
                     grabSamples.removeFirst()
@@ -664,20 +661,27 @@ public final class CoolBallGame: @unchecked Sendable {
             return
         }
 
-        guard grabbingSide == nil,
-              pose.pinchDistance < pinchGrabDistance,
-              let ballPosition = scene.ballPosition(),
-              simd_length(ballPosition - pose.palm) < grabReach
-        else { return }
+        guard grabbingSide == nil, pose.pinchDistance < pinchGrabDistance else { return }
+        // The nearest ball within reach of the palm.
+        var nearest: (entity: EntityID, distance: Float)?
+        for ball in scene.balls {
+            guard let position = scene.ballPosition(ball) else { continue }
+            let distance = simd_length(position - pose.palm)
+            if distance < grabReach, distance < (nearest?.distance ?? .greatestFiniteMagnitude) {
+                nearest = (ball, distance)
+            }
+        }
+        guard let ball = nearest?.entity else { return }
 
         grabbingSide = side
+        heldBall = ball
         grabSamples = [(pose.pinchPoint, now)]
         lock.withLock {
-            throughRingAt = nil
-            previousBallCenter = nil
+            throughRingAt.removeValue(forKey: ball)
+            previousCenters.removeValue(forKey: ball)
         }
-        scene.detachBallBody()
-        scene.moveBall(to: pose.pinchPoint)
+        scene.detachBallBody(entity: ball)
+        scene.moveBall(ball, to: pose.pinchPoint)
         print("CoolBall: ball grabbed (\(side == .left ? "left" : "right"))")
     }
 
@@ -686,9 +690,10 @@ public final class CoolBallGame: @unchecked Sendable {
             handParkedUntil[side] = now + releaseCooldown
         }
         defer { cancelGrab() }
+        guard let ball = heldBall else { return }
         let releasePoint = position
             ?? grabSamples.last?.position
-            ?? scene.ballPosition()
+            ?? scene.ballPosition(ball)
             ?? ballSpawnPosition
 
         // Throw velocity: displacement over the sampled window, capped so a
@@ -704,28 +709,43 @@ public final class CoolBallGame: @unchecked Sendable {
                 }
             }
         }
-        scene.attachBallBody(velocity: velocity, at: releasePoint)
+        scene.attachBallBody(entity: ball, velocity: velocity, at: releasePoint)
         print(String(
             format: "CoolBall: thrown at %.1f m/s", simd_length(velocity)
         ))
     }
     #endif
 
-    /// Drops any grab in progress without a throw (Move hoop, Reset ball,
-    /// shutdown). Game thread only, like the grab logic itself.
+    /// Drops any grab in progress without a throw (Move hoop, shutdown).
+    /// Game thread only, like the grab logic itself.
     private func cancelGrab() {
         grabbingSide = nil
+        heldBall = nil
         grabSamples.removeAll()
     }
 
-    private func respawnIfLost() {
-        guard grabbingSide == nil, let position = scene.ballPosition() else { return }
-        let fellOut = position.y < floorLevel.value - respawnDepth
-        let horizontal = SIMD3<Float>(position.x - ballSpawnPosition.x, 0, position.z - ballSpawnPosition.z)
-        let wanderedOff = simd_length(horizontal) > respawnRange
-        guard fellOut || wanderedOff else { return }
-        resetBall()
-        print("CoolBall: ball lost \(fellOut ? "below the world" : "far away") — respawned")
+    /// A ball below the floor or far from the court comes back at the drop
+    /// point, at rest. The teleport goes through the backend: removing and
+    /// re-adding the body's components within one frame never reaches it
+    /// (the coordinator diffs the component set per substep).
+    private func recoverLostBalls() {
+        let floor = floorLevel.value
+        for ball in scene.balls where ball != heldBall {
+            guard let position = scene.ballPosition(ball) else { continue }
+            let fellOut = position.y < floor - respawnDepth
+            let horizontal = SIMD3<Float>(position.x - ballSpawnPosition.x, 0, position.z - ballSpawnPosition.z)
+            guard fellOut || simd_length(horizontal) > respawnRange else { continue }
+            let point = dropPoint()
+            lock.withLock {
+                throughRingAt.removeValue(forKey: ball)
+                previousCenters.removeValue(forKey: ball)
+            }
+            scene.moveBall(ball, to: point)
+            if backendStore.value?.resetBody(entity: ball, position: point, velocity: .zero) != true {
+                scene.attachBallBody(entity: ball, velocity: .zero, at: point)
+            }
+            print("CoolBall: ball lost \(fellOut ? "below the world" : "far away") — brought back")
+        }
     }
 
     // MARK: - Diagnostics
