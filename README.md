@@ -62,6 +62,14 @@ Mixed-reality basketball, and the first consumer of the engine's physics backend
 open CoolBall/Examples/CoolBallVisionOS/CoolBallVisionOS.xcodeproj
 ```
 
+### 🧲 UntoldJoltPhysics — *plugin · Physics Backend*
+
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, packaged for every demo to use (`Plugins/UntoldJoltPhysics`). Jolt is vendored as source and compiled by SwiftPM — no binaries — for macOS, iOS and visionOS. CoolBall can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
+
+```bash
+open Plugins/UntoldJoltPhysics/Package.swift
+```
+
 ### 🏛️ ArchvizViewer — *visionOS*
 
 ![ArchvizViewer demo](docs/media/ArchvizViewer/demo.gif)
@@ -161,6 +169,8 @@ UntoldArcade/
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
 ├── CityStreaming/       # visionOS — tiled city streaming with LOD/HLOD
 ├── SceneBuilder/        # macOS/iOS — declarative scene-building demo
+├── Plugins/             # Engine plugins shared by the demos
+│   └── UntoldJoltPhysics/   # Physics Backend plugin — Jolt Physics from source
 └── docs/media/          # Screenshots/GIFs/video referenced by this README
 ```
 
