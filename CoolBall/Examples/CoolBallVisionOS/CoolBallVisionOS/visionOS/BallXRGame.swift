@@ -51,7 +51,8 @@ final class BallXRGame: @unchecked Sendable {
             score: game.currentScore,
             planes: game.worldPlaneCount,
             impulse: game.lastImpulse,
-            placing: game.currentPhase == .placingHoop
+            placing: game.currentPhase == .placingHoop,
+            engine: game.activeEngine?.displayName ?? "none"
         )
     }
 

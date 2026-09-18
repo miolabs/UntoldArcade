@@ -31,6 +31,7 @@ final class BallXRHolder: @unchecked Sendable {
     private var scoreStorage = 0
     private var planeStorage = 0
     private var impulseStorage: Float = 0
+    private var engineStorage = "—"
     private var resetBallPending = false
     private var resetScorePending = false
     private var placeHoopPending = false
@@ -39,12 +40,13 @@ final class BallXRHolder: @unchecked Sendable {
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(score: Int, planes: Int, impulse: Float, placing: Bool) {
+    func setDiagnostics(score: Int, planes: Int, impulse: Float, placing: Bool, engine: String) {
         lock.withLock {
             scoreStorage = score
             planeStorage = planes
             impulseStorage = impulse
             placingStorage = placing
+            engineStorage = engine
         }
     }
 
@@ -62,6 +64,7 @@ final class BallXRHolder: @unchecked Sendable {
     var isPlacingHoop: Bool { lock.withLock { placingStorage } }
     var planeCount: Int { lock.withLock { planeStorage } }
     var lastImpulse: Float { lock.withLock { impulseStorage } }
+    var engineName: String { lock.withLock { engineStorage } }
 
     func requestResetBall() { lock.withLock { resetBallPending = true } }
     func requestResetScore() { lock.withLock { resetScorePending = true } }
@@ -110,10 +113,15 @@ struct BallLayerConfiguration: CompositorLayerConfiguration {
     }
 }
 
+/// UserDefaults key for the backend choice. Also settable as a launch
+/// argument (`-physicsEngine jolt`) for automated simulator runs.
+let physicsEngineDefaultsKey = "physicsEngine"
+
 @main
 struct CoolBallVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @State private var immersionStyle: ImmersionStyle = .mixed
+    @AppStorage(physicsEngineDefaultsKey) private var physicsEngineRaw = CoolBallPhysicsEngine.coolBall.rawValue
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -134,6 +142,20 @@ struct CoolBallVisionOSXRApp: App {
                             .frame(minWidth: 260)
                     }
                     .buttonStyle(.borderedProminent).controlSize(.large)
+
+                    Divider()
+
+                    VStack(spacing: 6) {
+                        Picker("Physics", selection: $physicsEngineRaw) {
+                            ForEach(CoolBallPhysicsEngine.allCases, id: \.rawValue) { engine in
+                                Text(engine.displayName).tag(engine.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        Text("Applies when the Court opens; restart the app to switch afterwards.")
+                            .font(.footnote).foregroundStyle(.tertiary)
+                    }
 
                     Divider()
 
@@ -171,6 +193,7 @@ struct CoolBallVisionOSXRApp: App {
                             Text(
                                 "Space \(holder.spaceOpen ? "OPEN" : "closed")"
                                     + " (last open: \(holder.lastOpenResult))"
+                                    + " · physics \(holder.engineName)"
                                     + " · surfaces \(holder.planeCount)"
                                     + String(format: " · last impact %.2f N·s", holder.lastImpulse)
                             )
@@ -206,7 +229,11 @@ struct CoolBallVisionOSXRApp: App {
 
                 let game = BallXRGame()
                 // Physics backend must install before the renderer exists.
-                guard game.game.installPhysics() else { return }
+                let chosen = CoolBallPhysicsEngine(
+                    rawValue: UserDefaults.standard.string(forKey: physicsEngineDefaultsKey) ?? ""
+                ) ?? .coolBall
+                guard game.game.installPhysics(engine: chosen) else { return }
+                print("CoolBall: physics backend \(game.game.activeEngine?.displayName ?? "none")")
 
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 BallXRHolder.shared.xr = xr

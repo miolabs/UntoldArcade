@@ -15,12 +15,13 @@ import Foundation
 import os
 import simd
 import UntoldEngine
+import UntoldJoltPhysics
 
 public final class CoolBallGame: @unchecked Sendable {
     public let scene = CoolBallScene()
     /// Synthesized bounce/score sounds (no asset files).
     public let audio = CoolBallAudio()
-    private let backendStore = CoolBallLockedBox<CoolBallPhysicsBackend?>(nil)
+    private let backendStore = CoolBallLockedBox<(any CoolBallSimulation)?>(nil)
 
     /// The demo starts by placing the hoop: a translucent ghost follows the
     /// player's gaze along the floor until they confirm (pinch, or the
@@ -103,13 +104,50 @@ public final class CoolBallGame: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    /// Installs the physics backend. Must run before the renderer is created.
+    /// Installs the chosen physics backend. Must run before the renderer is
+    /// created. The registry allows one backend per process: when a backend
+    /// is already installed (the immersive space was reopened) it is reused
+    /// whatever `engine` asks for — the diagnostics show which one is live.
     @discardableResult
-    public func installPhysics() -> Bool {
-        guard let backend = registerCoolBallPhysics() else { return false }
-        backendStore.value = backend
+    public func installPhysics(engine: CoolBallPhysicsEngine = .coolBall) -> Bool {
+        if let active = PhysicsBackendRegistry.shared.activeBackend() {
+            if let builtIn = active as? CoolBallPhysicsBackend {
+                backendStore.value = builtIn
+            } else if let jolt = active as? JoltPhysicsBackend {
+                backendStore.value = CoolBallJoltSimulation(backend: jolt)
+            } else {
+                return false
+            }
+            pushWorldPlanes()
+            logActiveEngine(requested: engine)
+            return true
+        }
+
+        switch engine {
+        case .coolBall:
+            guard let backend = registerCoolBallPhysics() else { return false }
+            backendStore.value = backend
+        case .jolt:
+            var settings = JoltWorldSettings()
+            // Hand proxies park 100 m below when tracking drops: re-appearing
+            // must be a teleport, not a swat.
+            settings.maxKinematicSpeed = 6.0
+            guard let backend = registerJoltPhysics(settings: settings) else { return false }
+            backendStore.value = CoolBallJoltSimulation(backend: backend)
+        }
         pushWorldPlanes()
+        logActiveEngine(requested: engine)
         return true
+    }
+
+    /// The backend actually simulating (nil before `installPhysics`).
+    public var activeEngine: CoolBallPhysicsEngine? {
+        backendStore.value?.engine
+    }
+
+    private func logActiveEngine(requested: CoolBallPhysicsEngine) {
+        let active = activeEngine?.rawValue ?? "none"
+        coolBallLog.log("physics backend: \(active, privacy: .public) (requested \(requested.rawValue, privacy: .public))")
     }
 
     /// Builds the scene: hand bodies, lighting, and the placement ghost.
