@@ -41,3 +41,18 @@ targets:
         Release:
           SWIFT_COMPILATION_MODE: wholemodule
           DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+
+schemes:
+  CoolScanIOS:
+    build:
+      targets:
+        CoolScanIOS: all
+    run:
+      config: Debug
+      # RealityKit's ObjectCaptureView trips a Metal API Validation assert in
+      # its own meshShadowCalculateMip kernel (missing threadgroup binding)
+      # the moment the capture bounding box renders. Apple's bug, not ours —
+      # keep the validation layer off so debug runs survive the scan flow.
+      enableGPUValidationMode: disabled
+    archive:
+      config: Release
