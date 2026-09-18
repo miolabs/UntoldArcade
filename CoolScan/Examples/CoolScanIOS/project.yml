@@ -2,7 +2,8 @@ name: CoolScanIOS
 
 packages:
   UntoldEngine:
-    path: ../../../../UntoldEngine
+    url: https://github.com/untoldengine/UntoldEngine.git
+    branch: develop
   CoolScan:
     path: ../..
 
@@ -22,7 +23,8 @@ targets:
         product: CoolScanPipeline
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.untoldengine.coolscan
+        PRODUCT_BUNDLE_IDENTIFIER: com.miolabs.coolscan
+        DEVELOPMENT_TEAM: 53X2422NYU
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"

@@ -20,7 +20,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		531A69FE583A53F47AED04D5 /* UntoldEngine */ = {isa = PBXFileReference; lastKnownFileType = folder; name = UntoldEngine; path = ../../../../UntoldEngine; sourceTree = SOURCE_ROOT; };
 		558322AFFDF350FAAE15E3B4 /* CoolScan */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CoolScan; path = ../..; sourceTree = SOURCE_ROOT; };
 		5E8630C946ADA2B29C25DB66 /* ScanLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLibraryView.swift; sourceTree = "<group>"; };
 		7049DA8454ACC4DCB1185DB4 /* ball.usdz */ = {isa = PBXFileReference; lastKnownFileType = file.usdz; path = ball.usdz; sourceTree = "<group>"; };
@@ -64,7 +63,6 @@
 			isa = PBXGroup;
 			children = (
 				558322AFFDF350FAAE15E3B4 /* CoolScan */,
-				531A69FE583A53F47AED04D5 /* UntoldEngine */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -129,6 +127,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					F0B7D0EB6BE067109803A5F2 = {
+						DevelopmentTeam = 53X2422NYU;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -143,8 +142,8 @@
 			mainGroup = AA34FEB2DF92403DD4BBD7E6;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				1D44EF6880EBCADA52AEBDFC /* XCRemoteSwiftPackageReference "UntoldEngine" */,
 				BD0E3D5D9D42240066AB6665 /* XCLocalSwiftPackageReference "../.." */,
-				F8ED318FFF139A5D99C670C8 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8FB483435BB6B438EE0D4111 /* Products */;
@@ -247,6 +246,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 53X2422NYU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "CoolScan uses the camera to scan real objects into 3D models.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -257,7 +257,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.coolscan;
+				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.coolscan;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -273,6 +273,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 53X2422NYU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "CoolScan uses the camera to scan real objects into 3D models.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -283,7 +284,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.untoldengine.coolscan;
+				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.coolscan;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -381,11 +382,18 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../..;
 		};
-		F8ED318FFF139A5D99C670C8 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../../../../UntoldEngine;
-		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1D44EF6880EBCADA52AEBDFC /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/untoldengine/UntoldEngine.git";
+			requirement = {
+				branch = develop;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		19989838FE4091614919B82F /* CoolScan */ = {
@@ -398,6 +406,7 @@
 		};
 		B28D1553E12F16E809D9E74A /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 1D44EF6880EBCADA52AEBDFC /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngine;
 		};
 /* End XCSwiftPackageProductDependency section */

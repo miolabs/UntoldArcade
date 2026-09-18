@@ -1,0 +1,15 @@
+{
+  "originHash" : "f483ae4eb8812a442e29fe72accf5ff26b1898ba1d36a405c47c75c05773f060",
+  "pins" : [
+    {
+      "identity" : "untoldengine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/UntoldEngine.git",
+      "state" : {
+        "branch" : "develop",
+        "revision" : "2de8de5a3fb9d9039ce032b59fbe5d96edde1c86"
+      }
+    }
+  ],
+  "version" : 3
+}
