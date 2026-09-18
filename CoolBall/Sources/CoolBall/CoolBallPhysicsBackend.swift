@@ -78,8 +78,8 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
     public let capabilities: PhysicsCapabilities = [.collisions, .triggers]
 
     /// Entity reported for contacts against real-world surfaces, which have no
-    /// engine entity of their own.
-    public static let environmentEntity: EntityID = 0
+    /// engine entity of their own: the engine's null entity (0 is a live id).
+    public static let environmentEntity: EntityID = .invalid
 
     private struct Body {
         var descriptor: PhysicsBodyDescriptor

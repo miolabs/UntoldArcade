@@ -130,8 +130,10 @@ public final class CoolBallGame: @unchecked Sendable {
         case .jolt:
             var settings = JoltWorldSettings()
             // Hand proxies park 100 m below when tracking drops: re-appearing
-            // must be a teleport, not a swat.
-            settings.maxKinematicSpeed = 6.0
+            // must be a teleport, not a swat. No hand moves a metre in 1/60 s.
+            settings.maxKinematicStep = 1.0
+            // Same resting threshold as the built-in backend's floor contacts.
+            settings.minContactSpeed = 0.35
             guard let backend = registerJoltPhysics(settings: settings) else { return false }
             backendStore.value = CoolBallJoltSimulation(backend: backend)
         }
@@ -404,7 +406,8 @@ public final class CoolBallGame: @unchecked Sendable {
             print("CoolBall: 🏀 BASKET! score \(total)")
         }
         contactSubscription = PhysicsEvents.shared.onContact { [weak self] event in
-            guard let self else { return }
+            // Only impacts make a sound: Jolt also reports contacts ending.
+            guard let self, event.phase == .began else { return }
             self.lock.withLock { self.lastContactImpulse = event.impulse }
 
             // The bounce. A hand hit sounds at full strength; bounces off the
