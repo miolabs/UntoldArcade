@@ -88,6 +88,12 @@ public final class CoolBallGame: @unchecked Sendable {
     )
     /// Ball this far below the floor is considered lost and respawns.
     private var respawnDepth: Float = 3.0
+    /// …or this far from where it spawned (through a wall, on the far side
+    /// of the safety floor).
+    private let respawnRange: Float = 15.0
+    /// A size-7 ball is never thrown faster indoors; the built-in backend
+    /// enforces the same ceiling on every dynamic body.
+    private let maxThrowSpeed: Float = 10.0
 
     #if os(visionOS)
     public let session = CoolBallSpatialSession()
@@ -132,6 +138,9 @@ public final class CoolBallGame: @unchecked Sendable {
             // Hand proxies park 100 m below when tracking drops: re-appearing
             // must be a teleport, not a swat. No hand moves a metre in 1/60 s.
             settings.maxKinematicStep = 1.0
+            // Nearer jumps (a tracking hiccup) approach at the built-in
+            // backend's hand speed cap instead of striking at full speed.
+            settings.maxKinematicSpeed = 6.0
             // Same resting threshold as the built-in backend's floor contacts.
             settings.minContactSpeed = 0.35
             guard let backend = registerJoltPhysics(settings: settings) else { return false }
@@ -646,12 +655,17 @@ public final class CoolBallGame: @unchecked Sendable {
             ?? scene.ballPosition()
             ?? ballSpawnPosition
 
-        // Throw velocity: displacement over the sampled window.
+        // Throw velocity: displacement over the sampled window, capped so a
+        // glitched pinch sample cannot launch the ball through a wall.
         var velocity = SIMD3<Float>.zero
         if let first = grabSamples.first, let last = grabSamples.last {
             let dt = Float(last.time - first.time)
             if dt > 0.01 {
                 velocity = (last.position - first.position) / dt
+                let speed = simd_length(velocity)
+                if speed > maxThrowSpeed {
+                    velocity *= maxThrowSpeed / speed
+                }
             }
         }
         scene.attachBallBody(velocity: velocity, at: releasePoint)
@@ -669,12 +683,13 @@ public final class CoolBallGame: @unchecked Sendable {
     }
 
     private func respawnIfLost() {
-        guard grabbingSide == nil,
-              let position = scene.ballPosition(),
-              position.y < floorLevel.value - respawnDepth
-        else { return }
+        guard grabbingSide == nil, let position = scene.ballPosition() else { return }
+        let fellOut = position.y < floorLevel.value - respawnDepth
+        let horizontal = SIMD3<Float>(position.x - ballSpawnPosition.x, 0, position.z - ballSpawnPosition.z)
+        let wanderedOff = simd_length(horizontal) > respawnRange
+        guard fellOut || wanderedOff else { return }
         resetBall()
-        print("CoolBall: ball lost below the world — respawned")
+        print("CoolBall: ball lost \(fellOut ? "below the world" : "far away") — respawned")
     }
 
     // MARK: - Diagnostics
