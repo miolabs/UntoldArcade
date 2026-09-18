@@ -41,6 +41,9 @@ final class BallXRGame: @unchecked Sendable {
         if holder.takeResetBallRequest() {
             game.resetBall()
         }
+        if holder.takeLooseBallsRequest() {
+            game.requestLooseBalls()
+        }
         if holder.takeResetScoreRequest() {
             game.resetScore()
         }

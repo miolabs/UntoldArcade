@@ -28,6 +28,10 @@ public final class CoolBallScene: @unchecked Sendable {
     /// World-space rim center while a hoop stands (nil during placement) —
     /// the game's ring-crossing test reads it every frame.
     public private(set) var rimCenter: SIMD3<Float>?
+    /// Horizontal direction from the hoop toward the player while it stands.
+    public private(set) var hoopForward: SIMD3<Float>?
+    /// Extra balls with no grab and no scoring: a physics showcase.
+    private var looseBallEntities: [EntityID] = []
 
     /// Size-7 basketball: radius ~0.12 m, mass ~0.62 kg — and bouncy.
     public static let ballRadius: Float = 0.121
@@ -260,6 +264,7 @@ public final class CoolBallScene: @unchecked Sendable {
         clearHoop()
         let layout = HoopLayout(position: position, facing: facing)
         rimCenter = layout.rimCenter
+        hoopForward = layout.forward
 
         func staticBox(
             node: PrimitiveNode,
@@ -376,6 +381,60 @@ public final class CoolBallScene: @unchecked Sendable {
         hoopPartEntities.removeAll()
         basketTriggerEntity = .invalid
         rimCenter = nil
+        hoopForward = nil
+    }
+
+    // MARK: - Loose balls
+
+    public var looseBallCount: Int {
+        looseBallEntities.count
+    }
+
+    /// Drops `count` extra balls in a loose vertical stack above `center`.
+    /// They are plain dynamic bodies — no grab, no scoring — and exist to
+    /// show the backends apart: the demo's built-in backend resolves no
+    /// ball-against-ball contact, so they fall through each other and pile
+    /// into one spot; Jolt makes them collide, tumble and scatter.
+    @MainActor public func spawnLooseBalls(count: Int, above center: SIMD3<Float>) {
+        let textureURL = Bundle.module.url(forResource: "basketball_baseColor", withExtension: "png")
+        for index in 0 ..< count {
+            // A slight spiral so no two balls share a column exactly.
+            let angle = Float(index) * 2.4
+            let offset = SIMD3<Float>(cosf(angle) * 0.03, Float(index) * (Self.ballRadius * 2.2), sinf(angle) * 0.03)
+            let node = SphereNode(
+                radius: Self.ballRadius,
+                segments: [24, 16],
+                name: "CoolBall.loose\(looseBallEntities.count)"
+            )
+            .baseColor(1.0, 1.0, 1.0)
+            .roughness(0.7)
+            .metallic(0.0)
+            let entity = node.entityID
+            if let textureURL {
+                updateMaterialTexture(entityId: entity, textureType: .baseColor, path: textureURL)
+            }
+            translateTo(entityId: entity, position: center + offset)
+            registerComponent(entityId: entity, componentType: ColliderComponent.self)
+            registerComponent(entityId: entity, componentType: RigidBodyComponent.self)
+            if let collider = scene.get(component: ColliderComponent.self, for: entity) {
+                collider.shape = .sphere(radius: Self.ballRadius)
+                collider.restitution = Self.ballRestitution
+                collider.friction = 0.4
+            }
+            if let body = scene.get(component: RigidBodyComponent.self, for: entity) {
+                body.motionType = .dynamic
+                body.mass = Self.ballMass
+            }
+            looseBallEntities.append(entity)
+        }
+    }
+
+    /// Removes every loose ball (callable from the game thread).
+    public func clearLooseBalls() {
+        for entity in looseBallEntities {
+            destroyEntity(entityId: entity)
+        }
+        looseBallEntities.removeAll()
     }
 
     // MARK: - Body proxies
@@ -424,6 +483,7 @@ public final class CoolBallScene: @unchecked Sendable {
         rightHandEntity = .invalid
         sunEntity = .invalid
         removeHoopGhost()
+        clearLooseBalls()
         clearHoop()
     }
 }

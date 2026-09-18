@@ -34,6 +34,7 @@ final class BallXRHolder: @unchecked Sendable {
     private var engineStorage = "—"
     private var resetBallPending = false
     private var resetScorePending = false
+    private var looseBallsPending = false
     private var placeHoopPending = false
     private var moveHoopPending = false
     private var placingStorage = true
@@ -67,6 +68,15 @@ final class BallXRHolder: @unchecked Sendable {
     var engineName: String { lock.withLock { engineStorage } }
 
     func requestResetBall() { lock.withLock { resetBallPending = true } }
+    func requestLooseBalls() { lock.withLock { looseBallsPending = true } }
+
+    func takeLooseBallsRequest() -> Bool {
+        lock.withLock {
+            let pending = looseBallsPending
+            looseBallsPending = false
+            return pending
+        }
+    }
     func requestResetScore() { lock.withLock { resetScorePending = true } }
     func requestPlaceHoop() { lock.withLock { placeHoopPending = true } }
     func requestMoveHoop() { lock.withLock { moveHoopPending = true } }
@@ -181,7 +191,14 @@ struct CoolBallVisionOSXRApp: App {
                             BallXRHolder.shared.requestResetScore()
                         }
                         .buttonStyle(.bordered)
+
+                        Button("Drop 5 balls") {
+                            BallXRHolder.shared.requestLooseBalls()
+                        }
+                        .buttonStyle(.bordered)
                     }
+                    Text("Extra balls show the backends apart: the built-in one has no ball-vs-ball contact, Jolt piles them up.")
+                        .font(.footnote).foregroundStyle(.tertiary)
 
                     Divider()
 

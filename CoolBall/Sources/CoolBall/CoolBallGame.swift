@@ -88,6 +88,9 @@ public final class CoolBallGame: @unchecked Sendable {
     )
     /// Ball this far below the floor is considered lost and respawns.
     private var respawnDepth: Float = 3.0
+    /// Loose balls per drop, and the most the scene keeps at once.
+    private let looseBallsPerDrop = 5
+    private let looseBallLimit = 15
     /// …or this far from where it spawned (through a wall, on the far side
     /// of the safety floor).
     private let respawnRange: Float = 15.0
@@ -187,8 +190,9 @@ public final class CoolBallGame: @unchecked Sendable {
             placementPinchGraceUntil = ProcessInfo.processInfo.systemUptime + 1.0
         }
 
-        // Test hook: `-autoPlaceHoop` confirms placement after a short beat,
-        // so automated simulator runs reach the playing phase unattended.
+        // Test hooks: `-autoPlaceHoop` confirms placement after a short beat,
+        // so automated simulator runs reach the playing phase unattended;
+        // `-autoDropBalls` then drops the loose balls right after the build.
         if ProcessInfo.processInfo.arguments.contains("-autoPlaceHoop") {
             lock.withLock {
                 autoPlaceDeadline = ProcessInfo.processInfo.systemUptime + 1.5
@@ -284,6 +288,37 @@ public final class CoolBallGame: @unchecked Sendable {
         scene.spawnBall(at: spawn)
         pushWorldPlanes()
         coolBallLog.log("hoop placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
+        if ProcessInfo.processInfo.arguments.contains("-autoDropBalls"), let drop = looseBallDropPoint() {
+            scene.spawnLooseBalls(count: looseBallsPerDrop, above: drop)
+        }
+    }
+
+    /// Where loose balls are dropped: in front of the hoop, clear of the
+    /// rim, low enough that they pile up instead of bouncing away.
+    private func looseBallDropPoint() -> SIMD3<Float>? {
+        guard let rimCenter = scene.rimCenter, let forward = scene.hoopForward else { return nil }
+        let floor = rimCenter.y - CoolBallScene.rimHeight
+        return SIMD3<Float>(rimCenter.x, floor + 0.35, rimCenter.z) + forward * 0.9
+    }
+
+    /// Drops five extra balls in front of the hoop (control-window button).
+    /// A backend showcase: see `CoolBallScene.spawnLooseBalls`.
+    public func requestLooseBalls() {
+        guard currentPhase == .playing,
+              scene.looseBallCount < looseBallLimit,
+              let drop = looseBallDropPoint()
+        else { return }
+        let generation = lock.withLock { placementGeneration }
+        let count = looseBallsPerDrop
+        Task { @MainActor in
+            withWorldAccessGate {
+                let stillPlaying = self.lock.withLock {
+                    self.phase == .playing && generation == self.placementGeneration
+                }
+                guard stillPlaying else { return }
+                self.scene.spawnLooseBalls(count: count, above: drop)
+            }
+        }
     }
 
     /// Rebuilds the backend's plane set: detected real surfaces plus a
@@ -357,6 +392,7 @@ public final class CoolBallGame: @unchecked Sendable {
     public func resetBall() {
         let wasHeld = grabbingSide != nil
         cancelGrab()
+        scene.clearLooseBalls()
         lock.withLock {
             throughRingAt = nil
             previousBallCenter = nil
@@ -468,7 +504,7 @@ public final class CoolBallGame: @unchecked Sendable {
         if heartbeatAccumulator > 1.0 {
             heartbeatAccumulator = 0
             if let state = backendStore.value?.bodyState(for: scene.ballEntity) {
-                coolBallLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3))")
+                coolBallLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) loose=\(self.scene.looseBallCount)")
             }
         }
 
