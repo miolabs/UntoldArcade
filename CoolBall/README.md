@@ -32,6 +32,13 @@ surfaces there, but the fallback floor keeps the ball in play). Press
 **Step onto the Court**, grant hand-tracking and surroundings permissions,
 place the hoop, and shoot.
 
+The control window's **Physics** picker chooses the backend before the Court
+opens: the demo's own pure-Swift backend, or the shared
+[UntoldJoltPhysics](../Plugins/UntoldJoltPhysics) plugin (Jolt Physics). The
+choice persists; the engine's registry locks on the first physics step, so
+switching afterwards needs an app restart. `-physicsEngine jolt` selects it
+from the command line.
+
 The backend itself is platform-independent:
 
 ```bash
@@ -40,7 +47,8 @@ swift test   # 10 unit tests: bounce, rest, bounded planes, box rebound, trigger
 
 Automated simulator runs can skip the gaze-and-pinch steps with the launch
 arguments `-autoOpenSpace` (opens the immersive space at launch) and
-`-autoPlaceHoop` (confirms the hoop placement after a short beat).
+`-autoPlaceHoop` (confirms the hoop placement after a short beat), and pick
+the backend with `-physicsEngine jolt` or `-physicsEngine coolBall`.
 
 ## Coming next
 
