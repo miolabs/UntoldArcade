@@ -78,9 +78,10 @@ final class ViewerModel: ObservableObject {
             filename: scan.untoldURL.path,
             withExtension: "untold"
         ) { success in
-            if !success {
-                print("CoolScan: failed to load \(scan.untoldURL.lastPathComponent)")
-            }
+            print(
+                "CoolScan: viewer load \(success ? "ok" : "FAILED") — "
+                    + "\(scan.untoldURL.path), bounds \(scan.boundsMin) … \(scan.boundsMax)"
+            )
         }
 
         let light = createEntity()

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import ModelIO
 import simd
 
@@ -41,25 +42,114 @@ struct ExtractedMesh {
 }
 
 enum MDLExtraction {
-    static func extract(from url: URL) throws -> [ExtractedMesh] {
-        let asset = MDLAsset(url: url)
+    /// - Parameter scratchDirectory: where a `.usdz` is unpacked. The caller
+    ///   owns it and must keep it alive until textures have been exported —
+    ///   CGImages loaded from the unpacked files decode lazily.
+    static func extract(from url: URL, scratchDirectory: URL) throws -> [ExtractedMesh] {
+        guard url.pathExtension.lowercased() == "usdz" else {
+            let asset = MDLAsset(url: url)
+            asset.loadTextures()
+            return try extract(from: asset, sourceURL: url)
+        }
+
+        // Unpack the USDZ so ModelIO resolves texture references as plain
+        // files (see USDZArchive). The unpacked folder also feeds the
+        // filename-based texture fallback.
+        let unpackDirectory = scratchDirectory.appendingPathComponent("usdz", isDirectory: true)
+        let files = try USDZArchive.extract(url, into: unpackDirectory)
+        let usdExtensions: Set<String> = ["usdc", "usda", "usd"]
+        // USDZ spec: the root layer is the first entry.
+        guard let rootLayer = files.first(where: { usdExtensions.contains($0.pathExtension.lowercased()) }) else {
+            throw CoolScanCookerError.assetHasNoMeshes(url)
+        }
+
+        let asset = MDLAsset(url: rootLayer)
         asset.loadTextures()
-        return try extract(from: asset, sourceURL: url)
+        return try extract(
+            from: asset,
+            sourceURL: url,
+            fallbackTextures: FallbackTextures(files: files)
+        )
     }
 
-    static func extract(from asset: MDLAsset, sourceURL: URL) throws -> [ExtractedMesh] {
+    static func extract(
+        from asset: MDLAsset,
+        sourceURL: URL,
+        fallbackTextures: FallbackTextures? = nil
+    ) throws -> [ExtractedMesh] {
         let mdlMeshes = asset.childObjects(of: MDLMesh.self).compactMap { $0 as? MDLMesh }
         guard !mdlMeshes.isEmpty else {
             throw CoolScanCookerError.assetHasNoMeshes(sourceURL)
         }
 
         var textureCache: [ObjectIdentifier: ExtractedTexture] = [:]
-        return try mdlMeshes.enumerated().map { index, mesh in
+        var meshes = try mdlMeshes.enumerated().map { index, mesh in
             try extractMesh(
                 mesh,
                 fallbackName: "mesh_\(index)",
                 textureCache: &textureCache
             )
+        }
+
+        if let fallbackTextures {
+            for m in meshes.indices {
+                for sm in meshes[m].submeshes.indices {
+                    fallbackTextures.fill(&meshes[m].submeshes[sm].material)
+                }
+            }
+        }
+        return meshes
+    }
+
+    /// Textures found next to the root layer, matched to material slots by
+    /// Object Capture's naming (`baked_mesh_<hash>_tex0.png`, `_norm0`,
+    /// `_ao0`, …) plus common conventions. Used only for slots ModelIO left
+    /// empty.
+    struct FallbackTextures {
+        private var baseColor: ExtractedTexture?
+        private var normal: ExtractedTexture?
+        private var occlusion: ExtractedTexture?
+        private var roughness: ExtractedTexture?
+        private var metallic: ExtractedTexture?
+        // Keys are object identities; keep the objects alive so the
+        // identities stay unique for the whole cook.
+        private var keyObjects: [NSURL] = []
+
+        init(files: [URL]) {
+            let imageExtensions: Set<String> = ["png", "jpg", "jpeg"]
+            for file in files where imageExtensions.contains(file.pathExtension.lowercased()) {
+                let name = file.deletingPathExtension().lastPathComponent.lowercased()
+                guard let image = Self.loadImage(file) else { continue }
+                let keyObject = file as NSURL
+                keyObjects.append(keyObject)
+                let texture = ExtractedTexture(key: ObjectIdentifier(keyObject), image: image)
+                if name.contains("norm") {
+                    normal = normal ?? texture
+                } else if name.contains("_ao") || name.contains("occlusion") {
+                    occlusion = occlusion ?? texture
+                } else if name.contains("rough") {
+                    roughness = roughness ?? texture
+                } else if name.contains("metal") {
+                    metallic = metallic ?? texture
+                } else if name.contains("tex") || name.contains("diffuse")
+                    || name.contains("basecolor") || name.contains("albedo") || name.contains("color")
+                {
+                    baseColor = baseColor ?? texture
+                }
+            }
+        }
+
+        func fill(_ material: inout ExtractedMaterial) {
+            if material.baseColorTexture == nil { material.baseColorTexture = baseColor }
+            if material.normalTexture == nil { material.normalTexture = normal }
+            if material.occlusionTexture == nil { material.occlusionTexture = occlusion }
+            if material.roughnessTexture == nil { material.roughnessTexture = roughness }
+            if material.metallicTexture == nil { material.metallicTexture = metallic }
+        }
+
+        private static func loadImage(_ url: URL) -> CGImage? {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
         }
     }
 

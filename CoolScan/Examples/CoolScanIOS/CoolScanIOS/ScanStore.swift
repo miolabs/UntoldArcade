@@ -77,14 +77,21 @@ final class ScanStore: ObservableObject {
     }
 
     /// Cooks a USDZ (bundled sample or a fresh Object Capture result) into a
-    /// new scan folder. Runs the cooker off the main thread.
-    func importUSDZ(at usdzURL: URL, name: String) async {
-        guard !isCooking else { return }
+    /// new scan folder. Runs the cooker off the main thread. Returns the new
+    /// record, or nil on failure (see `lastError`).
+    @discardableResult
+    func importUSDZ(at usdzURL: URL, name: String) async -> ScanRecord? {
+        guard !isCooking else {
+            lastError = "Another import is still running"
+            return nil
+        }
         isCooking = true
         lastError = nil
         defer { isCooking = false }
 
-        let folder = scansDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let scanID = UUID().uuidString
+        let folder = scansDirectory.appendingPathComponent(scanID, isDirectory: true)
+        let started = Date()
 
         do {
             let cooked = try await Task.detached(priority: .userInitiated) {
@@ -106,10 +113,23 @@ final class ScanStore: ObservableObject {
             )
             let metaData = try JSONEncoder().encode(metadata)
             try metaData.write(to: folder.appendingPathComponent("meta.json"))
+            // Keep the source next to the cooked asset so the scan can be
+            // re-cooked after pipeline improvements without rescanning.
+            try? FileManager.default.copyItem(
+                at: usdzURL, to: folder.appendingPathComponent("source.usdz")
+            )
             reload()
+            print(
+                "CoolScan: cooked \(name) — \(cooked.vertexCount) vertices, "
+                    + "\(cooked.triangleCount) triangles, \(cooked.textureURLs.count) textures "
+                    + "in \(String(format: "%.1f", Date().timeIntervalSince(started)))s"
+            )
+            return scans.first { $0.id == scanID }
         } catch {
             try? FileManager.default.removeItem(at: folder)
             lastError = "\(error)"
+            print("CoolScan: cook failed — \(error)")
+            return nil
         }
     }
 

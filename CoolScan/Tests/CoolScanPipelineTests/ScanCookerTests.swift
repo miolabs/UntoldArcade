@@ -197,6 +197,57 @@ final class ScanCookerTests: XCTestCase {
         let decoded = try UntoldReader().readAsset(from: Data(contentsOf: cooked.untoldURL))
         XCTAssertFalse(decoded.meshes.isEmpty)
         XCTAssertFalse(decoded.materials.isEmpty)
+
+        // The fixture ships a diffuse texture inside the package; a cook
+        // that drops it (ModelIO failing to resolve in-archive references)
+        // renders as a plain white blob on device.
+        let material = decoded.materials[0]
+        XCTAssertNotEqual(material.baseColorTextureIndex, UntoldFormat.invalidIndex)
+        XCTAssertFalse(cooked.textureURLs.isEmpty)
+        for url in cooked.textureURLs {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), url.lastPathComponent)
+        }
+    }
+
+    func testUSDZArchiveUnpacksRootLayerAndTextures() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "ball", withExtension: "usdz"))
+        let files = try USDZArchive.extract(url, into: outputDirectory)
+
+        // USDZ spec: root layer first; textures keep their relative paths.
+        XCTAssertEqual(files.first?.lastPathComponent, "ball.usdc")
+        XCTAssertTrue(files.contains { $0.path.hasSuffix("textures/Ball_Normal_Map.png") })
+        for file in files {
+            let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int
+            XCTAssertGreaterThan(size ?? 0, 0, file.lastPathComponent)
+        }
+    }
+
+    func testFallbackTexturesMapObjectCaptureNames() throws {
+        // Object Capture names its baked textures by slot suffix; simulate an
+        // unpacked package with a 1x1 PNG per slot.
+        let names = [
+            "0/baked_mesh_02e8718f_tex0.png",
+            "0/baked_mesh_02e8718f_norm0.png",
+            "0/baked_mesh_02e8718f_ao0.png",
+        ]
+        var files: [URL] = []
+        for name in names {
+            let url = outputDirectory.appendingPathComponent(name)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try TextureExport.writePNG(makeCheckerTexture().imageFromTexture()!.takeUnretainedValue(),
+                                       named: url.lastPathComponent,
+                                       into: url.deletingLastPathComponent())
+            files.append(url)
+        }
+
+        var material = ExtractedMaterial()
+        MDLExtraction.FallbackTextures(files: files).fill(&material)
+        XCTAssertNotNil(material.baseColorTexture)
+        XCTAssertNotNil(material.normalTexture)
+        XCTAssertNotNil(material.occlusionTexture)
+        XCTAssertNil(material.roughnessTexture)
     }
 
     // MARK: - Helpers

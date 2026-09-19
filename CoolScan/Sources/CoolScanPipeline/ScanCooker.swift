@@ -48,7 +48,12 @@ public struct ScanCooker {
         outputDirectory: URL,
         assetName: String = "scan"
     ) throws -> CookedScan {
-        let meshes = try MDLExtraction.extract(from: usdzURL)
+        let scratchDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CoolScanCook-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratchDirectory) }
+
+        let meshes = try MDLExtraction.extract(from: usdzURL, scratchDirectory: scratchDirectory)
         return try cook(extracted: meshes, outputDirectory: outputDirectory, assetName: assetName)
     }
 

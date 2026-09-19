@@ -4,7 +4,10 @@ import SwiftUI
 struct ScanLibraryView: View {
     @StateObject private var store = ScanStore.shared
     @State private var path: [String] = []
-    @State private var showingScanFlow = false
+
+    /// Sentinel route for the scan flow, so finishing a scan can atomically
+    /// replace it with the viewer for the new model.
+    private static let scanRoute = "__scan__"
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -16,6 +19,22 @@ struct ScanLibraryView: View {
                 }
             }
             .navigationTitle("CoolScan")
+            // On the container, not the list: the empty state must be able
+            // to push the scan flow too.
+            .navigationDestination(for: String.self) { route in
+                if route == Self.scanRoute {
+                    ScanFlowView { newScanID in
+                        // Pop the scan flow and open the freshly cooked model.
+                        path = [newScanID]
+                    }
+                } else if let scan = store.scans.first(where: { $0.id == route }) {
+                    ViewerView(scan: scan)
+                } else {
+                    ContentUnavailableView(
+                        "Scan not found", systemImage: "questionmark.folder"
+                    )
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     scanButton
@@ -23,9 +42,6 @@ struct ScanLibraryView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     importSampleButton
                 }
-            }
-            .navigationDestination(isPresented: $showingScanFlow) {
-                ScanFlowView()
             }
             .overlay {
                 if store.isCooking {
@@ -87,11 +103,6 @@ struct ScanLibraryView: View {
                 }
             }
         }
-        .navigationDestination(for: String.self) { scanID in
-            if let scan = store.scans.first(where: { $0.id == scanID }) {
-                ViewerView(scan: scan)
-            }
-        }
     }
 
     private var emptyState: some View {
@@ -109,7 +120,7 @@ struct ScanLibraryView: View {
     /// simulator) the sample import remains the way in.
     private var scanButton: some View {
         Button {
-            showingScanFlow = true
+            path = [Self.scanRoute]
         } label: {
             Label("Scan Object", systemImage: "camera.viewfinder")
         }

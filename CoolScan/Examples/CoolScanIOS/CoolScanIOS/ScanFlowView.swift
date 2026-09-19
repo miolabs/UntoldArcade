@@ -7,6 +7,9 @@ import UIKit
 /// Requires a LiDAR iPhone; the library screen gates entry on
 /// `ObjectCaptureSession.isSupported`.
 struct ScanFlowView: View {
+    /// Called with the new scan's id once it is cooked and in the library.
+    let onFinished: (String) -> Void
+
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model = ScanFlowModel()
 
@@ -20,14 +23,20 @@ struct ScanFlowView: View {
             case let .reconstructing(progress):
                 reconstructionView(progress: progress)
             case .cooking:
-                VStack(spacing: 12) {
+                VStack(spacing: 16) {
                     ProgressView()
-                    Text("Converting to Untold format…")
+                        .controlSize(.large)
+                    Text("Saving your scan…")
+                        .font(.headline)
+                    Text("Converting the model to the Untold format.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             case let .failed(message):
                 failureView(message: message)
-            case .done:
-                Color.clear.onAppear { dismiss() }
+            case let .done(scanID):
+                ProgressView()
+                    .onAppear { onFinished(scanID) }
             }
         }
         .navigationBarBackButtonHidden(model.phase.hidesBackButton)
@@ -119,7 +128,7 @@ final class ScanFlowModel: ObservableObject {
         case reconstructing(progress: Double)
         case cooking
         case failed(String)
-        case done
+        case done(scanID: String)
 
         var showsCancel: Bool {
             switch self {
@@ -285,12 +294,12 @@ final class ScanFlowModel: ObservableObject {
     private func cook() async {
         phase = .cooking
         let name = "Scan " + Date().formatted(date: .abbreviated, time: .shortened)
-        await ScanStore.shared.importUSDZ(at: modelURL, name: name)
+        let record = await ScanStore.shared.importUSDZ(at: modelURL, name: name)
         cleanUp()
-        if let error = ScanStore.shared.lastError {
-            phase = .failed(error)
+        if let record {
+            phase = .done(scanID: record.id)
         } else {
-            phase = .done
+            phase = .failed(ScanStore.shared.lastError ?? "The scan could not be saved.")
         }
     }
 
