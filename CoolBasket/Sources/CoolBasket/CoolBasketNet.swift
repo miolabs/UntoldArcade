@@ -27,7 +27,8 @@ import UntoldJoltPhysics
 // MARK: - Lattice
 
 /// The net's particle graph in hoop-model space (metres; local +z toward
-/// the player, the rim centre at (0, 3.05, 0.38)). Indices: hooks first,
+/// the player, the rim centre at (0, `CoolBasketScene.rimHeight`, 0.38);
+/// heights are measured on the model as offsets from the rim). Indices: hooks first,
 /// then the knot rows top to bottom, then the scallop bottoms, then one
 /// pinned "ghost" above every free particle (see `shapeCompliance`).
 public struct CoolBasketNetLattice: Sendable {
@@ -36,13 +37,15 @@ public struct CoolBasketNetLattice: Sendable {
     /// angular phase (the rows alternate by half a column, making the
     /// diamonds), measured on the model.
     public static let knotRows: [(height: Float, radius: Float, phase: Float)] = [
-        (2.95, 0.2218, 15), (2.88, 0.1894, 0), (2.81, 0.155, 15), (2.74, 0.1317, 0), (2.67, 0.1215, 15),
+        (rimHeight - 0.10, 0.2218, 15), (rimHeight - 0.17, 0.1894, 0), (rimHeight - 0.24, 0.155, 15),
+        (rimHeight - 0.31, 0.1317, 0), (rimHeight - 0.38, 0.1215, 15),
     ]
+    static let rimHeight = CoolBasketScene.rimHeight
     /// The rim hooks: where the top cords tie on (the hook's lowest point).
-    public static let hookHeight: Float = 3.0227
+    public static let hookHeight: Float = rimHeight - 0.0273
     public static let hookRadius: Float = 0.2373
     /// Bottom of the open scallops between the last row's knots.
-    public static let scallopHeight: Float = 2.6196
+    public static let scallopHeight: Float = rimHeight - 0.4304
     public static let scallopRadius: Float = 0.1191
     /// The rim's axis, in model space (the model's origin is on the floor
     /// under the glass).

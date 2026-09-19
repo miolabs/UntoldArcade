@@ -67,6 +67,17 @@ public final class CoolBasketGame: @unchecked Sendable {
     private var grabbingSide: CoolBasketHandSide?
     private var heldBall: EntityID?
     private var grabSamples: [(position: SIMD3<Float>, time: TimeInterval)] = []
+    /// The grabbing hand is out of the cameras' view: the ball waits where
+    /// it was (see `updateHands`). The other hand may take it meanwhile.
+    private var holdSuspended = false
+    /// When the grabbing hand came back into view, so the first frames'
+    /// pinch reading — noisy at the edge of view — cannot drop the ball.
+    private var holdRegainedAt: TimeInterval = 0
+    private let pinchSettleTime: TimeInterval = 0.08
+    /// A hand leaving the view faster than this was mid-throw: the ball is
+    /// released with that motion rather than kept. Carrying a ball while
+    /// looking up at the hoop is far slower.
+    private let lossThrowSpeed: Float = 1.0
     /// The hand that just threw is parked briefly so the ball, re-added at
     /// the pinch point, isn't shoved by that hand's own collider.
     private var handParkedUntil: [CoolBasketHandSide: TimeInterval] = [:]
@@ -686,8 +697,27 @@ public final class CoolBasketGame: @unchecked Sendable {
                   pose.isTracked
             else {
                 scene.moveProxy(handEntity, to: nil)
-                if grabbingSide == side { releaseBall(at: nil, now: now) }
+                if grabbingSide == side, !holdSuspended {
+                    // The hand left the cameras' view holding the ball.
+                    // Mid-swing, that is the throw: release it with the
+                    // motion it had. Otherwise — looking up at the hoop takes
+                    // a resting hand out of view — the ball waits where it
+                    // was until the hand is seen again: a still-closed pinch
+                    // carries on, an open one releases. Dropping it here made
+                    // a throw impossible.
+                    let velocity = Self.throwVelocity(samples: grabSamples, now: now, maxSpeed: maxThrowSpeed)
+                    if simd_length(velocity) >= lossThrowSpeed {
+                        releaseBall(at: nil, now: now)
+                    } else {
+                        holdSuspended = true
+                    }
+                }
                 continue
+            }
+            if grabbingSide == side, holdSuspended {
+                holdSuspended = false
+                holdRegainedAt = now
+                grabSamples.removeAll()
             }
 
             // Just threw: the collider stays parked until the ball is clear
@@ -704,21 +734,24 @@ public final class CoolBasketGame: @unchecked Sendable {
 
     private func updateGrab(side: CoolBasketHandSide, pose: CoolBasketHandPose, now: TimeInterval) {
         if grabbingSide == side, let held = heldBall {
-            if pose.pinchDistance > pinchReleaseDistance {
+            let settled = now - holdRegainedAt >= pinchSettleTime
+            if pose.pinchDistance > pinchReleaseDistance, settled {
                 releaseBall(at: pose.pinchPoint, now: now)
             } else {
                 let position = pose.pinchPoint
                 scene.moveBall(held, to: position)
                 grabSamples.append((position, now))
-                // Keep ~120 ms of motion history for the throw velocity.
-                while let first = grabSamples.first, now - first.time > 0.12 {
+                // Keep a short motion history for the throw velocity.
+                while let first = grabSamples.first, now - first.time > Self.throwSampleAge {
                     grabSamples.removeFirst()
                 }
             }
             return
         }
 
-        guard grabbingSide == nil, pose.pinchDistance < pinchGrabDistance else { return }
+        // A new grab — or the other hand taking a ball whose hand is out of
+        // view.
+        guard grabbingSide == nil || holdSuspended, pose.pinchDistance < pinchGrabDistance else { return }
         // The nearest ball within reach of the palm.
         var nearest: (entity: EntityID, distance: Float)?
         for ball in scene.balls {
@@ -730,14 +763,20 @@ public final class CoolBasketGame: @unchecked Sendable {
         }
         guard let ball = nearest?.entity else { return }
 
+        let takingOver = ball == heldBall
         grabbingSide = side
         heldBall = ball
+        holdSuspended = false
+        holdRegainedAt = 0
         grabSamples = [(pose.pinchPoint, now)]
         lock.withLock {
             throughRingAt.removeValue(forKey: ball)
             previousCenters.removeValue(forKey: ball)
         }
-        scene.detachBallBody(entity: ball)
+        // A suspended ball has no body already.
+        if !takingOver {
+            scene.detachBallBody(entity: ball)
+        }
         scene.moveBall(ball, to: pose.pinchPoint)
         print("CoolBasket: ball grabbed (\(side == .left ? "left" : "right"))")
     }
@@ -745,6 +784,9 @@ public final class CoolBasketGame: @unchecked Sendable {
     private func releaseBall(at position: SIMD3<Float>?, now: TimeInterval) {
         if let side = grabbingSide {
             handParkedUntil[side] = now + releaseCooldown
+            // Off the hand right away: the body comes back next substep,
+            // where a collider still on the palm would swat it.
+            scene.moveProxy(side == .left ? scene.leftHandEntity : scene.rightHandEntity, to: nil)
         }
         defer { cancelGrab() }
         guard let ball = heldBall else { return }
@@ -753,19 +795,7 @@ public final class CoolBasketGame: @unchecked Sendable {
             ?? scene.ballPosition(ball)
             ?? ballSpawnPosition
 
-        // Throw velocity: displacement over the sampled window, capped so a
-        // glitched pinch sample cannot launch the ball through a wall.
-        var velocity = SIMD3<Float>.zero
-        if let first = grabSamples.first, let last = grabSamples.last {
-            let dt = Float(last.time - first.time)
-            if dt > 0.01 {
-                velocity = (last.position - first.position) / dt
-                let speed = simd_length(velocity)
-                if speed > maxThrowSpeed {
-                    velocity *= maxThrowSpeed / speed
-                }
-            }
-        }
+        let velocity = Self.throwVelocity(samples: grabSamples, now: now, maxSpeed: maxThrowSpeed)
         scene.attachBallBody(entity: ball, velocity: velocity, at: releasePoint)
         print(String(
             format: "CoolBasket: thrown at %.1f m/s", simd_length(velocity)
@@ -773,11 +803,38 @@ public final class CoolBasketGame: @unchecked Sendable {
     }
     #endif
 
+    /// The motion window behind a throw: samples older than this are not
+    /// kept while holding, and say nothing at release — the hand was out of
+    /// view since, and the ball waited.
+    static let throwSampleAge: TimeInterval = 0.12
+
+    /// Throw velocity from the hand's recent motion: displacement over the
+    /// sampled window, capped so a glitched pinch sample cannot launch the
+    /// ball through a wall. Samples older than `throwSampleAge` are
+    /// ignored — a ball released after the hand was lost from view is
+    /// dropped, not thrown with the motion from before.
+    static func throwVelocity(
+        samples: [(position: SIMD3<Float>, time: TimeInterval)], now: TimeInterval, maxSpeed: Float
+    ) -> SIMD3<Float> {
+        let recent = samples.filter { now - $0.time <= throwSampleAge }
+        guard let first = recent.first, let last = recent.last else { return .zero }
+        let dt = Float(last.time - first.time)
+        guard dt > 0.01 else { return .zero }
+        var velocity = (last.position - first.position) / dt
+        let speed = simd_length(velocity)
+        if speed > maxSpeed {
+            velocity *= maxSpeed / speed
+        }
+        return velocity
+    }
+
     /// Drops any grab in progress without a throw (Move hoop, shutdown).
     /// Game thread only, like the grab logic itself.
     private func cancelGrab() {
         grabbingSide = nil
         heldBall = nil
+        holdSuspended = false
+        holdRegainedAt = 0
         grabSamples.removeAll()
     }
 
@@ -821,8 +878,8 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// classified as floor, so a low table or a stair landing can't win.
     /// The room's surfaces the ball plays against: the floor, the walls and
     /// whatever furniture faces up. Anything facing down — the ceiling, the
-    /// underside of a shelf — is left out: the hoop stands at regulation
-    /// height and a lob has to be free to go up.
+    /// underside of a shelf — is left out: the hoop stands tall and a lob
+    /// has to be free to go up.
     static func playablePlanes(_ planes: [CoolBasketWorldPlane]) -> [CoolBasketWorldPlane] {
         planes.filter { $0.normal.y > -0.5 }
     }

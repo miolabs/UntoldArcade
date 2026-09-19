@@ -42,9 +42,13 @@ public final class CoolBasketScene: @unchecked Sendable {
     public static let ballRadius: Float = 0.121
     public static let ballMass: Float = 0.62
     public static let ballRestitution: Float = 0.78
-    /// Regulation rim height, 10 ft; the backboard's top reaches 3.9 m,
-    /// through most living-room ceilings, which is the point of the demo.
-    public static let rimHeight: Float = 3.05
+    /// Rim height. The model is a regulation 3.05 m unit lowered by
+    /// `modelDrop` in the export (post and padding shortened, everything
+    /// above brought down); 3.05 m proved too high to play under in a
+    /// room. To change it, re-export with `DROP = 3.05 − rimHeight` and set
+    /// `rimHeight` — the colliders and the net's lattice follow.
+    public static let rimHeight: Float = 2.75
+    static let modelDrop: Float = 3.05 - rimHeight
     /// Regulation rim: 0.23 m inner radius — twice the ball, real shots fit.
     public static let rimRadius: Float = 0.23
     static let rimTubeRadius: Float = 0.02
@@ -52,9 +56,9 @@ public final class CoolBasketScene: @unchecked Sendable {
     /// fatter than the visual tube so bounces feel solid.
     static let rimColliderRadius: Float = 0.032
     static let rimSegmentCount = 16
-    /// The hoop model's proportions (a regulation outdoor unit at its own
-    /// height): glass, post and base as
-    /// measured in the asset, so the invisible colliders sit on the model.
+    /// The hoop model's proportions (a regulation outdoor unit, lowered by
+    /// `modelDrop`): glass, post and base as measured in the asset, so the
+    /// invisible colliders sit on the model.
     static let boardWidth: Float = 1.78
     static let boardHeight: Float = 1.02
     static let boardThickness: Float = 0.04
@@ -65,7 +69,8 @@ public final class CoolBasketScene: @unchecked Sendable {
     /// The post stands this far behind the glass.
     static let poleSetback: Float = 0.91
     static let poleHalfWidth: Float = 0.115
-    static let poleHeight: Float = 2.88
+    /// The regulation unit's 2.88 m post, shortened with the drop.
+    static let poleHeight: Float = 2.88 - modelDrop
     static let baseHalfWidth: Float = 0.23
     static let baseHeight: Float = 0.46
     /// Basket trigger: a box this far under the rim plane, this big. The box

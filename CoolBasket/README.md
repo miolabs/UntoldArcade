@@ -17,7 +17,7 @@ score.
 |---|---|
 | `CoolBasketPhysicsBackend` | A complete pure-Swift `PhysicsBackend`: dynamic spheres vs. real-world planes, static box and sphere colliders, and kinematic hand bodies; restitution/friction/rolling; fixed-capacity contact & trigger buffers drained through the engine's `PhysicsEventSink`. |
 | `CoolBasketPlugin` | `PhysicsBackendPlugin` manifest + `registerCoolBasketPhysics()` — installed before renderer creation, driven by the engine's `PhysicsCoordinator`, zero engine changes. |
-| `CoolBasketScene` | The ball and the hoop are artist models (`Resources/Models`, cooked to `.untold` from Blender: a size-7 ball with baked seam and pebble textures, a regulation glass-and-post unit with its net, rim at 3.05 m). What the ball hits is analytic and invisible: boxes for the post, base and glass, a ring of static **sphere** colliders for the rim, and an under-rim **trigger volume** — all in the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. Grabbing removes the ball's body components, releasing re-adds them. |
+| `CoolBasketScene` | The ball and the hoop are artist models (`Resources/Models`, cooked to `.untold` from Blender: a size-7 ball with baked seam and pebble textures, a regulation glass-and-post unit with its net, lowered to a 2.75 m rim — 3.05 m proved too high to play under in a room). What the ball hits is analytic and invisible: boxes for the post, base and glass, a ring of static **sphere** colliders for the rim, and an under-rim **trigger volume** — all in the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. Grabbing removes the ball's body components, releasing re-adds them. |
 | `CoolBasketNet` | The net swings. On the Jolt backend the model's net is driven by a **soft body** (Jolt's own XPBD through the plugin's side channel): a lattice of 84 particles read off the artist's rest geometry — the 12 rim hooks pinned, 5 rows of knots, the open bottom scallops — joined by near-rigid cords, plus a soft spring from every knot to a pinned ghost at its rest position, standing in for the cord's bending stiffness so the net keeps the artist's shape and swings back (the net feels a third of gravity: at full weight its own tension stiffens the diamonds and a swish barely moves it; tuned so a swish flares it a hand's width and it settles in about a second). The ball and the net collide both ways. Every frame the artist's net meshes (cords, knots, scallops — ~28 k vertices) are skinned to the nearest cord and written straight into their vertex buffers. On the built-in backend the net stays the model's static mesh. |
 | `CoolBasketGame` | Gaze-driven hoop placement with a ghost preview. Any number of equal balls: grab the nearest via pinch, throw with the tracked hand velocity (grabbing removes the body, releasing re-adds it through the component seam), lost balls come back. Score via `PhysicsEvents.onTrigger`, counting only a downward pass through the rim. |
 | `CoolBasketSpatialSession` | visionOS ARKit adapter: hand tracking (predicted poses), plane detection feeding the backend's world planes, and head tracking for placement. The real floor height is measured from the detected planes; the simulator falls back to a flat floor. |
@@ -45,7 +45,7 @@ from the command line.
 The backend itself is platform-independent:
 
 ```bash
-swift test   # 10 unit tests: bounce, rest, bounded planes, box rebound, trigger, the swat, the rim, a made basket
+swift test   # unit tests: bounce, rest, bounded planes, box rebound, trigger, the swat, the rim, a made basket, the net, the throw
 ```
 
 Automated simulator runs can skip the gaze-and-pinch steps with the launch
@@ -54,7 +54,7 @@ arguments `-autoOpenSpace` (opens the immersive space at launch),
 `-autoDropBalls` (drops five balls in front of the hoop), `-autoDropThroughRim`
 (drops one ball straight through the rim — a swish, for watching the net),
 `-autoPlaceDistance <m>` (puts the hoop that far ahead; the simulator's fixed
-view sees a regulation rim only from about 6 m), and pick the backend
+view sees the rim only from about 5 m), and pick the backend
 with `-physicsEngine jolt` or `-physicsEngine coolBasket`. Dropping balls is the
 quickest way to see the backends apart: the built-in backend resolves no
 ball-against-ball contact, so balls fall through each other; Jolt piles them.

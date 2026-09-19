@@ -401,3 +401,92 @@ final class CoolBasketPhysicsBackendTests: XCTestCase {
         XCTAssertEqual(contact!.depth, 0.01, accuracy: 1.0e-4)
     }
 }
+
+final class CoolBasketHandUnparkTests: XCTestCase {
+    private let step: Float = 1.0 / 60.0
+
+    func testHandUnparkingOntoARestingBallDoesNotLaunchIt() {
+        // The hand proxy is parked 100 m below the world while a ball is
+        // held or just released; when it comes back it lands on the palm in
+        // one substep. That jump is a teleport, not a swat.
+        let backend = CoolBasketPhysicsBackend()
+        backend.configure(PhysicsWorldConfiguration())
+        backend.setWorldPlanes([.infiniteFloor(y: 0)])
+        backend.didAddBody(entity: 1, descriptor: PhysicsBodyDescriptor(
+            motionType: .dynamic,
+            collider: PhysicsColliderDescriptor(shape: .sphere(radius: CoolBasketScene.ballRadius), friction: 0.4, restitution: 0.3),
+            mass: CoolBasketScene.ballMass,
+            position: SIMD3<Float>(0, CoolBasketScene.ballRadius, 0)
+        ))
+        backend.didAddBody(entity: 30, descriptor: PhysicsBodyDescriptor(
+            motionType: .kinematic,
+            collider: PhysicsColliderDescriptor(shape: .sphere(radius: CoolBasketScene.handRadius)),
+            position: SIMD3<Float>(0, -100, 0)
+        ))
+        func moveHand(to position: SIMD3<Float>) {
+            var entities: [EntityID] = [30]
+            var transforms = [PhysicsBodyTransform(position: position, orientation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))]
+            entities.withUnsafeBufferPointer { entityBuffer in
+                transforms.withUnsafeBufferPointer { transformBuffer in
+                    backend.writeKinematicTargets(PhysicsBodyWriteBatch(entities: entityBuffer, transforms: transformBuffer))
+                }
+            }
+        }
+        moveHand(to: SIMD3<Float>(0, -100, 0))
+        backend.step(deltaTime: step)
+        // Unpark from below straight into the resting ball (the jump's
+        // direction is the contact normal), then hold still there.
+        var fastest: Float = 0
+        var highest: Float = 0
+        for _ in 0 ..< 12 {
+            moveHand(to: SIMD3<Float>(0, CoolBasketScene.ballRadius - 0.15, 0))
+            backend.step(deltaTime: step)
+            let ball = backend.bodyState(for: 1)!
+            fastest = max(fastest, simd_length(ball.velocity))
+            highest = max(highest, ball.position.y)
+        }
+        XCTAssertLessThan(fastest, 0.5, "a teleporting hand carries no momentum (peaked at \(fastest) m/s)")
+        XCTAssertLessThan(highest, 0.4, "the overlap is only pushed apart, the ball is not launched (rose to \(highest) m)")
+    }
+}
+
+final class CoolBasketThrowTests: XCTestCase {
+    func testThrowVelocityComesFromRecentMotionOnly() {
+        let now: TimeInterval = 10
+        let fresh: [(position: SIMD3<Float>, time: TimeInterval)] = [
+            (SIMD3<Float>(0, 1, 0), now - 0.10), (SIMD3<Float>(0.2, 1.1, 0), now - 0.05), (SIMD3<Float>(0.4, 1.2, 0), now),
+        ]
+        XCTAssertEqual(CoolBasketGame.throwVelocity(samples: [], now: now, maxSpeed: 10), .zero)
+        let velocity = CoolBasketGame.throwVelocity(samples: fresh, now: now, maxSpeed: 10)
+        XCTAssertEqual(velocity.x, 4, accuracy: 1e-4)
+        XCTAssertEqual(velocity.y, 2, accuracy: 1e-4)
+
+        // The hand was lost from view for a second after the swing: the ball
+        // is dropped, not thrown with the old motion.
+        let stale = fresh.map { (position: $0.position, time: $0.time - 1.0) }
+        XCTAssertEqual(CoolBasketGame.throwVelocity(samples: stale, now: now, maxSpeed: 10), .zero)
+
+        // Only the stale part is ignored.
+        let mixed = stale + [(SIMD3<Float>(1, 1, 0), now - 0.02), (SIMD3<Float>(1.1, 1, 0), now)]
+        XCTAssertEqual(CoolBasketGame.throwVelocity(samples: mixed, now: now, maxSpeed: 10).x, 5, accuracy: 1e-3)
+
+        // A single sample, or two too close in time, cannot give a speed.
+        XCTAssertEqual(CoolBasketGame.throwVelocity(samples: [fresh[2]], now: now, maxSpeed: 10), .zero)
+        let tooClose: [(position: SIMD3<Float>, time: TimeInterval)] = [(SIMD3<Float>(0, 0, 0), now - 0.005), (SIMD3<Float>(1, 0, 0), now)]
+        XCTAssertEqual(CoolBasketGame.throwVelocity(samples: tooClose, now: now, maxSpeed: 10), .zero)
+
+        // A sample exactly at the window's age still counts; one beyond does not.
+        let edge: [(position: SIMD3<Float>, time: TimeInterval)] = [
+            (SIMD3<Float>(0, 0, 0), now - CoolBasketGame.throwSampleAge), (SIMD3<Float>(0.12, 0, 0), now),
+        ]
+        XCTAssertEqual(CoolBasketGame.throwVelocity(samples: edge, now: now, maxSpeed: 10).x, 1, accuracy: 1e-3)
+        let beyond: [(position: SIMD3<Float>, time: TimeInterval)] = [
+            (SIMD3<Float>(0, 0, 0), now - CoolBasketGame.throwSampleAge - 0.001), (SIMD3<Float>(0.12, 0, 0), now),
+        ]
+        XCTAssertEqual(CoolBasketGame.throwVelocity(samples: beyond, now: now, maxSpeed: 10), .zero)
+
+        // Capped.
+        let fast: [(position: SIMD3<Float>, time: TimeInterval)] = [(SIMD3<Float>(0, 0, 0), now - 0.05), (SIMD3<Float>(5, 0, 0), now)]
+        XCTAssertEqual(simd_length(CoolBasketGame.throwVelocity(samples: fast, now: now, maxSpeed: 10)), 10, accuracy: 1e-4)
+    }
+}

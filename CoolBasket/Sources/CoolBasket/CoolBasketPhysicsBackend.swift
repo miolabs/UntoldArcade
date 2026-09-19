@@ -130,6 +130,11 @@ public final class CoolBasketPhysicsBackend: PhysicsBackend, @unchecked Sendable
     /// Sanity caps: hand-tracking glitches must not teleport-launch the ball
     /// (a fast enough ball tunnels straight through the net planes).
     private let maxKinematicSpeed: Float = 6.0
+    /// A target jump no hand makes in one substep is a teleport — the hand
+    /// proxy unparking from 100 m below when tracking returns — not a swat:
+    /// the body arrives with no velocity. Jolt's plugin applies the same
+    /// rule (`maxKinematicStep`).
+    private let maxKinematicStep: Float = 1.0
     private let maxDynamicSpeed: Float = 10.0
 
     public init() {}
@@ -260,12 +265,17 @@ public final class CoolBasketPhysicsBackend: PhysicsBackend, @unchecked Sendable
         // seen last substep.
         for (entity, var body) in kinematicBodies {
             if let previous = body.previousTarget {
-                var velocity = (body.position - previous) / deltaTime
-                let speed = simd_length(velocity)
-                if speed > maxKinematicSpeed {
-                    velocity *= maxKinematicSpeed / speed
+                let jump = body.position - previous
+                if simd_length(jump) > maxKinematicStep {
+                    body.kinematicVelocity = .zero
+                } else {
+                    var velocity = jump / deltaTime
+                    let speed = simd_length(velocity)
+                    if speed > maxKinematicSpeed {
+                        velocity *= maxKinematicSpeed / speed
+                    }
+                    body.kinematicVelocity = velocity
                 }
-                body.kinematicVelocity = velocity
             }
             body.previousTarget = body.position
             kinematicBodies[entity] = body
