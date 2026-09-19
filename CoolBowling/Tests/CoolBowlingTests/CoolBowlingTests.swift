@@ -27,6 +27,12 @@ final class CoolBowlingTests: XCTestCase {
         let head = layout.pinPositions[0]
         XCTAssertEqual(head.x, 0, accuracy: 1e-5)
         XCTAssertEqual(head.z, -CoolBowlingScene.pinDeckDistance, accuracy: 1e-5)
+        // Pin 7 is at the player's left: negative X when facing -Z.
+        XCTAssertLessThan(layout.pinPositions[6].x, 0)
+        XCTAssertGreaterThan(layout.pinPositions[9].x, 0)
+        // A pin's length plus margin between the back row and the pit wall.
+        let backRowZ = layout.pinPositions[6].z
+        XCTAssertGreaterThan(backRowZ + CoolBowlingScene.laneLength, CoolBowlingScene.pinHeight + 0.2)
         XCTAssertEqual(head.y, CoolBowlingScene.laneThickness, accuracy: 1e-5, "Pins stand on the lane surface")
         // Neighbours 12 inches apart; the back row is 10 wide (7 … 10).
         XCTAssertEqual(simd_length(layout.pinPositions[1] - layout.pinPositions[2]), CoolBowlingScene.pinSpacing, accuracy: 1e-4)
@@ -91,9 +97,15 @@ final class CoolBowlingTests: XCTestCase {
                 position: position, orientation: layout.orientation
             ))
         }
-        // Let the rack settle: nothing must fall on its own.
-        for _ in 0 ..< 120 { backend.step(deltaTime: step) }
-        XCTAssertEqual(pinsDown(backend, layout: layout), 0, "A racked pin stands on its own")
+        // Let the rack settle: nothing must fall on its own. Poses are
+        // merged across steps because a body's final pose is read back once,
+        // on the step it falls asleep.
+        var poses: [EntityID: PhysicsBodyTransform] = [:]
+        for _ in 0 ..< 120 {
+            backend.step(deltaTime: step)
+            mergeReadback(backend, into: &poses)
+        }
+        XCTAssertEqual(pinsDown(poses, layout: layout), 0, "A racked pin stands on its own")
 
         // The ball, rolled from the foul line straight at the head pin.
         let start = layout.foul + layout.forward * 0.3 + SIMD3<Float>(0, layout.surfaceY + CoolBowlingScene.ballRadius + 0.005, 0)
@@ -107,36 +119,34 @@ final class CoolBowlingTests: XCTestCase {
         for _ in 0 ..< 240 {
             backend.step(deltaTime: step)
             backend.drainEvents(into: sink)
+            mergeReadback(backend, into: &poses)
         }
-        let down = pinsDown(backend, layout: layout)
+        let down = pinsDown(poses, layout: layout)
         XCTAssertGreaterThanOrEqual(down, 4, "A 7 m/s ball into the head pin scatters the rack (got \(down))")
         XCTAssertTrue(sink.contacts.contains { ($0.entityA == 50 && (1 ... 10).contains($0.entityB)) }, "The ball hit a pin")
         XCTAssertTrue(sink.contacts.contains { (1 ... 10).contains($0.entityA) && (1 ... 10).contains($0.entityB) }, "Pins hit each other")
     }
 
-    private func pinsDown(_ backend: JoltPhysicsBackend, layout: CoolBowlingScene.LaneLayout) -> Int {
+    /// Reads back whatever moved this step, like the coordinator does.
+    private func mergeReadback(_ backend: JoltPhysicsBackend, into poses: inout [EntityID: PhysicsBodyTransform]) {
         var entities = [EntityID](repeating: 0, count: 32)
         var transforms = [PhysicsBodyTransform](repeating: PhysicsBodyTransform(position: .zero, orientation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)), count: 32)
-        var poses: [EntityID: PhysicsBodyTransform] = [:]
         entities.withUnsafeMutableBufferPointer { e in
             transforms.withUnsafeMutableBufferPointer { t in
                 let written = backend.readActiveTransforms(into: PhysicsTransformReadBatch(entities: e, transforms: t))
                 for i in 0 ..< written { poses[e[i]] = t[i] }
             }
         }
+    }
+
+    private func pinsDown(_ poses: [EntityID: PhysicsBodyTransform], layout: CoolBowlingScene.LaneLayout) -> Int {
         var down = 0
         for index in 0 ..< 10 {
-            let entity = EntityID(1 + index)
-            // Sleeping pins are not read back: use the backend's state for position and treat them as standing unless displaced.
             let spot = layout.pinPositions[index]
-            if let pose = poses[entity] {
-                let up = pose.orientation.act(SIMD3<Float>(0, 1, 0))
-                let displacement = simd_length(SIMD3<Float>(pose.position.x - spot.x, 0, pose.position.z - spot.z))
-                if CoolBowlingScene.isPinDown(up: up, displacement: displacement) { down += 1 }
-            } else if let state = backend.bodyState(for: entity) {
-                let displacement = simd_length(SIMD3<Float>(state.position.x - spot.x, 0, state.position.z - spot.z))
-                if displacement > 0.25 { down += 1 }
-            }
+            let pose = poses[EntityID(1 + index)] ?? PhysicsBodyTransform(position: spot, orientation: layout.orientation)
+            let up = pose.orientation.act(SIMD3<Float>(0, 1, 0))
+            let displacement = simd_length(SIMD3<Float>(pose.position.x - spot.x, 0, pose.position.z - spot.z))
+            if CoolBowlingScene.isPinDown(up: up, displacement: displacement) { down += 1 }
         }
         return down
     }

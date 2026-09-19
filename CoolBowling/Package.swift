@@ -29,7 +29,6 @@ let package = Package(
                 .copy("Resources/bowlingball_baseColor.png"),
                 .copy("Resources/pin_baseColor.png"),
                 .copy("Resources/lane_baseColor.png"),
-                .copy("Resources/bowling_pin.usdc"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

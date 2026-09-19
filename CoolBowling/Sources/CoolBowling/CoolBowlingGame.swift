@@ -215,7 +215,10 @@ public final class CoolBowlingGame: @unchecked Sendable {
     public func requestResetPins() {
         guard currentPhase == .playing, let layout = scene.layout,
               let simulation = simulationStore.value else { return }
+        // The ball leaves the deck first, or the fresh rack falls over it.
+        requestNewBall()
         for (pin, position) in zip(scene.pinEntities, layout.pinPositions) {
+            scene.standPin(pin, at: position, orientation: layout.orientation)
             simulation.resetBody(entity: pin, position: position, velocity: .zero)
         }
         lock.withLock {
@@ -334,6 +337,9 @@ public final class CoolBowlingGame: @unchecked Sendable {
             }
         }
         let strike: Bool = lock.withLock {
+            if pinsDown != down {
+                coolBowlingLog.log("pins down: \(down)/\(self.scene.pinEntities.count)")
+            }
             pinsDown = down
             if down == scene.pinEntities.count, scene.pinEntities.count > 0, !strikeCelebrated {
                 strikeCelebrated = true
@@ -382,8 +388,9 @@ public final class CoolBowlingGame: @unchecked Sendable {
                 let direction = horizontal / horizontalLength
                 let drop = headPosition.y - floor
                 var distance = drop * horizontalLength / -forward.y
-                distance = min(max(distance, 1.0), 4.0)
-                // The foul line is where you look; the lane runs away from you.
+                // The foul line is where you look; the lane runs 4.5 m away
+                // from it, so it starts close.
+                distance = min(max(distance, 1.0), 2.5)
                 foul = SIMD3<Float>(
                     headPosition.x + direction.x * distance,
                     floor,

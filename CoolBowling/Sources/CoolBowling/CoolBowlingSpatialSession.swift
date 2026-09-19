@@ -11,8 +11,8 @@ public enum CoolBowlingHandSide: CaseIterable, Sendable {
     case right
 }
 
-/// The joints the basketball demo needs: palm for the hand collider, thumb
-/// and index tips for the pinch grab.
+/// The joints the bowling demo needs: palm for the hand collider, thumb and
+/// index tips for the pinch grab.
 public struct CoolBowlingHandPose: Sendable {
     public var isTracked: Bool
     public var palm: SIMD3<Float>
@@ -32,7 +32,7 @@ public struct CoolBowlingHandPose: Sendable {
 import ARKit
 
 /// visionOS adapter running the demo's own ARKitSession — hand tracking for
-/// grab/swat input and plane detection for real-surface colliders. Fresh
+/// the grab-and-roll input and plane detection for real-surface colliders. Fresh
 /// provider instances on every start: ARKit providers are one-shot.
 public final class CoolBowlingSpatialSession: @unchecked Sendable {
     private let session = ARKitSession()

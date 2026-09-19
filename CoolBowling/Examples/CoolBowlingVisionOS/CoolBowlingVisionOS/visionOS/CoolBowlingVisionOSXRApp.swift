@@ -80,10 +80,11 @@ struct BowlingLayerConfiguration: CompositorLayerConfiguration {
 @main
 struct CoolBowlingVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var immersionStyle: ImmersionStyle = .mixed
 
     var body: some SwiftUI.Scene {
-        WindowGroup {
+        WindowGroup(id: "Controls") {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Bowling 🎳").font(.extraLargeTitle).fontWeight(.bold)
@@ -147,6 +148,11 @@ struct CoolBowlingVisionOSXRApp: App {
                         let result = await openImmersiveSpace(id: "Lane")
                         BowlingXRHolder.shared.lastOpenResult = String(describing: result)
                         print("CoolBowling: auto-open → \(String(describing: result))")
+                        // `-hideWindow` also closes this control window so an
+                        // unattended screenshot sees the lane, not the glass.
+                        if ProcessInfo.processInfo.arguments.contains("-hideWindow") {
+                            dismissWindow(id: "Controls")
+                        }
                     }
                 }
             }

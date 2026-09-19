@@ -27,6 +27,14 @@ public final class CoolBowlingScene: @unchecked Sendable {
     /// The lane standing in the room (nil during placement).
     public private(set) var layout: LaneLayout?
 
+    /// Re-racks the pins visually as well (the backend teleport is the
+    /// game's; this keeps the entity transforms in step until read-back).
+    public func standPin(_ entity: EntityID, at position: SIMD3<Float>, orientation: simd_quatf) {
+        guard isPin(entity) else { return }
+        translateTo(entityId: entity, position: position)
+        rotateTo(entityId: entity, rotation: orientation)
+    }
+
     /// Regulation ball: 8.5 in across, up to 16 lb; 6 kg here.
     public static let ballRadius: Float = 0.108
     public static let ballMass: Float = 6.0
@@ -47,9 +55,11 @@ public final class CoolBowlingScene: @unchecked Sendable {
     public static let pinHeight: Float = 0.381
     public static let pinMaxRadius: Float = 0.0605
     public static let pinMass: Float = 1.53
-    /// Pin centres 12 in apart on the deck; the head pin this far from the foul line.
+    /// Pin centres 12 in apart on the deck; the head pin this far from the
+    /// foul line, leaving a pit of more than a pin's length behind the back
+    /// row so a pin knocked backward falls flat instead of leaning on the wall.
     public static let pinSpacing: Float = 0.3048
-    public static let pinDeckDistance: Float = laneLength - 0.9
+    public static let pinDeckDistance: Float = laneLength - 1.6
     static let handRadius: Float = 0.07
 
     public init() {}
@@ -74,7 +84,7 @@ public final class CoolBowlingScene: @unchecked Sendable {
         public init(foul: SIMD3<Float>, facing: SIMD3<Float>) {
             self.foul = foul
             forward = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
-            right = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), forward))
+            right = simd_normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0))) // the player's right
             let yaw = atan2f(forward.x, forward.z)
             orientation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
             surfaceY = foul.y + CoolBowlingScene.laneThickness
@@ -214,10 +224,16 @@ public final class CoolBowlingScene: @unchecked Sendable {
         up.y < 0.7 || displacement > 0.25
     }
 
+    /// Built once per lane and shared by the ten pins.
+    private var pinMeshes: [Mesh] = []
+
     @MainActor private func spawnPin(at position: SIMD3<Float>, index: Int, orientation: simd_quatf) {
         let entity = createEntity()
         setEntityName(entityId: entity, name: "CoolBowling.pin\(index + 1)")
-        setEntityMesh(entityId: entity, filename: "bowling_pin", withExtension: "usdc")
+        if pinMeshes.isEmpty {
+            pinMeshes = CoolBowlingPinMesh.makeMeshes()
+        }
+        setEntityMeshDirect(entityId: entity, meshes: pinMeshes, assetName: "BowlingPin")
         if let textureURL = Bundle.module.url(forResource: "pin_baseColor", withExtension: "png") {
             updateMaterialTexture(entityId: entity, textureType: .baseColor, path: textureURL)
         }
