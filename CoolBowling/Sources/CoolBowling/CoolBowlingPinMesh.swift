@@ -2,16 +2,13 @@
 //  CoolBowlingPinMesh.swift
 //  CoolBowling
 //
-//  The pin's visual, built at runtime: a profile revolved into a ModelIO mesh
-//  and handed to the engine through `BasicPrimitives.createMesh(from:)`. The
-//  engine's file loaders only take cooked `.untold` assets, and its mesh
-//  type cannot be constructed directly, so this is the way to draw a shape
-//  the primitives can't.
+//  The pin's visual, built at runtime: a profile revolved into vertex
+//  arrays and handed to the engine's `Mesh.makeMesh`. The engine's file
+//  loaders only take cooked `.untold` assets, so this is how a demo draws a
+//  shape the primitives don't cover.
 //
 
 import Foundation
-import MetalKit
-import ModelIO
 import simd
 import UntoldEngine
 
@@ -24,18 +21,14 @@ enum CoolBowlingPinMesh {
         (0.024, 0.376), (0.010, 0.381), (0.000, 0.381),
     ]
 
-    private struct Vertex {
-        var position: SIMD3<Float>
-        var normal: SIMD3<Float>
-        var uv: SIMD2<Float>
-    }
-
-    /// Revolves the profile in `segments` steps. Main actor: it allocates
-    /// Metal buffers on the render device.
+    /// Revolves the profile in `segments` steps. Main actor: the engine
+    /// allocates the Metal buffers on the render device.
     @MainActor static func makeMeshes(segments: Int = 32) -> [Mesh] {
         let rings = profile.count
-        var vertices: [Vertex] = []
-        vertices.reserveCapacity(rings * (segments + 1))
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var uvs: [SIMD2<Float>] = []
+        positions.reserveCapacity(rings * (segments + 1))
         for (index, point) in profile.enumerated() {
             let previous = profile[max(index - 1, 0)]
             let next = profile[min(index + 1, rings - 1)]
@@ -44,14 +37,11 @@ enum CoolBowlingPinMesh {
             for segment in 0 ... segments {
                 let angle = Float(segment) / Float(segments) * 2 * .pi
                 let c = cosf(angle), s = sinf(angle)
-                let normal = point.r < 1e-4
+                positions.append(SIMD3<Float>(point.r * c, point.y, point.r * s))
+                normals.append(point.r < 1e-4
                     ? SIMD3<Float>(0, point.y > 0.1 ? 1 : -1, 0)
-                    : simd_normalize(SIMD3<Float>(outward.x * c, outward.y, outward.x * s))
-                vertices.append(Vertex(
-                    position: SIMD3<Float>(point.r * c, point.y, point.r * s),
-                    normal: normal,
-                    uv: SIMD2<Float>(Float(segment) / Float(segments), point.y / CoolBowlingScene.pinHeight)
-                ))
+                    : simd_normalize(SIMD3<Float>(outward.x * c, outward.y, outward.x * s)))
+                uvs.append(SIMD2<Float>(Float(segment) / Float(segments), point.y / CoolBowlingScene.pinHeight))
             }
         }
         var indices: [UInt32] = []
@@ -63,24 +53,9 @@ enum CoolBowlingPinMesh {
                 indices += [a, c, b, b, c, d]
             }
         }
-
-        let allocator = MTKMeshBufferAllocator(device: renderInfo.device)
-        let vertexData = vertices.withUnsafeBytes { Data($0) }
-        let indexData = indices.withUnsafeBytes { Data($0) }
-        let vertexBuffer = allocator.newBuffer(with: vertexData, type: .vertex)
-        let indexBuffer = allocator.newBuffer(with: indexData, type: .index)
-        let descriptor = MDLVertexDescriptor()
-        descriptor.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition, format: .float3, offset: 0, bufferIndex: 0)
-        descriptor.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal, format: .float3, offset: 16, bufferIndex: 0)
-        descriptor.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: 32, bufferIndex: 0)
-        descriptor.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Vertex>.stride)
-        // The render passes skip a submesh without a material, so the pin
-        // gets a plain physically-based one; the texture is applied by the
-        // scene afterwards.
-        let material = MDLMaterial(name: "BowlingPin", scatteringFunction: MDLPhysicallyPlausibleScatteringFunction())
-        let submesh = MDLSubmesh(indexBuffer: indexBuffer, indexCount: indices.count, indexType: .uInt32, geometryType: .triangles, material: material)
-        let mesh = MDLMesh(vertexBuffer: vertexBuffer, vertexCount: vertices.count, descriptor: descriptor, submeshes: [submesh])
-        mesh.name = "BowlingPin"
-        return BasicPrimitives.createMesh(from: mesh)
+        guard let mesh = Mesh.makeMesh(positions: positions, normals: normals, uvs: uvs, indices: indices, name: "BowlingPin") else {
+            return []
+        }
+        return [mesh]
     }
 }

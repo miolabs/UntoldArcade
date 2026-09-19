@@ -301,22 +301,8 @@ public final class CoolBowlingScene: @unchecked Sendable {
         if let textureURL = Bundle.module.url(forResource: "bowlingball_baseColor", withExtension: "png") {
             updateMaterialTexture(entityId: ballEntity, textureType: .baseColor, path: textureURL)
         }
-        fitSphereVisual(entity: ballEntity, radius: Self.ballRadius)
         translateTo(entityId: ballEntity, position: position)
         attachBallBody(velocity: velocity, at: position)
-    }
-
-    /// Makes a sphere node's visual match `radius`: the engine builds spheres
-    /// with ModelIO's `sphereWithExtent`, which takes a radius where the
-    /// engine passes a diameter (fixed upstream in untoldengine/UntoldEngine
-    /// #1213); measuring the bounds keeps this right on either version.
-    private func fitSphereVisual(entity: EntityID, radius: Float) {
-        guard let bounds = scene.get(component: LocalTransformComponent.self, for: entity)?.boundingBox else { return }
-        let measured = (bounds.max.x - bounds.min.x) * 0.5
-        guard measured > radius * 0.5, measured < radius * 4.0 else { return }
-        let factor = radius / measured
-        guard abs(factor - 1.0) > 0.01 else { return }
-        scaleTo(entityId: entity, scale: SIMD3<Float>(repeating: factor))
     }
 
     public func attachBallBody(velocity: SIMD3<Float>, at position: SIMD3<Float>) {
