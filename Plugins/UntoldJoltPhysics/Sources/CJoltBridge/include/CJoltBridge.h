@@ -92,6 +92,31 @@ typedef struct ujolt_body_desc {
     uint64_t user_data;           /* the engine entity id */
 } ujolt_body_desc;
 
+/// A soft body: particles joined by distance constraints (Jolt's own XPBD),
+/// optional triangles for surface collision. Vertices are relative to
+/// `position`; the body never moves as a whole (`position` is its frame),
+/// pinned vertices (inverse mass 0) hold it in place.
+typedef struct ujolt_soft_body_desc {
+    const float *vertices;         /* xyz triples */
+    const float *inv_masses;       /* per vertex; 0 = pinned. NULL -> all 1 */
+    uint32_t vertex_count;
+    const uint32_t *edges;         /* index pairs */
+    const float *edge_compliances; /* per edge, or NULL -> compliance */
+    float compliance;              /* inverse stiffness, m/N; 0 = rigid */
+    uint32_t edge_count;
+    const uint32_t *faces;         /* index triples; optional */
+    uint32_t face_count;
+    float position[3];
+    uint32_t layer;                /* engine collision layer 0..31 */
+    uint32_t iterations;           /* solver iterations per step; 0 -> Jolt's default */
+    float linear_damping;
+    float vertex_radius;           /* collision radius of a vertex */
+    float friction;
+    float restitution;
+    float gravity_factor;
+    uint64_t user_data;
+} ujolt_soft_body_desc;
+
 typedef enum ujolt_contact_phase {
     UJOLT_CONTACT_ADDED = 0,
     UJOLT_CONTACT_PERSISTED = 1,
@@ -134,6 +159,13 @@ void ujolt_world_set_layer_matrix(ujolt_world *world, const uint32_t *layer_mask
 /* Bodies */
 ujolt_body_id ujolt_world_add_body(ujolt_world *world, const ujolt_body_desc *desc);
 void ujolt_world_remove_body(ujolt_world *world, ujolt_body_id body);
+
+/* Soft bodies (removed with ujolt_world_remove_body) */
+ujolt_body_id ujolt_world_add_soft_body(ujolt_world *world, const ujolt_soft_body_desc *desc);
+uint32_t ujolt_world_soft_body_vertex_count(ujolt_world *world, ujolt_body_id body);
+/// World-space vertex positions, xyz triples. Returns the count written
+/// (capped at capacity).
+uint32_t ujolt_world_read_soft_body_vertices(ujolt_world *world, ujolt_body_id body, float *positions, uint32_t capacity);
 uint32_t ujolt_world_body_count(const ujolt_world *world);
 uint64_t ujolt_world_get_user_data(const ujolt_world *world, ujolt_body_id body);
 

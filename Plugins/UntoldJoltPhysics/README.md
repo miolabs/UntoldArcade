@@ -107,6 +107,15 @@ built against, as the engine's validator demands.
   `JoltPhysicsBackend.environmentEntity` (the engine's null entity). Re-sent
   boxes that did not change keep their Jolt bodies, so resting balls stay put.
 - **Restitution/friction** combine with Jolt's defaults (max / geometric mean).
+- **Soft bodies** (`JoltPhysicsBackend.addSoftBody` / `readSoftBodyVertices` /
+  `removeSoftBody`, a side channel like `resetBody`): particles joined by
+  distance constraints, solved by Jolt's own XPBD, colliding both ways with
+  the rigid bodies. Pinned particles (inverse mass 0) hold the body in place;
+  faces are optional and give it a surface for continuous collision. Rigid
+  bodies collide with the particles as spheres of `vertexRadius`, so that
+  radius plus the other body's must cover half the particle spacing or the
+  body slips through the gaps. The engine seam has no soft-body vocabulary:
+  a game reads the vertex positions back each frame and drives a mesh.
 
 ## Tests
 
@@ -118,7 +127,8 @@ The backend suite drives the plugin through the engine's protocol the way the
 coordinator does: bounce and rest, static boxes, triggers (including exit on
 removal), a kinematic swat, body removal and replacement, raycasts with
 exclusions and layer masks, the layer matrix, capsule/cylinder/convex-hull
-shapes, collider offsets, gravity. The plugin suite covers the manifest,
+shapes, collider offsets, gravity, and soft bodies (a hanging rope, a sheet
+catching a ball, removal). The plugin suite covers the manifest,
 install/uninstall, replacement and the registration helper.
 
 ## Roadmap
