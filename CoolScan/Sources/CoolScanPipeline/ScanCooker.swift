@@ -46,7 +46,8 @@ public struct ScanCooker {
     public func cook(
         usdzURL: URL,
         outputDirectory: URL,
-        assetName: String = "scan"
+        assetName: String = "scan",
+        cleanup: MeshCleanupOptions = MeshCleanupOptions()
     ) throws -> CookedScan {
         let scratchDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CoolScanCook-\(UUID().uuidString)", isDirectory: true)
@@ -54,13 +55,19 @@ public struct ScanCooker {
         defer { try? FileManager.default.removeItem(at: scratchDirectory) }
 
         let meshes = try MDLExtraction.extract(from: usdzURL, scratchDirectory: scratchDirectory)
-        return try cook(extracted: meshes, outputDirectory: outputDirectory, assetName: assetName)
+        return try cook(
+            extracted: meshes,
+            outputDirectory: outputDirectory,
+            assetName: assetName,
+            cleanup: cleanup
+        )
     }
 
     func cook(
         extracted meshes: [ExtractedMesh],
         outputDirectory: URL,
-        assetName: String
+        assetName: String,
+        cleanup: MeshCleanupOptions = .none
     ) throws -> CookedScan {
         try FileManager.default.createDirectory(
             at: outputDirectory,
@@ -68,7 +75,8 @@ public struct ScanCooker {
         )
 
         var builder = ScanAssetBuilder(assetName: assetName)
-        for mesh in meshes {
+        for var mesh in meshes {
+            MeshCleanup.apply(&mesh, options: cleanup)
             builder.add(mesh)
         }
         let assembly = try builder.assemble(outputDirectory: outputDirectory)

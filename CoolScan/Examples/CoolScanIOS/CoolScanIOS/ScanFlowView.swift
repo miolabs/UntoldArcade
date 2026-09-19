@@ -58,6 +58,10 @@ struct ScanFlowView: View {
         if let session = model.session {
             ObjectCaptureView(session: session)
                 .ignoresSafeArea()
+                .overlay(alignment: .top) {
+                    captureStatus(for: session)
+                        .padding(.top, 8)
+                }
                 .overlay(alignment: .bottom) {
                     captureControls(for: session)
                         .padding(.bottom, 30)
@@ -65,6 +69,49 @@ struct ScanFlowView: View {
         } else {
             ProgressView()
         }
+    }
+
+    /// Live guidance: the session's own feedback (too close, too fast, low
+    /// light…) plus the shot counter. Following these is the single biggest
+    /// lever on reconstruction quality.
+    @ViewBuilder
+    private func captureStatus(for session: ObjectCaptureSession) -> some View {
+        VStack(spacing: 6) {
+            if session.state == .capturing {
+                Text("Pass \(model.passNumber) · \(session.numberOfShotsTaken)/\(session.maximumNumberOfInputImages) photos")
+                    .font(.caption.monospacedDigit())
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            ForEach(Self.messages(for: session.feedback), id: \.self) { message in
+                Text(message)
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.yellow.opacity(0.9), in: Capsule())
+                    .foregroundStyle(.black)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: session.feedback)
+    }
+
+    private static func messages(for feedback: Set<ObjectCaptureSession.Feedback>) -> [String] {
+        feedback.compactMap { item in
+            switch item {
+            case .objectTooClose: "Move farther from the object"
+            case .objectTooFar: "Move closer to the object"
+            case .movingTooFast: "Slow down"
+            case .environmentLowLight: "More light would help"
+            case .environmentTooDark: "Too dark to capture"
+            case .outOfFieldOfView: "Keep the object in view"
+            case .objectNotFlippable: "This object should not be flipped"
+            case .overCapturing: "This area is covered — move on"
+            case .objectNotDetected: "Point at the object to detect it"
+            @unknown default: nil
+            }
+        }
+        .sorted()
     }
 
     @ViewBuilder
@@ -75,14 +122,19 @@ struct ScanFlowView: View {
                 Button("Start Detecting") { model.beginDetecting() }
                     .buttonStyle(.borderedProminent)
             case .detecting:
+                Text("Drag the box handles so it hugs the object — anything outside is discarded")
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .padding(10)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 24)
                 Button("Start Capture") { model.beginCapturing() }
                     .buttonStyle(.borderedProminent)
             case .capturing:
                 if session.userCompletedScanPass {
-                    Button("Finish Scan") { model.finish() }
-                        .buttonStyle(.borderedProminent)
+                    passCompleteControls
                 } else {
-                    Text("Slowly walk around the object")
+                    Text("Slowly circle the object at this height")
                         .font(.callout)
                         .padding(8)
                         .background(.regularMaterial, in: Capsule())
@@ -91,6 +143,26 @@ struct ScanFlowView: View {
                 EmptyView()
             }
         }
+    }
+
+    /// After each orbit: finish, or add coverage. A second pass at a
+    /// different height fills legs and undersides; flipping covers the
+    /// bottom for objects that can be turned over.
+    private var passCompleteControls: some View {
+        VStack(spacing: 8) {
+            Text("Pass \(model.passNumber) complete")
+                .font(.callout.weight(.semibold))
+            if model.canAddPass {
+                Button("Another pass (crouch lower / go higher)") { model.beginAnotherPass(flipped: false) }
+                    .buttonStyle(.bordered)
+                Button("Flip object, then another pass") { model.beginAnotherPass(flipped: true) }
+                    .buttonStyle(.bordered)
+            }
+            Button("Finish Scan") { model.finish() }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func reconstructionView(progress: Double) -> some View {
@@ -146,7 +218,12 @@ final class ScanFlowModel: ObservableObject {
     }
 
     @Published var phase: Phase = .initializing
+    @Published private(set) var passNumber = 1
     private(set) var session: ObjectCaptureSession?
+
+    /// Object Capture supports up to three scan passes per session.
+    static let maximumPasses = 3
+    var canAddPass: Bool { passNumber < Self.maximumPasses }
     private var photogrammetry: PhotogrammetrySession?
 
     private let workDirectory = FileManager.default.temporaryDirectory
@@ -197,6 +274,9 @@ final class ScanFlowModel: ObservableObject {
         let session = ObjectCaptureSession()
         var configuration = ObjectCaptureSession.Configuration()
         configuration.checkpointDirectory = checkpointDirectory
+        // Let the session keep shooting past its default budget: thin and
+        // shiny parts (chair legs, chrome) need every extra view they can get.
+        configuration.isOverCaptureEnabled = true
         session.start(imagesDirectory: imagesDirectory, configuration: configuration)
         self.session = session
         phase = .capturing
@@ -242,6 +322,16 @@ final class ScanFlowModel: ObservableObject {
         session?.startCapturing()
     }
 
+    func beginAnotherPass(flipped: Bool) {
+        guard let session, canAddPass else { return }
+        if flipped {
+            session.beginNewScanPassAfterFlip()
+        } else {
+            session.beginNewScanPass()
+        }
+        passNumber += 1
+    }
+
     func finish() {
         session?.finish()
     }
@@ -259,13 +349,17 @@ final class ScanFlowModel: ObservableObject {
         do {
             var configuration = PhotogrammetrySession.Configuration()
             configuration.checkpointDirectory = checkpointDirectory
+            // Scans are shot in orbit order, and low-texture surfaces (black
+            // plastic, fabric) need the more aggressive feature detector.
+            configuration.sampleOrdering = .sequential
+            configuration.featureSensitivity = .high
             let photogrammetry = try PhotogrammetrySession(
                 input: imagesDirectory,
                 configuration: configuration
             )
             self.photogrammetry = photogrammetry
 
-            // .reduced keeps memory and thermals sane on phones.
+            // .reduced is the only detail level iOS offers on device.
             try photogrammetry.process(requests: [
                 .modelFile(url: modelURL, detail: .reduced),
             ])

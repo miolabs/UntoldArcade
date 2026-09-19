@@ -96,6 +96,20 @@ struct ScanLibraryView: View {
                         .foregroundStyle(.secondary)
                     }
                 }
+                .swipeActions(edge: .leading) {
+                    if store.canRecook(scan) {
+                        Button {
+                            Task {
+                                if let cooked = await store.recook(scan) {
+                                    path = [cooked.id]
+                                }
+                            }
+                        } label: {
+                            Label("Re-cook", systemImage: "arrow.clockwise")
+                        }
+                        .tint(.orange)
+                    }
+                }
             }
             .onDelete { offsets in
                 for index in offsets {

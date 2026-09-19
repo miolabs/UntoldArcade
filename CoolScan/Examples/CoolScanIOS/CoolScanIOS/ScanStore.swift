@@ -22,6 +22,10 @@ struct ScanRecord: Identifiable, Sendable {
         folder.appendingPathComponent(metadata.untoldFilename)
     }
 
+    var sourceURL: URL {
+        folder.appendingPathComponent("source.usdz")
+    }
+
     var boundsMin: SIMD3<Float> {
         SIMD3<Float>(metadata.boundsMin[0], metadata.boundsMin[1], metadata.boundsMin[2])
     }
@@ -74,6 +78,22 @@ final class ScanStore: ObservableObject {
     func delete(_ scan: ScanRecord) {
         try? FileManager.default.removeItem(at: scan.folder)
         reload()
+    }
+
+    /// Scans cooked since the source USDZ started being kept can be rebuilt
+    /// through the current pipeline (cleanup, texture handling) without
+    /// rescanning. Produces a new entry; the original stays for comparison.
+    func canRecook(_ scan: ScanRecord) -> Bool {
+        FileManager.default.fileExists(atPath: scan.sourceURL.path)
+    }
+
+    @discardableResult
+    func recook(_ scan: ScanRecord) async -> ScanRecord? {
+        guard canRecook(scan) else {
+            lastError = "This scan has no source model to re-cook (scanned before sources were kept)."
+            return nil
+        }
+        return await importUSDZ(at: scan.sourceURL, name: scan.metadata.name + " (re-cooked)")
     }
 
     /// Cooks a USDZ (bundled sample or a fresh Object Capture result) into a
