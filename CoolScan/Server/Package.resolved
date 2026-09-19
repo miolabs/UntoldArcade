@@ -1,0 +1,87 @@
+{
+  "originHash" : "a1ca566c8dce66462992d9bb8e3f1a0d6ebafe0c9cf625c15c36c25b68e63215",
+  "pins" : [
+    {
+      "identity" : "miocore",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/miolabs/MIOCore.git",
+      "state" : {
+        "revision" : "9fe613aba87da76e6676813d7ddf4eeaf5034a52",
+        "version" : "2.0.1"
+      }
+    },
+    {
+      "identity" : "mioserverkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/miolabs/MIOServerKit.git",
+      "state" : {
+        "branch" : "master",
+        "revision" : "9e13df7d2fb1aa1fd93ae0eb09e335bfa86d111a"
+      }
+    },
+    {
+      "identity" : "swift-atomics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-atomics.git",
+      "state" : {
+        "revision" : "0442cb5a3f98ab802acb777929fdb446bda11a34",
+        "version" : "1.3.1"
+      }
+    },
+    {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections.git",
+      "state" : {
+        "revision" : "a0cb0954ecb21e4e31b0070e6ed5674e8556685a",
+        "version" : "1.6.0"
+      }
+    },
+    {
+      "identity" : "swift-log",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-log.git",
+      "state" : {
+        "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
+        "version" : "1.15.1"
+      }
+    },
+    {
+      "identity" : "swift-nio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-nio.git",
+      "state" : {
+        "revision" : "21de5f08c1a166a6dd293d0e587ad977bf8dac5d",
+        "version" : "2.103.0"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-syntax.git",
+      "state" : {
+        "revision" : "64889f0c732f210a935a0ad7cda38f77f876262d",
+        "version" : "509.1.1"
+      }
+    },
+    {
+      "identity" : "swift-system",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-system.git",
+      "state" : {
+        "revision" : "869129b7bf4ecc57b97d0193ad29690ca2134750",
+        "version" : "1.8.1"
+      }
+    },
+    {
+      "identity" : "untoldengine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/UntoldEngine.git",
+      "state" : {
+        "branch" : "develop",
+        "revision" : "0af348ed4384853d57ff628ce0b5c4d8ac8133d4"
+      }
+    }
+  ],
+  "version" : 3
+}

@@ -170,7 +170,7 @@ public enum ZipArchive {
 
     /// Path components of an entry name, or nil when the name could escape
     /// the extraction directory.
-    static func safeComponents(_ name: String) -> [String]? {
+    public static func safeComponents(_ name: String) -> [String]? {
         guard !name.hasPrefix("/") else { return nil }
         let components = name.split(separator: "/").map(String.init)
         guard !components.isEmpty, !components.contains(".."), !components.contains("") else {
