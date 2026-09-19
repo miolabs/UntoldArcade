@@ -7,6 +7,7 @@
 
 import Foundation
 import simd
+import UntoldComponentKit
 import UntoldEngine
 import UntoldGaussianTwins
 
@@ -31,6 +32,12 @@ final class GameScene {
         makeCamera()
         let sun = makeSunLight()
         GaussianTwinSystem.shared.install()
+        // Plugins written in code (Sources/SplatTwinPlugins): register the component and entity
+        // plugins linked into this app, then start them. Scenes loaded afterwards bind what they
+        // saved to these types.
+        ScenePluginSystem.discoverInApp()
+        ScenePluginSystem.install()
+        ScenePluginSystem.shared.startPlayMode()
         showcase.build(lightDirection: getDirectionalLightShaderDirection(entityId: sun))
         setSceneReady(true)
     }

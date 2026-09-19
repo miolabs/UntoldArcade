@@ -34,6 +34,20 @@ is swapped and its far side shows through.
 - To try a real capture, put `capture.untold` (the mesh) and `capture.untoldgs` (its cooked
   splat) into `Sources/SplatTwin/GameData/Twins/`; the demo adds it as a fourth object.
 
+## In the editor
+
+`UntoldEditor.json` lists the UntoldGaussianTwins package as a plugin package, at
+`../../../Libs/UntoldGaussianTwins`: a checkout of the package beside this repository's parent
+folder, on a branch that has `Sources/UntoldGaussianTwinsEditor`. Opening this project in the
+Untold editor compiles that folder and adds the package's menu items: **View > Preview Splat
+Twins**, which runs the swap in the viewport, and **Debug > Splat Debug**, the splat pipeline
+switches. The Inspector's Splat Twin section, which links a mesh to its cooked splat, is the
+editor's own.
+
+`Sources/SplatTwinPlugins` is the project's plugins folder: components written there appear
+under Add Component in the editor and run in the app (`GameScene` starts `ScenePluginSystem`).
+It ships with `Spinner`, the starter component.
+
 ## 📁 Project Structure
 
 ```

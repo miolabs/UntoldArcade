@@ -9,12 +9,14 @@
 /* Begin PBXBuildFile section */
 		00B5D7236D459D933FE55287 /* GameScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6948C9B6F33B7524D70DE863 /* GameScene.swift */; };
 		0CB45EAAC0CC40E0E9AAEB21 /* SplatSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 741A7D8DDD102B8CA3453888 /* SplatSynthesizer.swift */; };
-		1483584F7C92D351CF0A9DD8 /* UntoldGaussianTwins in Frameworks */ = {isa = PBXBuildFile; productRef = 53F67B54E1AE8FE7DEDA1FAF /* UntoldGaussianTwins */; };
+		1483584F7C92D351CF0A9DD8 /* UntoldComponentKit in Frameworks */ = {isa = PBXBuildFile; productRef = D3C49547BA071650CA1EFE57 /* UntoldComponentKit */; };
 		23971D85CD771A99E1D2F666 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = BDEAF06BC243E66EEC6B5264 /* UntoldEngine */; };
 		41F36BF56EF5743F3F4E7461 /* TwinShowcase.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5513D239615EB2A0DF30165 /* TwinShowcase.swift */; };
+		45215CB5206730CFC06498A3 /* UntoldGaussianTwins in Frameworks */ = {isa = PBXBuildFile; productRef = 53F67B54E1AE8FE7DEDA1FAF /* UntoldGaussianTwins */; };
 		4B4AE7FE3C3329E52B64AF28 /* GameData in Resources */ = {isa = PBXBuildFile; fileRef = 37B479C124E94E2243140AED /* GameData */; };
 		87F7F9D45F773F99471722C7 /* SplatTwinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 575835182E028019A4D47E6A /* SplatTwinApp.swift */; };
 		938E3A944A885C9D58CC6D68 /* SplatSynthesizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DED1A56E57C26CAD845ACCAE /* SplatSynthesizerTests.swift */; };
+		D849676FC0D8CAFE710D6D6A /* Spinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DBEE4FAB71F049A2640968F /* Spinner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -30,6 +32,7 @@
 /* Begin PBXFileReference section */
 		37B479C124E94E2243140AED /* GameData */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GameData; path = Sources/SplatTwin/GameData; sourceTree = SOURCE_ROOT; };
 		425C967FD66FFD45240210C7 /* SplatTwinTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SplatTwinTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4DBEE4FAB71F049A2640968F /* Spinner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spinner.swift; sourceTree = "<group>"; };
 		575835182E028019A4D47E6A /* SplatTwinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatTwinApp.swift; sourceTree = "<group>"; };
 		6948C9B6F33B7524D70DE863 /* GameScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameScene.swift; sourceTree = "<group>"; };
 		741A7D8DDD102B8CA3453888 /* SplatSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplatSynthesizer.swift; sourceTree = "<group>"; };
@@ -44,13 +47,22 @@
 			buildActionMask = 2147483647;
 			files = (
 				23971D85CD771A99E1D2F666 /* UntoldEngine in Frameworks */,
-				1483584F7C92D351CF0A9DD8 /* UntoldGaussianTwins in Frameworks */,
+				1483584F7C92D351CF0A9DD8 /* UntoldComponentKit in Frameworks */,
+				45215CB5206730CFC06498A3 /* UntoldGaussianTwins in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		3C006B52807F1B2439AC62C7 /* SplatTwinPlugins */ = {
+			isa = PBXGroup;
+			children = (
+				4DBEE4FAB71F049A2640968F /* Spinner.swift */,
+			);
+			path = SplatTwinPlugins;
+			sourceTree = "<group>";
+		};
 		466ACEEE8FF4579217C5A9BB /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -64,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				6DD94C30D142A3FCF08944B8 /* SplatTwin */,
+				3C006B52807F1B2439AC62C7 /* SplatTwinPlugins */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -134,6 +147,7 @@
 			name = SplatTwin;
 			packageProductDependencies = (
 				BDEAF06BC243E66EEC6B5264 /* UntoldEngine */,
+				D3C49547BA071650CA1EFE57 /* UntoldComponentKit */,
 				53F67B54E1AE8FE7DEDA1FAF /* UntoldGaussianTwins */,
 			);
 			productName = SplatTwin;
@@ -195,6 +209,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				00B5D7236D459D933FE55287 /* GameScene.swift in Sources */,
+				D849676FC0D8CAFE710D6D6A /* Spinner.swift in Sources */,
 				0CB45EAAC0CC40E0E9AAEB21 /* SplatSynthesizer.swift in Sources */,
 				87F7F9D45F773F99471722C7 /* SplatTwinApp.swift in Sources */,
 				41F36BF56EF5743F3F4E7461 /* TwinShowcase.swift in Sources */,
@@ -485,6 +500,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4A724613F8CCBA408912F275 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngine;
+		};
+		D3C49547BA071650CA1EFE57 /* UntoldComponentKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4A724613F8CCBA408912F275 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			productName = UntoldComponentKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -25,6 +25,8 @@ targets:
     dependencies:
       - package: UntoldEngine
         product: UntoldEngine
+      - package: UntoldEngine
+        product: UntoldComponentKit
       - package: UntoldGaussianTwins
         product: UntoldGaussianTwins
     settings:
