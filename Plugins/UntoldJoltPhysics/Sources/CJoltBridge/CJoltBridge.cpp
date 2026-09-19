@@ -35,6 +35,7 @@
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -361,10 +362,20 @@ RefConst<Shape> makeShape(const ujolt_body_desc &desc) {
         if (desc.hull_points == nullptr || desc.hull_point_count < 4) return nullptr;
         std::vector<Vec3> points;
         points.reserve(desc.hull_point_count);
+        Vec3 lo = Vec3::sReplicate(FLT_MAX), hi = Vec3::sReplicate(-FLT_MAX);
         for (uint32_t i = 0; i < desc.hull_point_count; ++i) {
-            points.push_back(v3(desc.hull_points + i * 3));
+            const Vec3 p = v3(desc.hull_points + i * 3);
+            points.push_back(p);
+            lo = Vec3::sMin(lo, p);
+            hi = Vec3::sMax(hi, p);
         }
-        ConvexHullShapeSettings settings(points.data(), int(points.size()));
+        // Jolt shrinks a hull by its convex radius and collides the rounded
+        // result; the 5 cm default is a third of a bowling pin's belly, so
+        // small hulls would collide well outside their mesh (and lose their
+        // necks). Scale the radius with the hull's smallest extent.
+        const float smallestExtent = (hi - lo).ReduceMin();
+        const float convexRadius = std::min(cDefaultConvexRadius, std::max(0.0f, smallestExtent * 0.1f));
+        ConvexHullShapeSettings settings(points.data(), int(points.size()), convexRadius);
         Shape::ShapeResult result = settings.Create();
         if (result.HasError()) return nullptr;
         shape = result.Get();
