@@ -154,7 +154,6 @@ public final class CoolBallScene: @unchecked Sendable {
             print("CoolBall: ball texture missing from bundle — plain white ball")
         }
 
-        fitSphereVisual(entity: entity, radius: Self.ballRadius)
         translateTo(entityId: entity, position: position)
         balls.append(entity)
         ballSet.insert(entity)
@@ -175,22 +174,6 @@ public final class CoolBallScene: @unchecked Sendable {
         }
         balls.removeAll()
         ballSet.removeAll()
-    }
-
-    /// Makes a sphere node's visual match `radius`. The engine builds spheres
-    /// with ModelIO's `sphereWithExtent`, which takes a radius where the
-    /// engine passes a diameter, so `SphereNode(radius:)` has drawn twice
-    /// the size it says (a 48 cm "basketball" around a 24 cm collider).
-    /// Measuring the mesh bounds and scaling to fit keeps the demo right on
-    /// engines with and without the fix. Bounds far from the expected size
-    /// (an unregistered mesh reports a unit box) are left alone.
-    private func fitSphereVisual(entity: EntityID, radius: Float) {
-        guard let bounds = scene.get(component: LocalTransformComponent.self, for: entity)?.boundingBox else { return }
-        let measured = (bounds.max.x - bounds.min.x) * 0.5
-        guard measured > radius * 0.5, measured < radius * 4.0 else { return }
-        let factor = radius / measured
-        guard abs(factor - 1.0) > 0.01 else { return }
-        scaleTo(entityId: entity, scale: SIMD3<Float>(repeating: factor))
     }
 
     /// Makes a ball a simulated body again (used on spawn and on throw
