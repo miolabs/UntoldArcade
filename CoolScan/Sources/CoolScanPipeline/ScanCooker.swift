@@ -32,6 +32,21 @@ public struct CookedScan: Sendable {
     public let worldBoundsMax: SIMD3<Float>
     public let vertexCount: Int
     public let triangleCount: Int
+    /// Longest edge among the exported textures (0 when untextured).
+    public let textureMax: Int
+}
+
+/// Everything that tunes a cook besides the input file.
+public struct CookOptions: Sendable {
+    public var cleanup = MeshCleanupOptions()
+    /// Downscale exported textures whose longer edge exceeds this. Mac
+    /// reconstructions ship 8K maps; the phone renderer caps at 2K.
+    public var maxTextureDimension: Int?
+
+    public init(cleanup: MeshCleanupOptions = MeshCleanupOptions(), maxTextureDimension: Int? = nil) {
+        self.cleanup = cleanup
+        self.maxTextureDimension = maxTextureDimension
+    }
 }
 
 /// Converts a textured USDZ (Object Capture output) into the engine's native
@@ -49,6 +64,20 @@ public struct ScanCooker {
         assetName: String = "scan",
         cleanup: MeshCleanupOptions = MeshCleanupOptions()
     ) throws -> CookedScan {
+        try cook(
+            usdzURL: usdzURL,
+            outputDirectory: outputDirectory,
+            assetName: assetName,
+            options: CookOptions(cleanup: cleanup)
+        )
+    }
+
+    public func cook(
+        usdzURL: URL,
+        outputDirectory: URL,
+        assetName: String = "scan",
+        options: CookOptions
+    ) throws -> CookedScan {
         let scratchDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CoolScanCook-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
@@ -59,7 +88,7 @@ public struct ScanCooker {
             extracted: meshes,
             outputDirectory: outputDirectory,
             assetName: assetName,
-            cleanup: cleanup
+            options: options
         )
     }
 
@@ -69,14 +98,31 @@ public struct ScanCooker {
         assetName: String,
         cleanup: MeshCleanupOptions = .none
     ) throws -> CookedScan {
+        try cook(
+            extracted: meshes,
+            outputDirectory: outputDirectory,
+            assetName: assetName,
+            options: CookOptions(cleanup: cleanup)
+        )
+    }
+
+    func cook(
+        extracted meshes: [ExtractedMesh],
+        outputDirectory: URL,
+        assetName: String,
+        options: CookOptions
+    ) throws -> CookedScan {
         try FileManager.default.createDirectory(
             at: outputDirectory,
             withIntermediateDirectories: true
         )
 
-        var builder = ScanAssetBuilder(assetName: assetName)
+        var builder = ScanAssetBuilder(
+            assetName: assetName,
+            maxTextureDimension: options.maxTextureDimension
+        )
         for var mesh in meshes {
-            MeshCleanup.apply(&mesh, options: cleanup)
+            MeshCleanup.apply(&mesh, options: options.cleanup)
             builder.add(mesh)
         }
         let assembly = try builder.assemble(outputDirectory: outputDirectory)
@@ -99,7 +145,8 @@ public struct ScanCooker {
             worldBoundsMin: assembly.worldBounds.min,
             worldBoundsMax: assembly.worldBounds.max,
             vertexCount: assembly.vertexCount,
-            triangleCount: assembly.triangleCount
+            triangleCount: assembly.triangleCount,
+            textureMax: assembly.textureMax
         )
     }
 }
@@ -108,6 +155,7 @@ public struct ScanCooker {
 
 private struct ScanAssetBuilder {
     let assetName: String
+    let maxTextureDimension: Int?
 
     private var entities: [UntoldEntityRecordV1] = []
     private var meshRecords: [UntoldMeshRecordV1] = []
@@ -129,8 +177,9 @@ private struct ScanAssetBuilder {
     // (UV origin convention check happens visually in the viewer).
     private let flipV = false
 
-    init(assetName: String) {
+    init(assetName: String, maxTextureDimension: Int? = nil) {
         self.assetName = assetName
+        self.maxTextureDimension = maxTextureDimension
     }
 
     struct Assembly {
@@ -139,6 +188,7 @@ private struct ScanAssetBuilder {
         var worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)
         var vertexCount: Int
         var triangleCount: Int
+        var textureMax: Int
     }
 
     private mutating func intern(_ string: String) {
@@ -339,19 +389,24 @@ private struct ScanAssetBuilder {
 
         var textureURLs: [URL] = []
         var textureRecords: [UntoldTextureRefRecordV1] = []
+        var textureMax = 0
         for pending in pendingTextures {
-            let url = try TextureExport.writePNG(
-                pending.image, named: pending.filename, into: outputDirectory
+            let written = try TextureExport.writePNG(
+                pending.image,
+                named: pending.filename,
+                into: outputDirectory,
+                maxDimension: maxTextureDimension
             )
-            textureURLs.append(url)
+            textureURLs.append(written.url)
+            textureMax = max(textureMax, written.width, written.height)
             textureRecords.append(
                 UntoldTextureRefRecordV1(
                     nameOffset: stringTable.offsets[pending.filename] ?? UntoldFormat.invalidIndex,
                     uriOffset: stringTable.offsets[pending.filename] ?? UntoldFormat.invalidIndex,
                     textureFormat: .rgba8,
                     flags: pending.flags,
-                    width: UInt32(pending.image.width),
-                    height: UInt32(pending.image.height),
+                    width: UInt32(written.width),
+                    height: UInt32(written.height),
                     mipCount: 1
                 )
             )
@@ -388,7 +443,8 @@ private struct ScanAssetBuilder {
             textureURLs: textureURLs,
             worldBounds: (boundsMin, boundsMax),
             vertexCount: vertexCount,
-            triangleCount: triangleCount
+            triangleCount: triangleCount,
+            textureMax: textureMax
         )
     }
 }

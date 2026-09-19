@@ -2,16 +2,9 @@ import CoolScanPipeline
 import Foundation
 import simd
 
-/// Metadata persisted next to every cooked scan (meta.json).
-struct ScanMetadata: Codable, Sendable {
-    var name: String
-    var createdAt: Date
-    var untoldFilename: String
-    var vertexCount: Int
-    var triangleCount: Int
-    var boundsMin: [Float]
-    var boundsMax: [Float]
-}
+/// Metadata persisted next to every cooked scan (meta.json). Shared with the
+/// Mac server so both sides write the same file.
+typealias ScanMetadata = ScanBundleMetadata
 
 struct ScanRecord: Identifiable, Sendable {
     let id: String
@@ -60,10 +53,7 @@ final class ScanStore: ObservableObject {
         )) ?? []
 
         scans = folders.compactMap { folder in
-            let metaURL = folder.appendingPathComponent("meta.json")
-            guard let data = try? Data(contentsOf: metaURL),
-                  let metadata = try? JSONDecoder().decode(ScanMetadata.self, from: data)
-            else {
+            guard let metadata = try? ScanBundle.readMetadata(from: folder) else {
                 return nil
             }
             return ScanRecord(
@@ -126,17 +116,10 @@ final class ScanStore: ObservableObject {
                 )
             }.value
 
-            let metadata = ScanMetadata(
-                name: name,
-                createdAt: Date(),
-                untoldFilename: cooked.untoldURL.lastPathComponent,
-                vertexCount: cooked.vertexCount,
-                triangleCount: cooked.triangleCount,
-                boundsMin: [cooked.worldBoundsMin.x, cooked.worldBoundsMin.y, cooked.worldBoundsMin.z],
-                boundsMax: [cooked.worldBoundsMax.x, cooked.worldBoundsMax.y, cooked.worldBoundsMax.z]
+            let metadata = ScanBundleMetadata(
+                name: name, cooked: cooked, origin: "phone", detail: "reduced"
             )
-            let metaData = try JSONEncoder().encode(metadata)
-            try metaData.write(to: folder.appendingPathComponent("meta.json"))
+            try ScanBundle.writeMetadata(metadata, to: folder)
             // Keep the source next to the cooked asset so the scan can be
             // re-cooked after pipeline improvements without rescanning.
             do {

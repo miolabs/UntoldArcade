@@ -1,4 +1,5 @@
 @testable import CoolScanPipeline
+import ImageIO
 import ModelIO
 import simd
 import UntoldEngine
@@ -211,7 +212,7 @@ final class ScanCookerTests: XCTestCase {
 
     func testUSDZArchiveUnpacksRootLayerAndTextures() throws {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "ball", withExtension: "usdz"))
-        let files = try USDZArchive.extract(url, into: outputDirectory)
+        let files = try ZipArchive.extract(url, into: outputDirectory)
 
         // USDZ spec: root layer first; textures keep their relative paths.
         XCTAssertEqual(files.first?.lastPathComponent, "ball.usdc")
@@ -248,6 +249,44 @@ final class ScanCookerTests: XCTestCase {
         XCTAssertNotNil(material.normalTexture)
         XCTAssertNotNil(material.occlusionTexture)
         XCTAssertNil(material.roughnessTexture)
+    }
+
+    // MARK: - Texture cap
+
+    func testTextureCapDownscalesExportedTextures() throws {
+        let mesh = MDLMesh(
+            boxWithExtent: SIMD3<Float>(1, 1, 1),
+            segments: SIMD3<UInt32>(1, 1, 1),
+            inwardNormals: false,
+            geometryType: .triangles,
+            allocator: nil
+        )
+        // 1024x512 texture; cap at 256 → 256x128.
+        let width = 1024, height = 512
+        let pixels = [UInt8](repeating: 200, count: width * height * 4)
+        let texture = MDLTexture(
+            data: Data(pixels), topLeftOrigin: true, name: "big",
+            dimensions: SIMD2<Int32>(Int32(width), Int32(height)),
+            rowStride: width * 4, channelCount: 4, channelEncoding: .uInt8, isCube: false
+        )
+        try applyMaterial(to: mesh, baseColor: SIMD3<Float>(1, 1, 1), roughness: 0.5, metallic: 0,
+                          baseColorTexture: texture)
+
+        let asset = MDLAsset()
+        asset.add(mesh)
+        let extracted = try MDLExtraction.extract(from: asset, sourceURL: URL(fileURLWithPath: "/dev/null"))
+        let cooked = try ScanCooker().cook(
+            extracted: extracted, outputDirectory: outputDirectory, assetName: "capped",
+            options: CookOptions(cleanup: .none, maxTextureDimension: 256)
+        )
+
+        XCTAssertEqual(cooked.textureMax, 256)
+        let decoded = try UntoldReader().readAsset(from: Data(contentsOf: cooked.untoldURL))
+        XCTAssertEqual(decoded.textures[0].width, 256)
+        XCTAssertEqual(decoded.textures[0].height, 128)
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(cooked.textureURLs[0] as CFURL, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(image.width, 256)
     }
 
     // MARK: - Helpers

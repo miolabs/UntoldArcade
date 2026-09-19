@@ -53,10 +53,10 @@ enum MDLExtraction {
         }
 
         // Unpack the USDZ so ModelIO resolves texture references as plain
-        // files (see USDZArchive). The unpacked folder also feeds the
+        // files (see ZipArchive). The unpacked folder also feeds the
         // filename-based texture fallback.
         let unpackDirectory = scratchDirectory.appendingPathComponent("usdz", isDirectory: true)
-        let files = try USDZArchive.extract(url, into: unpackDirectory)
+        let files = try ZipArchive.extract(url, into: unpackDirectory)
         let usdExtensions: Set<String> = ["usdc", "usda", "usd"]
         // USDZ spec: the root layer is the first entry.
         guard let rootLayer = files.first(where: { usdExtensions.contains($0.pathExtension.lowercased()) }) else {
