@@ -105,9 +105,9 @@ public final class CoolBowlingScene: @unchecked Sendable {
     static let dispenserHoodOffset: Float = 1.49
     /// The physics rack stop's centre, past the near end of the trough.
     static let returnRackStopInset: Float = 0.02
-    /// How far behind the foul line the rack sits when the player's
-    /// position is unknown.
-    public static let defaultApproachLength: Float = 1.0
+    /// The ball return runs alongside the lane: its rack (the front of the
+    /// return unit) starts this far past the foul line, on the player's right.
+    public static let returnRackZ: Float = 0.05
     static let handRadius: Float = 0.07
 
     public init() {}
@@ -116,14 +116,12 @@ public final class CoolBowlingScene: @unchecked Sendable {
 
     /// Shared placement math for the ghost and the real lane: `foul` is the
     /// floor point at the centre of the foul line, `facing` points from the
-    /// player down the lane toward the pins, `approachLength` is how far
-    /// behind the foul line the ball return's rack sits.
+    /// player down the lane toward the pins.
     public struct LaneLayout {
         public let foul: SIMD3<Float>
         public let forward: SIMD3<Float> // toward the pins
         public let right: SIMD3<Float>
         public let orientation: simd_quatf
-        public let approachLength: Float
         /// Centre of the lane plinth (the playing surface up to the pit).
         public let laneCenter: SIMD3<Float>
         /// Height of the lane surface.
@@ -132,9 +130,8 @@ public final class CoolBowlingScene: @unchecked Sendable {
         /// numbering: 1; 2, 3; 4, 5, 6; 7, 8, 9, 10.
         public let pinPositions: [SIMD3<Float>]
 
-        public init(foul: SIMD3<Float>, facing: SIMD3<Float>, approachLength: Float = CoolBowlingScene.defaultApproachLength) {
+        public init(foul: SIMD3<Float>, facing: SIMD3<Float>) {
             self.foul = foul
-            self.approachLength = approachLength
             forward = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
             right = simd_normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0))) // the player's right
             let yaw = atan2f(forward.x, forward.z)
@@ -244,8 +241,9 @@ public final class CoolBowlingScene: @unchecked Sendable {
                 + CoolBowlingScene.returnRailThickness + CoolBowlingScene.returnInnerWidth * 0.5
         }
 
-        /// The trough runs from the rack behind the foul line to the pit.
-        public var returnNearZ: Float { -approachLength }
+        /// The trough runs beside the lane, from the rack at the foul line
+        /// to the pit.
+        public var returnNearZ: Float { CoolBowlingScene.returnRackZ }
         public var returnFarZ: Float { CoolBowlingScene.laneLength }
         public var returnLength: Float { returnFarZ - returnNearZ }
 
@@ -511,9 +509,9 @@ public final class CoolBowlingScene: @unchecked Sendable {
         ghostEntities = entities
     }
 
-    public func moveLaneGhost(foul: SIMD3<Float>, facing: SIMD3<Float>, approachLength: Float = CoolBowlingScene.defaultApproachLength) {
+    public func moveLaneGhost(foul: SIMD3<Float>, facing: SIMD3<Float>) {
         guard ghostEntities.count == 4 else { return }
-        let layout = LaneLayout(foul: foul, facing: facing, approachLength: approachLength)
+        let layout = LaneLayout(foul: foul, facing: facing)
         let deckCenter = foul + layout.forward * (Self.pinDeckDistance + Self.pinSpacing * 1.3)
             + SIMD3<Float>(0, Self.laneSurfaceHeight + 0.025, 0)
         let pitCenter = layout.worldPoint(SIMD3<Float>(
@@ -640,7 +638,7 @@ public final class CoolBowlingScene: @unchecked Sendable {
     }
 
     /// The ball return: a sloped trough on the player's right, above the
-    /// lane, from the pit to a rack behind the foul line. Tilted about the
+    /// lane, from the pit to the rack at the foul line. Tilted about the
     /// lane's right axis so the rack end is the low end. The physics trough
     /// (floor, rails, end stops) is invisible and runs the whole length;
     /// the ball-return unit model stands at the rack end, and a plain

@@ -85,7 +85,7 @@ final class CoolBowlingTests: XCTestCase {
     }
 
     func testBallInPlayRegions() {
-        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1), approachLength: 1.2)
+        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1))
         // At the rack, and half way down the return: in play.
         XCTAssertTrue(layout.isAtRack(layout.rackPoint))
         XCTAssertTrue(layout.isOnReturn(layout.rackPoint))
@@ -109,13 +109,13 @@ final class CoolBowlingTests: XCTestCase {
         XCTAssertTrue(layout.isLost(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, CoolBowlingScene.ballRadius, 1.0))))
     }
 
-    func testBallReturnRunsDownhillToARackBesideThePlayer() {
-        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1), approachLength: 1.2)
+    func testBallReturnRunsDownhillToARackAtTheFoulLine() {
+        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1))
         // On the player's right, clear of the bumper, above the lane.
         XCTAssertGreaterThan(layout.returnCenterX - CoolBowlingScene.returnInnerWidth * 0.5, CoolBowlingScene.laneWidth * 0.5 + 0.08)
         XCTAssertGreaterThan(layout.returnFloorTop(atZ: 0), CoolBowlingScene.laneSurfaceHeight + 0.1)
-        // The rack end (behind the foul line) is the low end.
-        XCTAssertEqual(layout.returnNearZ, -1.2)
+        // The rack end, at the foul line beside the lane, is the low end.
+        XCTAssertEqual(layout.returnNearZ, CoolBowlingScene.returnRackZ)
         XCTAssertLessThan(layout.returnFloorTop(atZ: layout.returnNearZ), layout.returnFloorTop(atZ: layout.returnFarZ))
         XCTAssertEqual(layout.returnFloorTop(atZ: layout.returnNearZ), CoolBowlingScene.returnRackHeight, accuracy: 1e-6)
         // The ball starts at the pit end, above the trough, and rolls toward the player.
@@ -124,10 +124,11 @@ final class CoolBowlingTests: XCTestCase {
         XCTAssertGreaterThan(start.z, CoolBowlingScene.pitStart)
         XCTAssertGreaterThan(start.y, layout.returnFloorTop(atZ: start.z) + CoolBowlingScene.ballRadius)
         XCTAssertLessThan(simd_dot(layout.returnVelocity, layout.forward), 0)
-        // The rack point is behind the foul line, within the player's reach of the rack end.
+        // The rack point sits just past the foul line, on the player's right.
         let rack = layout.localPoint(layout.rackPoint)
-        XCTAssertLessThan(rack.z, 0)
-        XCTAssertLessThan(rack.z - layout.returnNearZ, 0.2)
+        XCTAssertGreaterThan(rack.z, 0)
+        XCTAssertLessThan(rack.z, 0.3)
+        XCTAssertGreaterThan(rack.x, CoolBowlingScene.laneWidth * 0.5)
     }
 
     func testFrameCycleReturnsThenResolves() {
