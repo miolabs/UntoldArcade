@@ -4,7 +4,7 @@
 //
 //  Drives the backend through the engine's PhysicsBackend protocol exactly
 //  as the PhysicsCoordinator would — the same scenarios the pure-Swift
-//  CoolBall backend is tested with, so the two backends stay interchangeable.
+//  CoolBasket backend is tested with, so the two backends stay interchangeable.
 //
 
 import simd

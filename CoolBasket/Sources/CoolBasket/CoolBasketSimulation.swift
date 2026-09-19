@@ -1,6 +1,6 @@
 //
-//  CoolBallSimulation.swift
-//  CoolBall
+//  CoolBasketSimulation.swift
+//  CoolBasket
 //
 //  The demo runs on either of two physics backends behind the engine's
 //  plugin seam: its own pure-Swift backend, or the Jolt Physics plugin. The
@@ -17,23 +17,23 @@ import UntoldJoltPhysics
 /// Which backend the demo installs. Chosen before the renderer exists — the
 /// engine's registry locks on the first simulated substep, so switching
 /// afterwards needs an app restart.
-public enum CoolBallPhysicsEngine: String, CaseIterable, Sendable {
-    case coolBall
+public enum CoolBasketPhysicsEngine: String, CaseIterable, Sendable {
+    case coolBasket
     case jolt
 
     public var displayName: String {
         switch self {
-        case .coolBall: return "Built-in (CoolBall)"
+        case .coolBasket: return "Built-in (CoolBasket)"
         case .jolt: return "Jolt Physics"
         }
     }
 }
 
 /// The plugin-owned side channel the game logic uses.
-public protocol CoolBallSimulation: AnyObject {
-    var engine: CoolBallPhysicsEngine { get }
+public protocol CoolBasketSimulation: AnyObject {
+    var engine: CoolBasketPhysicsEngine { get }
     /// Replaces the set of real-world surfaces (any thread).
-    func setWorldPlanes(_ planes: [CoolBallWorldPlane])
+    func setWorldPlanes(_ planes: [CoolBasketWorldPlane])
     var worldPlaneCount: Int { get }
     /// Position and velocity of a simulated body (game thread).
     func bodyState(for entity: EntityID) -> (position: SIMD3<Float>, velocity: SIMD3<Float>)?
@@ -42,16 +42,16 @@ public protocol CoolBallSimulation: AnyObject {
     func resetBody(entity: EntityID, position: SIMD3<Float>, velocity: SIMD3<Float>) -> Bool
 }
 
-extension CoolBallPhysicsBackend: CoolBallSimulation {
-    public var engine: CoolBallPhysicsEngine { .coolBall }
+extension CoolBasketPhysicsBackend: CoolBasketSimulation {
+    public var engine: CoolBasketPhysicsEngine { .coolBasket }
 }
 
 /// Jolt behind the same side channel. The engine seam handles every entity
 /// body; the detected surfaces — which belong to no entity — become Jolt
 /// environment boxes: thin static slabs whose top face lies on the plane.
-public final class CoolBallJoltSimulation: CoolBallSimulation, @unchecked Sendable {
+public final class CoolBasketJoltSimulation: CoolBasketSimulation, @unchecked Sendable {
     public let backend: JoltPhysicsBackend
-    private let planeCount = CoolBallLockedBox<Int>(0)
+    private let planeCount = CoolBasketLockedBox<Int>(0)
 
     /// Half thickness of the slab standing in for a (zero-thickness) plane.
     static let slabHalfThickness: Float = 0.02
@@ -62,9 +62,9 @@ public final class CoolBallJoltSimulation: CoolBallSimulation, @unchecked Sendab
         self.backend = backend
     }
 
-    public var engine: CoolBallPhysicsEngine { .jolt }
+    public var engine: CoolBasketPhysicsEngine { .jolt }
 
-    public func setWorldPlanes(_ planes: [CoolBallWorldPlane]) {
+    public func setWorldPlanes(_ planes: [CoolBasketWorldPlane]) {
         planeCount.value = planes.count
         backend.setEnvironmentBoxes(planes.map(Self.environmentBox(for:)))
     }
@@ -87,7 +87,7 @@ public final class CoolBallJoltSimulation: CoolBallSimulation, @unchecked Sendab
     /// so the top face is exactly the plane. Restitution 0 leaves the bounce
     /// to the ball's own value (Jolt combines with max), matching the
     /// pure-Swift backend.
-    static func environmentBox(for plane: CoolBallWorldPlane) -> JoltEnvironmentBox {
+    static func environmentBox(for plane: CoolBasketWorldPlane) -> JoltEnvironmentBox {
         let normal = simd_normalize(plane.normal)
         let u = simd_normalize(plane.tangentU)
         var v = simd_normalize(plane.tangentV)

@@ -1,4 +1,4 @@
-# CoolBall 🏀
+# CoolBasket 🏀
 
 Mixed-reality basketball for Apple Vision Pro, built on Untold Engine — and
 the first real consumer of the engine's **physics backend plugin seam**
@@ -15,11 +15,11 @@ score.
 
 | Piece | What it demonstrates |
 |---|---|
-| `CoolBallPhysicsBackend` | A complete pure-Swift `PhysicsBackend`: dynamic spheres vs. real-world planes, static box and sphere colliders, and kinematic hand bodies; restitution/friction/rolling; fixed-capacity contact & trigger buffers drained through the engine's `PhysicsEventSink`. |
-| `CoolBallPlugin` | `PhysicsBackendPlugin` manifest + `registerCoolBallPhysics()` — installed before renderer creation, driven by the engine's `PhysicsCoordinator`, zero engine changes. |
-| `CoolBallScene` | Ball, hoop (pole + backboard as static boxes, the rim as a ring of static **sphere** colliders) and an invisible under-rim **trigger volume**, all expressed with the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. |
-| `CoolBallGame` | Gaze-driven hoop placement with a ghost preview. Any number of equal balls: grab the nearest via pinch, throw with the tracked hand velocity (grabbing removes the body, releasing re-adds it through the component seam), lost balls come back. Score via `PhysicsEvents.onTrigger`, counting only a downward pass through the rim. |
-| `CoolBallSpatialSession` | visionOS ARKit adapter: hand tracking (predicted poses), plane detection feeding the backend's world planes, and head tracking for placement. The real floor height is measured from the detected planes; the simulator falls back to a flat floor. |
+| `CoolBasketPhysicsBackend` | A complete pure-Swift `PhysicsBackend`: dynamic spheres vs. real-world planes, static box and sphere colliders, and kinematic hand bodies; restitution/friction/rolling; fixed-capacity contact & trigger buffers drained through the engine's `PhysicsEventSink`. |
+| `CoolBasketPlugin` | `PhysicsBackendPlugin` manifest + `registerCoolBasketPhysics()` — installed before renderer creation, driven by the engine's `PhysicsCoordinator`, zero engine changes. |
+| `CoolBasketScene` | Ball, hoop (pole + backboard as static boxes, the rim as a ring of static **sphere** colliders) and an invisible under-rim **trigger volume**, all expressed with the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. |
+| `CoolBasketGame` | Gaze-driven hoop placement with a ghost preview. Any number of equal balls: grab the nearest via pinch, throw with the tracked hand velocity (grabbing removes the body, releasing re-adds it through the component seam), lost balls come back. Score via `PhysicsEvents.onTrigger`, counting only a downward pass through the rim. |
+| `CoolBasketSpatialSession` | visionOS ARKit adapter: hand tracking (predicted poses), plane detection feeding the backend's world planes, and head tracking for placement. The real floor height is measured from the detected planes; the simulator falls back to a flat floor. |
 
 The heavyweight backend (Jolt) will live in its own package later; this demo
 proves every seam the engine exposes — body lifecycle both ways, kinematic
@@ -28,8 +28,8 @@ simulation in a few hundred lines of Swift.
 
 ## Run it
 
-Open `Examples/CoolBallVisionOS/CoolBallVisionOS.xcodeproj` and run the
-`CoolBallVisionOS-visionOS` scheme on a Vision Pro (or the simulator — no real
+Open `Examples/CoolBasketVisionOS/CoolBasketVisionOS.xcodeproj` and run the
+`CoolBasketVisionOS-visionOS` scheme on a Vision Pro (or the simulator — no real
 surfaces there, but the fallback floor keeps the ball in play). Press
 **Step onto the Court**, grant hand-tracking and surroundings permissions,
 place the hoop, and shoot.
@@ -51,7 +51,7 @@ Automated simulator runs can skip the gaze-and-pinch steps with the launch
 arguments `-autoOpenSpace` (opens the immersive space at launch),
 `-autoPlaceHoop` (confirms the hoop placement after a short beat) and
 `-autoDropBalls` (drops five balls in front of the hoop), and pick the backend
-with `-physicsEngine jolt` or `-physicsEngine coolBall`. Dropping balls is the
+with `-physicsEngine jolt` or `-physicsEngine coolBasket`. Dropping balls is the
 quickest way to see the backends apart: the built-in backend resolves no
 ball-against-ball contact, so balls fall through each other; Jolt piles them.
 
