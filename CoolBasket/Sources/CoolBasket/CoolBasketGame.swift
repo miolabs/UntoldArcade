@@ -74,10 +74,10 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// pinch reading — noisy at the edge of view — cannot drop the ball.
     private var holdRegainedAt: TimeInterval = 0
     private let pinchSettleTime: TimeInterval = 0.08
-    /// A hand leaving the view faster than this was mid-throw: the ball is
-    /// released with that motion rather than kept. Carrying a ball while
-    /// looking up at the hoop is far slower.
-    private let lossThrowSpeed: Float = 1.0
+    /// The lowest downward-facing surface ARKit has seen (the ceiling), for
+    /// the diagnostics: the rim height was set by feel, this measures the
+    /// room it has to fit.
+    private let ceilingLevel = CoolBasketLockedBox<Float?>(nil)
     /// The hand that just threw is parked briefly so the ball, re-added at
     /// the pinch point, isn't shoved by that hand's own collider.
     private var handParkedUntil: [CoolBasketHandSide: TimeInterval] = [:]
@@ -391,6 +391,7 @@ public final class CoolBasketGame: @unchecked Sendable {
             guard let self else { return }
             // Real surfaces replace the fallback floor as soon as they exist;
             // the ceiling stays out so a high arc isn't stopped by the room.
+            self.noteCeiling(planes)
             let planes = Self.playablePlanes(planes)
             self.detectedPlanes.value = planes
             let headY = self.session.headTransform()?.columns.3.y
@@ -705,8 +706,7 @@ public final class CoolBasketGame: @unchecked Sendable {
                     // was until the hand is seen again: a still-closed pinch
                     // carries on, an open one releases. Dropping it here made
                     // a throw impossible.
-                    let velocity = Self.throwVelocity(samples: grabSamples, now: now, maxSpeed: maxThrowSpeed)
-                    if simd_length(velocity) >= lossThrowSpeed {
+                    if Self.releasesOnLoss(samples: grabSamples, now: now, maxSpeed: maxThrowSpeed) {
                         releaseBall(at: nil, now: now)
                     } else {
                         holdSuspended = true
@@ -734,9 +734,17 @@ public final class CoolBasketGame: @unchecked Sendable {
 
     private func updateGrab(side: CoolBasketHandSide, pose: CoolBasketHandPose, now: TimeInterval) {
         if grabbingSide == side, let held = heldBall {
-            let settled = now - holdRegainedAt >= pinchSettleTime
-            if pose.pinchDistance > pinchReleaseDistance, settled {
-                releaseBall(at: pose.pinchPoint, now: now)
+            if pose.pinchDistance > pinchReleaseDistance {
+                if grabSamples.isEmpty {
+                    // Back in view with the hand already open: the ball was
+                    // let go out of view. It drops from where it waited —
+                    // not snapped to a hand that is itself in motion.
+                    releaseBall(at: scene.ballPosition(held), now: now)
+                } else if now - holdRegainedAt >= pinchSettleTime {
+                    releaseBall(at: pose.pinchPoint, now: now)
+                }
+                // Else: an open reading in the first frames back in view,
+                // after a closed one — noise at the edge of view; hold on.
             } else {
                 let position = pose.pinchPoint
                 scene.moveBall(held, to: position)
@@ -802,6 +810,19 @@ public final class CoolBasketGame: @unchecked Sendable {
         ))
     }
     #endif
+
+    /// A hand leaving the view faster than this was mid-throw. Carrying the
+    /// ball while looking up at the hoop, or walking with it, is slower.
+    static let lossThrowSpeed: Float = 2.0
+
+    /// Whether a hand that just left the cameras' view, holding the ball,
+    /// was throwing it: then the ball goes with that motion; otherwise it
+    /// waits for the hand.
+    static func releasesOnLoss(
+        samples: [(position: SIMD3<Float>, time: TimeInterval)], now: TimeInterval, maxSpeed: Float
+    ) -> Bool {
+        simd_length(throwVelocity(samples: samples, now: now, maxSpeed: maxSpeed)) >= lossThrowSpeed
+    }
 
     /// The motion window behind a throw: samples older than this are not
     /// kept while holding, and say nothing at release — the hand was out of
@@ -876,6 +897,17 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// Updates the floor estimate: the lowest upward-facing detected plane
     /// in a plausible band below the head — preferring planes ARKit itself
     /// classified as floor, so a low table or a stair landing can't win.
+    /// Remembers the lowest ceiling ARKit has seen and logs it when it
+    /// changes: whether the rim fits the room is a measurement, not a guess.
+    private func noteCeiling(_ planes: [CoolBasketWorldPlane]) {
+        guard let ceiling = planes.filter({ $0.normal.y < -0.5 }).map(\.center.y).min() else { return }
+        let previous = ceilingLevel.value
+        guard previous == nil || abs(previous! - ceiling) > 0.05 else { return }
+        ceilingLevel.value = ceiling
+        let floor = floorLevel.value
+        coolBasketLog.log("ceiling at y=\(ceiling, format: .fixed(precision: 2)) (\(ceiling - floor, format: .fixed(precision: 2)) m above the floor; rim at \(CoolBasketScene.rimHeight, format: .fixed(precision: 2)))")
+    }
+
     /// The room's surfaces the ball plays against: the floor, the walls and
     /// whatever furniture faces up. Anything facing down — the ceiling, the
     /// underside of a shelf — is left out: the hoop stands tall and a lob

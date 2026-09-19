@@ -489,4 +489,22 @@ final class CoolBasketThrowTests: XCTestCase {
         let fast: [(position: SIMD3<Float>, time: TimeInterval)] = [(SIMD3<Float>(0, 0, 0), now - 0.05), (SIMD3<Float>(5, 0, 0), now)]
         XCTAssertEqual(simd_length(CoolBasketGame.throwVelocity(samples: fast, now: now, maxSpeed: 10)), 10, accuracy: 1e-4)
     }
+
+    func testAHandLeavingViewMidSwingThrowsButACarriedBallWaits() {
+        let now: TimeInterval = 10
+        // A swing: 0.3 m in 100 ms, 3 m/s — over the loss threshold.
+        let swing: [(position: SIMD3<Float>, time: TimeInterval)] = [
+            (SIMD3<Float>(0, 1, 0), now - 0.10), (SIMD3<Float>(0.15, 1.1, 0), now - 0.05), (SIMD3<Float>(0.3, 1.2, 0), now),
+        ]
+        XCTAssertTrue(CoolBasketGame.releasesOnLoss(samples: swing, now: now, maxSpeed: 10))
+        // Carrying the ball while looking up, or walking with it: slower.
+        let carry: [(position: SIMD3<Float>, time: TimeInterval)] = [
+            (SIMD3<Float>(0, 1, 0), now - 0.10), (SIMD3<Float>(0.06, 1.0, 0), now - 0.05), (SIMD3<Float>(0.12, 1.0, 0), now),
+        ]
+        XCTAssertFalse(CoolBasketGame.releasesOnLoss(samples: carry, now: now, maxSpeed: 10))
+        XCTAssertFalse(CoolBasketGame.releasesOnLoss(samples: [], now: now, maxSpeed: 10))
+        // The threshold itself sits between the two.
+        XCTAssertGreaterThan(CoolBasketGame.lossThrowSpeed, 1.2)
+        XCTAssertLessThan(CoolBasketGame.lossThrowSpeed, 3.0)
+    }
 }
