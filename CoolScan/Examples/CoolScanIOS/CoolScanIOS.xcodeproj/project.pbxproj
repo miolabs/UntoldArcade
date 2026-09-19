@@ -11,15 +11,19 @@
 		21372167FEBE4A9EB800227D /* CoolScanPipeline in Frameworks */ = {isa = PBXBuildFile; productRef = AF93DC83AC4AF5F411903701 /* CoolScanPipeline */; };
 		2A36F51E01F05E8BEF5187D9 /* ScanFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E275A628490A763432F6652F /* ScanFlowView.swift */; };
 		2AC8CDD141C58E65400CFD07 /* CoolScan in Frameworks */ = {isa = PBXBuildFile; productRef = 19989838FE4091614919B82F /* CoolScan */; };
+		38C6F227C2CABDCD3C63D9A7 /* ReconstructionServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E955DF34E08A74CBC10FBED2 /* ReconstructionServer.swift */; };
 		6D4E82C5ADDCE8C65CB029EC /* ball.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 7049DA8454ACC4DCB1185DB4 /* ball.usdz */; };
 		6FE3197D79B4300D307A743E /* StylePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A356CDCDC5F05C8E72D8A2C4 /* StylePickerView.swift */; };
 		9A0AD4D4D4A09FA27759BB33 /* ScanStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5341A912058AFC489FE16CB /* ScanStore.swift */; };
+		B3AE655D4777C865D844A328 /* ServerSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220B7DF5026715A7228C6325 /* ServerSettingsView.swift */; };
 		D1857F15F52063A53E37D83D /* CoolScanApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99742B7AEDA39651BF517BBE /* CoolScanApp.swift */; };
 		D3F33FA00FA036059C0A86B6 /* ViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77B1562F1D1EFAB35D09BDD8 /* ViewerView.swift */; };
 		E70D2B47AC371E03F4F70C96 /* ScanLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8630C946ADA2B29C25DB66 /* ScanLibraryView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		220B7DF5026715A7228C6325 /* ServerSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerSettingsView.swift; sourceTree = "<group>"; };
+		3F50E301AFC6C9C84724AE22 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		558322AFFDF350FAAE15E3B4 /* CoolScan */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CoolScan; path = ../..; sourceTree = SOURCE_ROOT; };
 		5E8630C946ADA2B29C25DB66 /* ScanLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLibraryView.swift; sourceTree = "<group>"; };
 		7049DA8454ACC4DCB1185DB4 /* ball.usdz */ = {isa = PBXFileReference; lastKnownFileType = file.usdz; path = ball.usdz; sourceTree = "<group>"; };
@@ -29,6 +33,7 @@
 		C7951DE096F8FED703FCD0C8 /* CoolScanIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CoolScanIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E275A628490A763432F6652F /* ScanFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanFlowView.swift; sourceTree = "<group>"; };
 		E5341A912058AFC489FE16CB /* ScanStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanStore.swift; sourceTree = "<group>"; };
+		E955DF34E08A74CBC10FBED2 /* ReconstructionServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconstructionServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -49,9 +54,12 @@
 			isa = PBXGroup;
 			children = (
 				99742B7AEDA39651BF517BBE /* CoolScanApp.swift */,
+				3F50E301AFC6C9C84724AE22 /* Info.plist */,
+				E955DF34E08A74CBC10FBED2 /* ReconstructionServer.swift */,
 				E275A628490A763432F6652F /* ScanFlowView.swift */,
 				5E8630C946ADA2B29C25DB66 /* ScanLibraryView.swift */,
 				E5341A912058AFC489FE16CB /* ScanStore.swift */,
+				220B7DF5026715A7228C6325 /* ServerSettingsView.swift */,
 				A356CDCDC5F05C8E72D8A2C4 /* StylePickerView.swift */,
 				77B1562F1D1EFAB35D09BDD8 /* ViewerView.swift */,
 				965F95BC708593AF82C91003 /* Resources */,
@@ -172,9 +180,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				D1857F15F52063A53E37D83D /* CoolScanApp.swift in Sources */,
+				38C6F227C2CABDCD3C63D9A7 /* ReconstructionServer.swift in Sources */,
 				2A36F51E01F05E8BEF5187D9 /* ScanFlowView.swift in Sources */,
 				E70D2B47AC371E03F4F70C96 /* ScanLibraryView.swift in Sources */,
 				9A0AD4D4D4A09FA27759BB33 /* ScanStore.swift in Sources */,
+				B3AE655D4777C865D844A328 /* ServerSettingsView.swift in Sources */,
 				6FE3197D79B4300D307A743E /* StylePickerView.swift in Sources */,
 				D3F33FA00FA036059C0A86B6 /* ViewerView.swift in Sources */,
 			);
@@ -248,7 +258,9 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 53X2422NYU;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CoolScanIOS/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "CoolScan uses the camera to scan real objects into 3D models.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CoolScan looks for a CoolScan server on your Mac to reconstruct scans at full detail.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -275,7 +287,9 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 53X2422NYU;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CoolScanIOS/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "CoolScan uses the camera to scan real objects into 3D models.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CoolScan looks for a CoolScan server on your Mac to reconstruct scans at full detail.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;

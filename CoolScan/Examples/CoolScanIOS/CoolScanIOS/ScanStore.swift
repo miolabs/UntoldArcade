@@ -35,6 +35,11 @@ final class ScanStore: ObservableObject {
     @Published private(set) var isCooking = false
     @Published var lastError: String?
 
+    /// Jobs running on a Mac whose result has not been installed yet.
+    @Published private(set) var pendingJobs: [RemoteReconstruction.PendingJob] = []
+    @Published private(set) var pendingStatus: [String: String] = [:]
+    private var resuming: Set<String> = []
+
     static let shared = ScanStore()
 
     private var scansDirectory: URL {
@@ -66,6 +71,85 @@ final class ScanStore: ObservableObject {
 
         for scan in scans {
             print("CoolScan: library — \(scan.metadata.name): source \(canRecook(scan) ? "kept" : "MISSING") at \(scan.folder.path)")
+        }
+        pendingJobs = RemoteReconstruction.pendingJobs()
+    }
+
+    // MARK: - Mac jobs
+
+    /// Picks up jobs the app was killed in the middle of: polls each one and
+    /// installs the result when the Mac is done.
+    func resumePendingJobs() async {
+        pendingJobs = RemoteReconstruction.pendingJobs()
+        for pending in pendingJobs where !resuming.contains(pending.jobID) {
+            guard let baseURL = URL(string: pending.baseURL) else { continue }
+            resuming.insert(pending.jobID)
+            let client = ServerClient(baseURL: baseURL)
+            Task { [weak self] in
+                do {
+                    _ = try await RemoteReconstruction.collect(
+                        jobID: pending.jobID, client: client, scanID: pending.scanID,
+                        progress: { [weak self] phase in
+                            self?.pendingStatus[pending.jobID] = Self.describe(phase)
+                        }
+                    )
+                    self?.pendingStatus[pending.jobID] = nil
+                    self?.reload()
+                } catch {
+                    self?.pendingStatus[pending.jobID] = "Failed: \(error.localizedDescription)"
+                    self?.reload()
+                }
+                self?.resuming.remove(pending.jobID)
+            }
+        }
+    }
+
+    func discardPending(_ pending: RemoteReconstruction.PendingJob) {
+        if let baseURL = URL(string: pending.baseURL) {
+            Task { try? await ServerClient(baseURL: baseURL).delete(jobID: pending.jobID) }
+        }
+        RemoteReconstruction.removePending(jobID: pending.jobID)
+        pendingStatus[pending.jobID] = nil
+        reload()
+    }
+
+    /// Sends a scan's kept source USDZ to the Mac to be cooked through the
+    /// server pipeline (texture cap, cleanup) — no photogrammetry involved.
+    func recookOnMac(_ scan: ScanRecord, client: ServerClient) async -> ScanRecord? {
+        guard canRecook(scan) else {
+            lastError = "This scan has no source model to re-cook."
+            return nil
+        }
+        let scanID = UUID().uuidString
+        let name = scan.metadata.name + " (Mac)"
+        do {
+            let jobID = try await RemoteReconstruction.submit(
+                name: name, files: [("source.usdz", scan.sourceURL)],
+                options: ServerSettings.options, client: client, scanID: scanID,
+                progress: { [weak self] phase in self?.pendingStatus[scanID] = Self.describe(phase) }
+            )
+            pendingJobs = RemoteReconstruction.pendingJobs()
+            _ = try await RemoteReconstruction.collect(
+                jobID: jobID, client: client, scanID: scanID,
+                progress: { [weak self] phase in self?.pendingStatus[jobID] = Self.describe(phase) }
+            )
+            pendingStatus[jobID] = nil
+            reload()
+            return scans.first { $0.id == scanID }
+        } catch {
+            lastError = "Mac re-cook failed: \(error.localizedDescription)"
+            reload()
+            return nil
+        }
+    }
+
+    private static func describe(_ phase: RemoteReconstruction.Phase) -> String {
+        switch phase {
+        case .connecting: "Connecting…"
+        case let .uploading(sent, total, _): "Uploading \(sent)/\(total)"
+        case let .remote(stage, progress, _): "\(stage) \(Int(progress * 100))%"
+        case .downloading: "Downloading…"
+        case .installing: "Installing…"
         }
     }
 

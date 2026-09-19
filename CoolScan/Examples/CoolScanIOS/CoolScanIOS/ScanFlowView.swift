@@ -20,8 +20,26 @@ struct ScanFlowView: View {
                 ProgressView("Preparing camera…")
             case .capturing:
                 captureView
+            case .choosing:
+                choiceView
             case let .reconstructing(progress):
                 reconstructionView(progress: progress)
+            case let .uploading(sent, total, file):
+                transferView(
+                    title: "Sending photos to \(model.remoteServerName)…",
+                    detail: file.isEmpty ? "\(sent)/\(total) files" : "\(sent + 1)/\(total) · \(file)",
+                    fraction: total == 0 ? 0 : Double(sent) / Double(total)
+                )
+            case let .remote(stage, progress, eta):
+                transferView(
+                    title: "\(model.remoteServerName) is reconstructing…",
+                    detail: stage + (eta.map { " · about \(Int($0 / 60) + 1) min left" } ?? ""),
+                    fraction: progress
+                )
+            case .downloading:
+                transferView(title: "Downloading the model…", detail: "Almost there", fraction: nil)
+            case .installing:
+                transferView(title: "Installing…", detail: "", fraction: nil)
             case .cooking:
                 VStack(spacing: 16) {
                     ProgressView()
@@ -165,6 +183,72 @@ struct ScanFlowView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
+    /// Offered when a Mac server is reachable: full-detail remote
+    /// reconstruction versus the phone's reduced on-device pass.
+    private var choiceView: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "desktopcomputer.and.arrow.down")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+            Text("Where should the 3D model be built?")
+                .font(.title3.weight(.semibold))
+            VStack(spacing: 10) {
+                Button {
+                    Task { await model.chooseMac() }
+                } label: {
+                    VStack(spacing: 2) {
+                        Text("On \(model.remoteServerName)")
+                            .font(.headline)
+                        Text("Full detail · a few minutes · needs the same Wi‑Fi")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                Button {
+                    Task { await model.chooseLocal() }
+                } label: {
+                    VStack(spacing: 2) {
+                        Text("On this iPhone")
+                            .font(.headline)
+                        Text("Reduced detail · about a minute")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 32)
+        }
+        .padding()
+    }
+
+    private func transferView(title: String, detail: String, fraction: Double?) -> some View {
+        VStack(spacing: 16) {
+            if let fraction {
+                ProgressView(value: min(max(fraction, 0), 1))
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: 240)
+            } else {
+                ProgressView()
+                    .controlSize(.large)
+            }
+            Text(title)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            Text("You can leave this screen; the job continues in the library.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+    }
+
     private func reconstructionView(progress: Double) -> some View {
         VStack(spacing: 16) {
             ProgressView(value: progress)
@@ -197,14 +281,19 @@ final class ScanFlowModel: ObservableObject {
     enum Phase {
         case initializing
         case capturing
+        case choosing
         case reconstructing(progress: Double)
         case cooking
+        case uploading(sent: Int, total: Int, file: String)
+        case remote(stage: String, progress: Double, eta: Double?)
+        case downloading
+        case installing
         case failed(String)
         case done(scanID: String)
 
         var showsCancel: Bool {
             switch self {
-            case .initializing, .capturing, .reconstructing: true
+            case .initializing, .capturing, .choosing, .reconstructing, .uploading, .remote: true
             default: false
             }
         }
@@ -226,8 +315,17 @@ final class ScanFlowModel: ObservableObject {
     var canAddPass: Bool { passNumber < Self.maximumPasses }
     private var photogrammetry: PhotogrammetrySession?
 
-    private let workDirectory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("CoolScanCapture-\(UUID().uuidString)", isDirectory: true)
+    /// Mac server discovery runs for the whole flow so the choice after the
+    /// capture is instant.
+    let discovery = ServerDiscovery()
+    private var remoteClient: ServerClient?
+    private var remoteJobID: String?
+    private(set) var remoteServerName = "your Mac"
+
+    /// Under Documents, not tmp: the capture must survive until it has been
+    /// uploaded, and the system may purge tmp while the app is not running.
+    private let workDirectory = RemoteReconstruction.pendingDirectory
+        .appendingPathComponent("capture-\(UUID().uuidString)", isDirectory: true)
 
     private var imagesDirectory: URL {
         workDirectory.appendingPathComponent("Images", isDirectory: true)
@@ -258,6 +356,7 @@ final class ScanFlowModel: ObservableObject {
         // camera and the GPU; the engine's off-screen MTKView would just
         // compete with it.
         SharedRenderer.pauseRendering()
+        discovery.start()
 
         do {
             try FileManager.default.createDirectory(
@@ -286,7 +385,7 @@ final class ScanFlowModel: ObservableObject {
             print("CoolScan capture state: \(state)")
             switch state {
             case .completed:
-                await reconstruct()
+                await decideWhereToReconstruct()
                 return
             case let .failed(error):
                 phase = .failed("Capture failed: \(error.localizedDescription)")
@@ -339,12 +438,99 @@ final class ScanFlowModel: ObservableObject {
     func cancel() {
         session?.cancel()
         photogrammetry = nil
+        if let remoteClient, let remoteJobID {
+            Task { try? await remoteClient.cancel(jobID: remoteJobID); try? await remoteClient.delete(jobID: remoteJobID) }
+            RemoteReconstruction.removePending(jobID: remoteJobID)
+        }
         cleanUp()
+    }
+
+    // MARK: - Mac / iPhone decision
+
+    private func decideWhereToReconstruct() async {
+        session = nil // release the camera either way
+        if let client = await availableServer() {
+            remoteClient = client
+            phase = .choosing
+        } else {
+            await reconstruct()
+        }
+    }
+
+    /// Manual address first, then the first discovered server.
+    private func availableServer() async -> ServerClient? {
+        if let manual = ServerSettings.manualBaseURL {
+            let client = ServerClient(baseURL: manual)
+            if let health = try? await client.health() {
+                remoteServerName = health.serverName
+                return client
+            }
+        }
+        for server in discovery.servers {
+            guard let url = try? await ServerDiscovery.resolve(server) else { continue }
+            let client = ServerClient(baseURL: url)
+            if let health = try? await client.health(), health.photogrammetrySupported {
+                remoteServerName = health.serverName
+                return client
+            }
+        }
+        return nil
+    }
+
+    func chooseLocal() async {
+        ServerSettings.preferMac = false
+        await reconstruct()
+    }
+
+    func chooseMac() async {
+        ServerSettings.preferMac = true
+        guard let client = remoteClient else { return await reconstruct() }
+        await reconstructRemotely(client: client)
+    }
+
+    private func reconstructRemotely(client: ServerClient) async {
+        let scanID = UUID().uuidString
+        let name = "Scan " + Date().formatted(date: .abbreviated, time: .shortened)
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer { UIApplication.shared.isIdleTimerDisabled = false }
+
+        do {
+            let files = RemoteReconstruction.captureFiles(in: workDirectory)
+            let jobID = try await RemoteReconstruction.submit(
+                name: name, files: files, options: ServerSettings.options,
+                client: client, scanID: scanID, progress: { [weak self] in self?.apply($0) }
+            )
+            remoteJobID = jobID
+            // The Mac has every file; the local capture is no longer needed.
+            try? FileManager.default.removeItem(at: workDirectory)
+
+            _ = try await RemoteReconstruction.collect(
+                jobID: jobID, client: client, scanID: scanID,
+                progress: { [weak self] in self?.apply($0) }
+            )
+            remoteJobID = nil
+            ScanStore.shared.reload()
+            cleanUp()
+            phase = .done(scanID: scanID)
+        } catch {
+            cleanUp()
+            phase = .failed("Mac reconstruction failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func apply(_ remote: RemoteReconstruction.Phase) {
+        switch remote {
+        case .connecting: phase = .uploading(sent: 0, total: 0, file: "")
+        case let .uploading(sent, total, file): phase = .uploading(sent: sent, total: total, file: file)
+        case let .remote(stage, progress, eta): phase = .remote(stage: stage, progress: progress, eta: eta)
+        case .downloading: phase = .downloading
+        case .installing: phase = .installing
+        }
     }
 
     private func reconstruct() async {
         phase = .reconstructing(progress: 0)
-        session = nil // release the camera before reconstruction
+        session = nil // release the camera before reconstruction (no-op after the decision step)
 
         do {
             var configuration = PhotogrammetrySession.Configuration()
@@ -398,6 +584,7 @@ final class ScanFlowModel: ObservableObject {
     }
 
     private func cleanUp() {
+        discovery.stop()
         SharedRenderer.resumeRendering()
         try? FileManager.default.removeItem(at: workDirectory)
     }

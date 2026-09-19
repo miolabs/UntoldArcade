@@ -3,7 +3,10 @@ import SwiftUI
 
 struct ScanLibraryView: View {
     @StateObject private var store = ScanStore.shared
+    @StateObject private var discovery = ServerDiscovery()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var path: [String] = []
+    @State private var showingSettings = false
 
     /// Sentinel route for the scan flow, so finishing a scan can atomically
     /// replace it with the viewer for the new model.
@@ -12,7 +15,7 @@ struct ScanLibraryView: View {
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if store.scans.isEmpty {
+                if store.scans.isEmpty, store.pendingJobs.isEmpty {
                     emptyState
                 } else {
                     scanList
@@ -36,11 +39,28 @@ struct ScanLibraryView: View {
                 }
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Label("Mac server", systemImage: discovery.servers.isEmpty && ServerSettings.manualBaseURL == nil
+                              ? "desktopcomputer" : "desktopcomputer.and.arrow.down")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     scanButton
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     importSampleButton
+                }
+            }
+            .sheet(isPresented: $showingSettings) {
+                ServerSettingsView(discovery: discovery)
+            }
+            .onAppear { discovery.start() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    Task { await store.resumePendingJobs() }
                 }
             }
             .overlay {
@@ -60,27 +80,59 @@ struct ScanLibraryView: View {
                 Text(store.lastError ?? "")
             }
             .task {
+                await store.resumePendingJobs()
                 await runAutoDemoIfRequested()
             }
         }
     }
 
-    /// Launch-argument hook (-CoolScanAutoDemo) used by automated UI checks:
-    /// imports the bundled sample if needed and opens it in the viewer.
+    /// Launch hooks used by automated UI checks (the simulator cannot be
+    /// driven by touch from the build machine):
+    /// - `-CoolScanAutoDemo`: import the bundled sample if needed, open it.
+    /// - `COOLSCAN_SERVER=http://host:port`: pin that server address.
+    /// - `-CoolScanAutoRecookOnMac`: send the first scan's source to the
+    ///   pinned server and open the result — the full Mac loop.
     private func runAutoDemoIfRequested() async {
-        guard ProcessInfo.processInfo.arguments.contains("-CoolScanAutoDemo") else {
-            return
+        let arguments = ProcessInfo.processInfo.arguments
+        if let server = ProcessInfo.processInfo.environment["COOLSCAN_SERVER"], let url = URL(string: server) {
+            ServerSettings.manualBaseURL = url
         }
+        let wantsMacRecook = arguments.contains("-CoolScanAutoRecookOnMac")
+        guard arguments.contains("-CoolScanAutoDemo") || wantsMacRecook else { return }
+
         if store.scans.isEmpty {
             await store.importBundledSample()
         }
-        if let first = store.scans.first {
+        guard let first = store.scans.first else { return }
+        if wantsMacRecook {
+            await recookOnMac(first)
+        } else {
             path = [first.id]
         }
     }
 
     private var scanList: some View {
         List {
+            if !store.pendingJobs.isEmpty {
+                Section("On the Mac") {
+                    ForEach(store.pendingJobs, id: \.jobID) { pending in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(pending.name)
+                                .font(.headline)
+                            Text(store.pendingStatus[pending.jobID] ?? "Waiting for the Mac…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                store.discardPending(pending)
+                            } label: {
+                                Label("Discard", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
             ForEach(store.scans) { scan in
                 NavigationLink(value: scan.id) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -107,6 +159,13 @@ struct ScanLibraryView: View {
                 }
                 .contextMenu {
                     recookButton(for: scan)
+                    if store.canRecook(scan) {
+                        Button {
+                            Task { await recookOnMac(scan) }
+                        } label: {
+                            Label("Re-cook on Mac", systemImage: "desktopcomputer.and.arrow.down")
+                        }
+                    }
                     Button(role: .destructive) {
                         store.delete(scan)
                     } label: {
@@ -114,6 +173,17 @@ struct ScanLibraryView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// Ships the scan's source USDZ to the Mac server and opens the result.
+    private func recookOnMac(_ scan: ScanRecord) async {
+        guard let client = await ServerSettingsView.currentClient(discovery: discovery) else {
+            store.lastError = "No Mac server found. Start CoolScanServer on your Mac or set its address in the server settings."
+            return
+        }
+        if let cooked = await store.recookOnMac(scan, client: client) {
+            path = [cooked.id]
         }
     }
 

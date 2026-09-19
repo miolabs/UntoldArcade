@@ -71,6 +71,12 @@ final class ViewerModel: ObservableObject {
 
         InputSystem.shared.registerTouchEvents(view: renderer.metalView)
 
+        // Mac-cooked bundles carry 2K textures; the default streaming
+        // profile would cap them at 1K on load.
+        TextureStreamingSystem.shared.apply(
+            (scan.metadata.textureMax ?? 0) >= 2048 ? .superdetailed : .balanced
+        )
+
         let entity = createEntity()
         scanEntity = entity
         setEntityMeshAsync(

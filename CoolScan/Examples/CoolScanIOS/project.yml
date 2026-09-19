@@ -14,6 +14,15 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: CoolScanIOS
+    # Keys that are not expressible as INFOPLIST_KEY_* (arrays/dicts) go
+    # through a generated Info.plist; Xcode merges it with the generated
+    # keys below.
+    info:
+      path: CoolScanIOS/Info.plist
+      properties:
+        NSBonjourServices: [_coolscan._tcp]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     dependencies:
       - package: UntoldEngine
         product: UntoldEngine
@@ -31,6 +40,7 @@ targets:
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "CoolScan uses the camera to scan real objects into 3D models."
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "CoolScan looks for a CoolScan server on your Mac to reconstruct scans at full detail."
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
         CODE_SIGN_STYLE: Automatic
