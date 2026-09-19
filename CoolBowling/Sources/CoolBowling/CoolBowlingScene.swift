@@ -4,7 +4,7 @@
 //
 //  Entity construction for the bowling demo: the alley as the studio's
 //  Blender scene — the parquet approach with the ball return unit on it,
-//  the lane with its gutters and rails (stretched to the demo's length),
+//  the lane with its gutters and rails at the scene's full length,
 //  the aiming arrows and deck spots, the pinsetter cover behind the deck,
 //  ten pins and the ball — all artist models (`Resources/Models/*.untold`)
 //  — plus the placement ghost and two invisible kinematic hand bodies.
@@ -45,10 +45,10 @@ public final class CoolBowlingScene: @unchecked Sendable {
     /// lane's maple strips between concave gutters with walnut rails at the
     /// outer edges, a parquet approach behind the foul line with the ball
     /// return unit standing on it, and the pinsetter cover behind the deck.
-    /// Only the lane's length differs from the scene's regulation 19 m: the
-    /// lane asset is stretched to `laneLength` so it fits a room.
+    /// The lane is the scene's regulation length, so the alley runs through
+    /// the room's walls: `laneLength` stretches or shortens the lane asset.
     public static let laneWidth: Float = 1.06
-    public static let laneLength: Float = 4.5
+    public static let laneLength: Float = 19.16
     /// Length of the lane asset as modelled (foul line to the deck's end).
     static let laneAssetLength: Float = 19.16
     /// The lane surface lies on the floor, like the scene's.
@@ -78,7 +78,7 @@ public final class CoolBowlingScene: @unchecked Sendable {
     public static let pinSpacing: Float = 0.3048
     public static let pinDeckDistance: Float = laneLength - 0.87
     /// The deck's locating spots sit 0.395 m behind the head pin's centre;
-    /// the aiming arrows a quarter of the way down the lane.
+    /// the aiming arrows 4.4 m down the lane, as in the scene.
     static let deckSpotsOffset: Float = 0.395
     static let arrowsFraction: Float = 0.23
     static let inlayLift: Float = 0.0015
@@ -168,6 +168,13 @@ public final class CoolBowlingScene: @unchecked Sendable {
         /// pins, so a model that faces the player turns around.
         public var facingPlayerOrientation: simd_quatf {
             orientation * simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0))
+        }
+
+        /// Assets exported in the scene's own coordinates: the scene's "down
+        /// the lane" (+y in Blender) comes out of the exporter as −z, so they
+        /// turn around too to run toward the pins (they are symmetric in x).
+        public var sceneOrientation: simd_quatf {
+            facingPlayerOrientation
         }
 
         // MARK: The pit and the cover
@@ -496,7 +503,7 @@ public final class CoolBowlingScene: @unchecked Sendable {
 
     /// Builds the alley for `layout` from the scene's models, in the scene's
     /// own coordinates (foul line at the origin): the approach with the
-    /// return unit on it, the lane (stretched to `laneLength`) with its
+    /// return unit on it, the lane (`laneLength`, the scene's 19 m) with its
     /// gutters and rails, the arrows and deck spots, the pinsetter cover,
     /// and the ten pins. What the ball hits is invisible and analytic: the
     /// lane's surface, the rails, the cover's walls, the return's rails.
@@ -505,14 +512,14 @@ public final class CoolBowlingScene: @unchecked Sendable {
         clearLane()
         self.layout = layout
 
-        placeModel("CoolBowling.approach", asset: "approach", at: layout.worldPoint(.zero), orientation: layout.orientation)
-        let lane = placeModel("CoolBowling.lane", asset: "lane", at: layout.worldPoint(.zero), orientation: layout.orientation)
+        placeModel("CoolBowling.approach", asset: "approach", at: layout.worldPoint(.zero), orientation: layout.sceneOrientation)
+        let lane = placeModel("CoolBowling.lane", asset: "lane", at: layout.worldPoint(.zero), orientation: layout.sceneOrientation)
         scaleTo(entityId: lane, scale: SIMD3<Float>(1, 1, Self.laneLength / Self.laneAssetLength))
         // Inlays a hair above the strips, or they fight the surface for depth.
         placeModel("CoolBowling.arrows", asset: "arrows",
-                   at: layout.worldPoint(SIMD3<Float>(0, Self.inlayLift, Self.laneLength * Self.arrowsFraction)), orientation: layout.orientation)
+                   at: layout.worldPoint(SIMD3<Float>(0, Self.inlayLift, Self.laneLength * Self.arrowsFraction)), orientation: layout.sceneOrientation)
         placeModel("CoolBowling.deckSpots", asset: "deckspots",
-                   at: layout.worldPoint(SIMD3<Float>(0, Self.inlayLift, Self.pinDeckDistance + Self.deckSpotsOffset)), orientation: layout.orientation)
+                   at: layout.worldPoint(SIMD3<Float>(0, Self.inlayLift, Self.pinDeckDistance + Self.deckSpotsOffset)), orientation: layout.sceneOrientation)
         placeModel("CoolBowling.pitCover", asset: "pitcover",
                    at: layout.worldPoint(SIMD3<Float>(0, 0, layout.pitCoverCenterZ)), orientation: layout.facingPlayerOrientation)
 

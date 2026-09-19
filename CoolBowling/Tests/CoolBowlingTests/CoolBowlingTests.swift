@@ -203,7 +203,7 @@ final class CoolBowlingTests: XCTestCase {
         // A low shelf over the lane: not the floor, out.
         let lowShelf = plane(SIMD3<Float>(0, 0.25, -2.0), normal: Y, u: X, v: Z, eu: 0.3, ev: 0.3)
         // A wall just behind the pinsetter cover: clear of the alley, kept.
-        let wallBehindPit = plane(SIMD3<Float>(0, 1.3, -6.6), normal: Z, u: X, v: Y, eu: 3.0, ev: 1.3)
+        let wallBehindPit = plane(SIMD3<Float>(0, 1.3, -22.0), normal: Z, u: X, v: Y, eu: 3.0, ev: 1.3)
         let planes = [floor, chairSeat, tableOverReturn, wallAcross, wallBeside, sofaBehind,
                       longTableBeside, slopedIntoAlley, floorPatchLow, floorPatchHigh, lowShelf, wallBehindPit]
 
@@ -275,6 +275,14 @@ final class CoolBowlingTests: XCTestCase {
                 position: layout.worldPoint(SIMD3<Float>(side * CoolBowlingScene.railX, 0.03, end * 0.5)), orientation: layout.orientation
             ))
         }
+        // The cover's side walls, so a deflected ball stays in the pit.
+        for (entity, side) in [(105, Float(-1)), (106, Float(1))] {
+            backend.didAddBody(entity: EntityID(entity), descriptor: PhysicsBodyDescriptor(
+                motionType: .static,
+                collider: PhysicsColliderDescriptor(shape: .box(halfExtents: SIMD3<Float>(0.03, 0.5, CoolBowlingScene.pitLength * 0.5)), friction: 0.5, restitution: 0.2),
+                position: layout.worldPoint(SIMD3<Float>(side * CoolBowlingScene.pitCoverHalfWidth, 0.5, end + CoolBowlingScene.pitLength * 0.5)), orientation: layout.orientation
+            ))
+        }
         backend.setEnvironmentBoxes(CoolBowlingSimulation.environmentBoxes(for: [.infiniteFloor(y: 0)], keepOut: layout.keepOut))
         // Ten pins.
         for (index, position) in layout.pinPositions.enumerated() {
@@ -304,7 +312,7 @@ final class CoolBowlingTests: XCTestCase {
             position: start, linearVelocity: layout.forward * 7.0 + layout.right * 0.1
         ))
         let sink = RecordingSink()
-        for _ in 0 ..< 240 {
+        for _ in 0 ..< 420 {
             backend.step(deltaTime: step)
             backend.drainEvents(into: sink)
             mergeReadback(backend, into: &poses)
