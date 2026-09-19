@@ -481,6 +481,7 @@ public final class CoolBasketGame: @unchecked Sendable {
     // MARK: - Per-frame update (XR render thread)
 
     public func update(deltaTime: Float) {
+        scene.tintHoopGlassIfNeeded()
         let now = ProcessInfo.processInfo.systemUptime
         if currentPhase == .placingHoop {
             updatePlacement(now: now)

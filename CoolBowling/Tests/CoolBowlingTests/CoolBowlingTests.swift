@@ -113,7 +113,7 @@ final class CoolBowlingTests: XCTestCase {
         let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1), approachLength: 1.2)
         // On the player's right, clear of the bumper, above the lane.
         XCTAssertGreaterThan(layout.returnCenterX - CoolBowlingScene.returnInnerWidth * 0.5, CoolBowlingScene.laneWidth * 0.5 + 0.08)
-        XCTAssertGreaterThan(layout.returnFloorTop(atZ: 0), CoolBowlingScene.laneSurfaceHeight + 0.3)
+        XCTAssertGreaterThan(layout.returnFloorTop(atZ: 0), CoolBowlingScene.laneSurfaceHeight + 0.1)
         // The rack end (behind the foul line) is the low end.
         XCTAssertEqual(layout.returnNearZ, -1.2)
         XCTAssertLessThan(layout.returnFloorTop(atZ: layout.returnNearZ), layout.returnFloorTop(atZ: layout.returnFarZ))

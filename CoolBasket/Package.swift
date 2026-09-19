@@ -27,8 +27,7 @@ let package = Package(
                 .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
             resources: [
-                .copy("Resources/basketball_baseColor.png"),
-                .copy("Resources/backboard_baseColor.png"),
+                .copy("Resources/Models"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

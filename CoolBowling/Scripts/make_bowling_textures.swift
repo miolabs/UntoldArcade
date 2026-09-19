@@ -1,6 +1,6 @@
-// Generates CoolBowling textures: bowling ball (equirect, glossy dark with
-// three finger holes), pin (white with two red bands along v), lane (maple
-// boards with arrows). Run: swift make_bowling_textures.swift <outDir>
+// Generates the CoolBowling lane texture: maple boards with a foul line and
+// arrows (the pins, ball, pit cover and ball return are artist models under
+// Resources/Models). Run: swift make_bowling_textures.swift <outDir>
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -17,42 +17,6 @@ func savePNG(_ image: CGImage, _ name: String) {
 func context(_ w: Int, _ h: Int) -> CGContext {
     CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
               space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-}
-
-// --- Ball: deep blue-black marble with swirls and three holes (equirect 1024x512).
-do {
-    let W = 1024, H = 512
-    let c = context(W, H)
-    c.setFillColor(CGColor(red: 0.06, green: 0.08, blue: 0.20, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: W, height: H))
-    var rng: UInt64 = 0x1234_5678_9ABC_DEF1
-    func rnd() -> Double { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return Double(rng % 10000) / 10000 }
-    for _ in 0 ..< 40 { // marble swirls
-        let path = CGMutablePath()
-        var x = rnd() * Double(W), y = rnd() * Double(H)
-        path.move(to: CGPoint(x: x, y: y))
-        for _ in 0 ..< 12 { x += (rnd() - 0.5) * 300; y += (rnd() - 0.5) * 120; path.addLine(to: CGPoint(x: x, y: y)) }
-        c.setStrokeColor(CGColor(red: 0.35, green: 0.25, blue: 0.7, alpha: 0.18)); c.setLineWidth(CGFloat(6 + rnd() * 30)); c.setLineCap(.round)
-        c.addPath(path); c.strokePath()
-    }
-    // Three finger holes near the "top" (v ~ 0.75), dark discs with a rim.
-    for (u, v, r) in [(0.42, 0.78, 34.0), (0.58, 0.78, 34.0), (0.50, 0.62, 30.0)] {
-        let x = u * Double(W), y = v * Double(H)
-        c.setFillColor(CGColor(red: 0.02, green: 0.02, blue: 0.03, alpha: 1)); c.fillEllipse(in: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r))
-        c.setStrokeColor(CGColor(red: 0.5, green: 0.5, blue: 0.6, alpha: 0.5)); c.setLineWidth(3); c.strokeEllipse(in: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r))
-    }
-    savePNG(c.makeImage()!, "bowlingball_baseColor.png")
-}
-
-// --- Pin: white with two red bands (v = height fraction; the neck sits at v ≈ 0.72-0.84).
-do {
-    let W = 256, H = 1024
-    let c = context(W, H)
-    c.setFillColor(CGColor(red: 0.96, green: 0.95, blue: 0.92, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: W, height: H))
-    c.setFillColor(CGColor(red: 0.85, green: 0.12, blue: 0.10, alpha: 1))
-    for (v0, v1) in [(0.66, 0.70), (0.74, 0.78)] {
-        c.fill(CGRect(x: 0, y: Int(v0 * Double(H)), width: W, height: Int((v1 - v0) * Double(H))))
-    }
-    savePNG(c.makeImage()!, "pin_baseColor.png")
 }
 
 // --- Lane: maple boards (repeat along length), foul line at v = 0, arrows at v ≈ 0.25.

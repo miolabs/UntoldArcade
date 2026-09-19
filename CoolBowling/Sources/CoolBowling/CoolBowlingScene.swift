@@ -3,11 +3,15 @@
 //  CoolBowling
 //
 //  Entity construction for the bowling demo: the alley (lane plinth, pit,
-//  bumpers, backstop and the ball return — all static boxes), ten pins
-//  (runtime lathe meshes with convex-hull colliders), the ball (dynamic
-//  sphere), the placement ghost, and two invisible kinematic hand bodies.
-//  Visuals use engine nodes; physics uses the engine-owned
-//  ColliderComponent / RigidBodyComponent vocabulary.
+//  bumpers and backstop — static boxes), the pinsetter cover over the deck,
+//  ten pins, the ball and the ball-return unit — the last four are artist
+//  models (`Resources/Models/*.untold`) — plus the placement ghost and two
+//  invisible kinematic hand bodies. What the models look like and what they
+//  collide with are separate: the pins carry a convex hull of the regulation
+//  profile, the ball a sphere, the return an invisible sloped trough of
+//  boxes, the cover nothing (the backstop's box stands in for its rear
+//  panel). Visuals use engine nodes and meshes; physics uses the
+//  engine-owned ColliderComponent / RigidBodyComponent vocabulary.
 //
 
 import Foundation
@@ -60,6 +64,15 @@ public final class CoolBowlingScene: @unchecked Sendable {
     /// The pit wall at the end of the alley, measured above the lane surface.
     static let backstopHeight: Float = 0.5
     static let backstopThickness: Float = 0.06
+    /// The pinsetter cover (`Models/pitcover`): an enclosure standing on the
+    /// floor over the deck and the pit, open at the front so the pins show.
+    /// Its origin is its footprint centre; placed facing the player, its
+    /// open front is this far toward the player and its closed rear panel
+    /// this far toward the backstop.
+    static let pitCoverFrontOffset: Float = 0.80
+    static let pitCoverRearOffset: Float = 0.80
+    /// The cover's open front starts this far before the head pin.
+    static let pitCoverGap: Float = 0.10
     /// Regulation pin: 15 in tall, 4.75 in at the belly, 3 lb 6 oz.
     public static let pinHeight: Float = 0.381
     public static let pinMaxRadius: Float = 0.0605
@@ -71,14 +84,27 @@ public final class CoolBowlingScene: @unchecked Sendable {
     /// The ball return: a sloped trough on the player's right, above the
     /// lane, carrying the ball from the pit back to a rack behind the foul
     /// line. Heights are the trough floor's top surface above the floor.
+    /// The physics trough is invisible; what shows is the ball-return unit
+    /// model (`Models/dispenser`) at the rack end and a plain trough from
+    /// its hood back to the pit.
     public static let returnInnerWidth: Float = 0.26
     static let returnRailThickness: Float = 0.03
     static let returnRailHeight: Float = 0.12
     static let returnFloorThickness: Float = 0.03
     static let returnGap: Float = 0.04
-    public static let returnRackHeight: Float = 0.60
+    /// The rack end matches the unit's rails: its trough floor tops out at
+    /// 0.37 m, level from its rubber stop back to the hood.
+    public static let returnRackHeight: Float = 0.37
     public static let returnSlope: Float = 2.0 * .pi / 180
     public static let returnSpeed: Float = 1.0
+    /// The unit's origin is its footprint centre, base on the floor. Placed
+    /// facing the player, its rubber ball stop is this far toward the
+    /// player and the back of its hood this far toward the pit; the ball
+    /// comes out of the hood and rolls to the stop.
+    static let dispenserStopOffset: Float = 1.29
+    static let dispenserHoodOffset: Float = 1.49
+    /// The physics rack stop's centre, past the near end of the trough.
+    static let returnRackStopInset: Float = 0.02
     /// How far behind the foul line the rack sits when the player's
     /// position is unknown.
     public static let defaultApproachLength: Float = 1.0
@@ -147,6 +173,26 @@ public final class CoolBowlingScene: @unchecked Sendable {
             foul + right * local.x + SIMD3<Float>(0, local.y, 0) + forward * local.z
         }
 
+        /// The models' fronts are their local +z; turned about, a model
+        /// faces the player, its local +z pointing back down the lane.
+        public var facingPlayerOrientation: simd_quatf {
+            orientation * simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0))
+        }
+
+        // MARK: The pinsetter cover
+
+        /// Lane-local z of the cover's origin: its open front a step before
+        /// the head pin, its rear panel toward the backstop.
+        public var pitCoverCenterZ: Float {
+            CoolBowlingScene.pinDeckDistance - CoolBowlingScene.pitCoverGap + CoolBowlingScene.pitCoverFrontOffset
+        }
+
+        /// Lane-local z of the cover's rear panel; the backstop's collider
+        /// stands there, so the panel is what the ball and the pins hit.
+        public var pitCoverRearZ: Float {
+            pitCoverCenterZ + CoolBowlingScene.pitCoverRearOffset
+        }
+
         /// The bumpers run from the foot of the ramp to the backstop.
         static var bumperLength: Float {
             CoolBowlingScene.laneLength + CoolBowlingScene.approachRampLength
@@ -202,6 +248,21 @@ public final class CoolBowlingScene: @unchecked Sendable {
         public var returnNearZ: Float { -approachLength }
         public var returnFarZ: Float { CoolBowlingScene.laneLength }
         public var returnLength: Float { returnFarZ - returnNearZ }
+
+        /// Lane-local z of the physics rack stop, which the ball rests against.
+        var returnRackStopZ: Float { returnNearZ + CoolBowlingScene.returnRackStopInset }
+
+        /// Lane-local z of the ball-return unit's origin: its rubber stop
+        /// on the physics rack stop, its hood toward the pit.
+        public var dispenserCenterZ: Float {
+            returnRackStopZ + CoolBowlingScene.dispenserStopOffset
+        }
+
+        /// Lane-local z of the back of the unit's hood: the plain trough
+        /// shows from here to the pit, the unit hides the rest.
+        public var returnVisibleNearZ: Float {
+            dispenserCenterZ + CoolBowlingScene.dispenserHoodOffset
+        }
 
         /// Height of the trough floor's top surface at lane-local `z`. The
         /// rack end is the low end, so the ball rolls toward the player.
@@ -281,28 +342,27 @@ public final class CoolBowlingScene: @unchecked Sendable {
 
     // MARK: - Ball
 
-    /// Creates the ball at `position` as a dynamic body.
+    /// Creates the ball at `position` as a dynamic body: the marbled ball
+    /// model (origin at its centre, `ballRadius` across), sphere collider.
     @MainActor public func spawnBall(at position: SIMD3<Float>, velocity: SIMD3<Float> = .zero) {
         if ballEntity != .invalid {
             destroyEntity(entityId: ballEntity)
         }
-        let node = SphereNode(
-            radius: Self.ballRadius,
-            segments: [32, 24],
-            name: "CoolBowling.ball"
-        )
-        .baseColor(1.0, 1.0, 1.0)
-        .roughness(0.18)
-        .metallic(0.0)
-        ballEntity = node.entityID
+        Self.claimAssetBasePath()
+        ballEntity = createEntity()
+        setEntityName(entityId: ballEntity, name: "CoolBowling.ball")
+        setEntityMesh(entityId: ballEntity, filename: "bowlingball", withExtension: "untold")
+        translateTo(entityId: ballEntity, position: position)
+        attachBallBody(velocity: velocity, at: position)
+    }
+
+    /// The engine resolves `Models/<name>/<name>.untold` under its asset
+    /// base path; this package's resource bundle is the only one the demo
+    /// loads from, so claiming it is safe.
+    private static func claimAssetBasePath() {
         if let resourceRoot = Bundle.module.resourceURL {
             assetBasePath = resourceRoot
         }
-        if let textureURL = Bundle.module.url(forResource: "bowlingball_baseColor", withExtension: "png") {
-            updateMaterialTexture(entityId: ballEntity, textureType: .baseColor, path: textureURL)
-        }
-        translateTo(entityId: ballEntity, position: position)
-        attachBallBody(velocity: velocity, at: position)
     }
 
     public func attachBallBody(velocity: SIMD3<Float>, at position: SIMD3<Float>) {
@@ -401,19 +461,12 @@ public final class CoolBowlingScene: @unchecked Sendable {
         up.y < 0.7 || displacement > 0.25
     }
 
-    /// Built once per lane and shared by the ten pins.
-    private var pinMeshes: [Mesh] = []
-
+    /// A pin: the model (origin at the base centre, the regulation 0.121 m
+    /// by 0.381 m the hull was built to) with the convex-hull body.
     @MainActor private func spawnPin(at position: SIMD3<Float>, index: Int, orientation: simd_quatf) {
         let entity = createEntity()
         setEntityName(entityId: entity, name: "CoolBowling.pin\(index + 1)")
-        if pinMeshes.isEmpty {
-            pinMeshes = CoolBowlingPinMesh.makeMeshes()
-        }
-        setEntityMeshDirect(entityId: entity, meshes: pinMeshes, assetName: "BowlingPin")
-        if let textureURL = Bundle.module.url(forResource: "pin_baseColor", withExtension: "png") {
-            updateMaterialTexture(entityId: entity, textureType: .baseColor, path: textureURL)
-        }
+        setEntityMesh(entityId: entity, filename: "pin", withExtension: "untold")
         translateTo(entityId: entity, position: position)
         rotateTo(entityId: entity, rotation: orientation)
         attachPinBody(entity)
@@ -495,10 +548,11 @@ public final class CoolBowlingScene: @unchecked Sendable {
     // MARK: - Lane
 
     /// Builds the alley for `layout`: the lane plinth, the pit, bumpers, the
-    /// backstop, the ball return and the ten pins.
+    /// backstop, the pinsetter cover, the ball return and the ten pins.
     @MainActor public func buildLane(_ layout: LaneLayout) {
         clearLane()
         self.layout = layout
+        Self.claimAssetBasePath()
 
         // The lane: a plinth from the floor to the playing surface, ending
         // at the pit.
@@ -557,11 +611,22 @@ public final class CoolBowlingScene: @unchecked Sendable {
             )
         }
 
-        // The pit wall at the end of the alley.
+        // The pinsetter cover over the deck and the pit: wider than the
+        // alley, standing on the floor either side of the bumpers, its open
+        // front toward the player.
+        let cover = createEntity()
+        setEntityName(entityId: cover, name: "CoolBowling.pitCover")
+        setEntityMesh(entityId: cover, filename: "pitcover", withExtension: "untold")
+        translateTo(entityId: cover, position: layout.worldPoint(SIMD3<Float>(0, 0, layout.pitCoverCenterZ)))
+        rotateTo(entityId: cover, rotation: layout.facingPlayerOrientation)
+        laneEntities.append(cover)
+
+        // The pit wall: an invisible box just inside the cover's rear
+        // panel, which is what appears to stop the ball.
         let backstopTop = Self.laneSurfaceHeight + Self.backstopHeight
-        let backstop = darkBox("CoolBowling.backstop", size: SIMD3<Float>(Self.laneWidth + Self.bumperWidth * 2, backstopTop, Self.backstopThickness))
-        addStaticBox(
-            backstop, at: layout.worldPoint(SIMD3<Float>(0, backstopTop * 0.5, Self.laneLength + Self.backstopThickness * 0.5)),
+        addInvisibleStaticBox(
+            "CoolBowling.backstop",
+            at: layout.worldPoint(SIMD3<Float>(0, backstopTop * 0.5, layout.pitCoverRearZ + Self.backstopThickness * 0.5)),
             halfExtents: SIMD3<Float>(Self.laneWidth * 0.5 + Self.bumperWidth, backstopTop * 0.5, Self.backstopThickness * 0.5),
             orientation: layout.orientation, friction: 0.5, restitution: 0.2
         )
@@ -576,54 +641,93 @@ public final class CoolBowlingScene: @unchecked Sendable {
 
     /// The ball return: a sloped trough on the player's right, above the
     /// lane, from the pit to a rack behind the foul line. Tilted about the
-    /// lane's right axis so the rack end is the low end.
+    /// lane's right axis so the rack end is the low end. The physics trough
+    /// (floor, rails, end stops) is invisible and runs the whole length;
+    /// the ball-return unit model stands at the rack end, and a plain
+    /// trough shows from the back of its hood to the pit.
     @MainActor private func buildBallReturn(_ layout: LaneLayout) {
         let tilt = simd_quatf(angle: -Self.returnSlope, axis: SIMD3<Float>(1, 0, 0))
         let orientation = layout.orientation * tilt
         let up = orientation.act(SIMD3<Float>(0, 1, 0))
-        let midZ = (layout.returnNearZ + layout.returnFarZ) * 0.5
-        let slantHalfLength = layout.returnLength * 0.5 / cosf(Self.returnSlope)
-        let topMid = layout.worldPoint(SIMD3<Float>(layout.returnCenterX, layout.returnFloorTop(atZ: midZ), midZ))
         let outerWidth = Self.returnInnerWidth + Self.returnRailThickness * 2
+        /// Centre of the trough floor's top surface and the half length of
+        /// the slant between lane-local `nearZ` and `farZ`.
+        func slant(_ nearZ: Float, _ farZ: Float) -> (topMid: SIMD3<Float>, halfLength: Float) {
+            let midZ = (nearZ + farZ) * 0.5
+            return (
+                layout.worldPoint(SIMD3<Float>(layout.returnCenterX, layout.returnFloorTop(atZ: midZ), midZ)),
+                (farZ - nearZ) * 0.5 / cosf(Self.returnSlope)
+            )
+        }
 
-        let floor = CubeNode(size: 1.0, name: "CoolBowling.returnFloor")
-            .baseColor(0.24, 0.25, 0.29)
-            .roughness(0.45)
-            .scaleTo(x: outerWidth, y: Self.returnFloorThickness, z: slantHalfLength * 2)
-        addStaticBox(
-            floor, at: topMid - up * (Self.returnFloorThickness * 0.5),
-            halfExtents: SIMD3<Float>(outerWidth * 0.5, Self.returnFloorThickness * 0.5, slantHalfLength),
+        // The trough the ball actually rolls in.
+        let physics = slant(layout.returnNearZ, layout.returnFarZ)
+        addInvisibleStaticBox(
+            "CoolBowling.returnFloor", at: physics.topMid - up * (Self.returnFloorThickness * 0.5),
+            halfExtents: SIMD3<Float>(outerWidth * 0.5, Self.returnFloorThickness * 0.5, physics.halfLength),
             orientation: orientation, friction: 0.2, restitution: 0.1
         )
         for side: Float in [-1, 1] {
-            let rail = darkBox("CoolBowling.returnRail\(side > 0 ? "R" : "L")", size: SIMD3<Float>(Self.returnRailThickness, Self.returnRailHeight, slantHalfLength * 2))
-            addStaticBox(
-                rail,
-                at: topMid + up * (Self.returnRailHeight * 0.5)
+            addInvisibleStaticBox(
+                "CoolBowling.returnRail\(side > 0 ? "R" : "L")",
+                at: physics.topMid + up * (Self.returnRailHeight * 0.5)
                     + layout.right * (side * (Self.returnInnerWidth + Self.returnRailThickness) * 0.5),
-                halfExtents: SIMD3<Float>(Self.returnRailThickness * 0.5, Self.returnRailHeight * 0.5, slantHalfLength),
+                halfExtents: SIMD3<Float>(Self.returnRailThickness * 0.5, Self.returnRailHeight * 0.5, physics.halfLength),
                 orientation: orientation, friction: 0.3, restitution: 0.3
             )
         }
-        // End stops: the rack end holds the ball for the player; the pit end
-        // catches a stray.
-        for (name, z) in [("CoolBowling.returnRack", layout.returnNearZ + 0.02), ("CoolBowling.returnEnd", layout.returnFarZ - 0.02)] {
-            let stop = darkBox(name, size: SIMD3<Float>(outerWidth, 0.15, 0.04))
+        // End stops: the rack end holds the ball for the player (under the
+        // unit's rubber stop); the pit end catches a stray.
+        for (name, z) in [("CoolBowling.returnRack", layout.returnRackStopZ), ("CoolBowling.returnEnd", layout.returnFarZ - 0.02)] {
             let base = layout.worldPoint(SIMD3<Float>(layout.returnCenterX, layout.returnFloorTop(atZ: z), z))
-            addStaticBox(
-                stop, at: base + up * 0.075,
+            addInvisibleStaticBox(
+                name, at: base + up * 0.075,
                 halfExtents: SIMD3<Float>(outerWidth * 0.5, 0.075, 0.02),
                 orientation: orientation, friction: 0.5, restitution: 0.1
             )
         }
-        // Posts hold the trough up (visual only).
-        for (index, z) in [layout.returnNearZ + 0.15, midZ, layout.returnFarZ - 0.15].enumerated() {
+
+        // The ball-return unit: hood toward the pit, rubber stop toward the
+        // player, on the floor beside the lane.
+        let dispenser = createEntity()
+        setEntityName(entityId: dispenser, name: "CoolBowling.returnUnit")
+        setEntityMesh(entityId: dispenser, filename: "dispenser", withExtension: "untold")
+        translateTo(entityId: dispenser, position: layout.worldPoint(SIMD3<Float>(layout.returnCenterX, 0, layout.dispenserCenterZ)))
+        rotateTo(entityId: dispenser, rotation: layout.facingPlayerOrientation)
+        laneEntities.append(dispenser)
+
+        // The visible trough, from the back of the hood to the pit end, with
+        // posts holding it up (all visual only).
+        let visibleNearZ = layout.returnVisibleNearZ
+        guard visibleNearZ < layout.returnFarZ - 0.3 else { return }
+        let visible = slant(visibleNearZ, layout.returnFarZ)
+        let floor = CubeNode(size: 1.0, name: "CoolBowling.returnFloorVisual")
+            .baseColor(0.24, 0.25, 0.29)
+            .roughness(0.45)
+            .scaleTo(x: outerWidth, y: Self.returnFloorThickness, z: visible.halfLength * 2)
+        placeVisual(floor, at: visible.topMid - up * (Self.returnFloorThickness * 0.5), orientation: orientation)
+        for side: Float in [-1, 1] {
+            let rail = darkBox("CoolBowling.returnRailVisual\(side > 0 ? "R" : "L")", size: SIMD3<Float>(Self.returnRailThickness, Self.returnRailHeight, visible.halfLength * 2))
+            placeVisual(
+                rail,
+                at: visible.topMid + up * (Self.returnRailHeight * 0.5)
+                    + layout.right * (side * (Self.returnInnerWidth + Self.returnRailThickness) * 0.5),
+                orientation: orientation
+            )
+        }
+        let midZ = (visibleNearZ + layout.returnFarZ) * 0.5
+        for (index, z) in [visibleNearZ + 0.15, midZ, layout.returnFarZ - 0.15].enumerated() {
             let height = layout.returnFloorTop(atZ: z) - Self.returnFloorThickness
             let post = darkBox("CoolBowling.returnPost\(index)", size: SIMD3<Float>(0.05, height, 0.05))
-            translateTo(entityId: post.entityID, position: layout.worldPoint(SIMD3<Float>(layout.returnCenterX, height * 0.5, z)))
-            rotateTo(entityId: post.entityID, rotation: layout.orientation)
-            laneEntities.append(post.entityID)
+            placeVisual(post, at: layout.worldPoint(SIMD3<Float>(layout.returnCenterX, height * 0.5, z)), orientation: layout.orientation)
         }
+    }
+
+    /// A lane-owned node with no body.
+    @MainActor private func placeVisual(_ node: PrimitiveNode, at position: SIMD3<Float>, orientation: simd_quatf) {
+        translateTo(entityId: node.entityID, position: position)
+        rotateTo(entityId: node.entityID, rotation: orientation)
+        laneEntities.append(node.entityID)
     }
 
     @MainActor private func darkBox(_ name: String, size: SIMD3<Float>) -> PrimitiveNode {
@@ -636,7 +740,21 @@ public final class CoolBowlingScene: @unchecked Sendable {
     /// A static box collider on a node, owned by the lane.
     @MainActor private func addStaticBox(_ node: PrimitiveNode, at position: SIMD3<Float>, halfExtents: SIMD3<Float>,
                               orientation: simd_quatf, friction: Float, restitution: Float) {
-        let entity = node.entityID
+        attachStaticBox(node.entityID, at: position, halfExtents: halfExtents, orientation: orientation, friction: friction, restitution: restitution)
+    }
+
+    /// An invisible static box owned by the lane: an entity with no mesh,
+    /// just the collider — the physics behind a model that only looks the
+    /// part.
+    private func addInvisibleStaticBox(_ name: String, at position: SIMD3<Float>, halfExtents: SIMD3<Float>,
+                                       orientation: simd_quatf, friction: Float, restitution: Float) {
+        let entity = createEntity()
+        setEntityName(entityId: entity, name: name)
+        attachStaticBox(entity, at: position, halfExtents: halfExtents, orientation: orientation, friction: friction, restitution: restitution)
+    }
+
+    private func attachStaticBox(_ entity: EntityID, at position: SIMD3<Float>, halfExtents: SIMD3<Float>,
+                                 orientation: simd_quatf, friction: Float, restitution: Float) {
         translateTo(entityId: entity, position: position)
         rotateTo(entityId: entity, rotation: orientation)
         registerComponent(entityId: entity, componentType: ColliderComponent.self)

@@ -123,11 +123,12 @@ let physicsEngineDefaultsKey = "physicsEngine"
 @main
 struct CoolBasketVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var immersionStyle: ImmersionStyle = .mixed
     @AppStorage(physicsEngineDefaultsKey) private var physicsEngineRaw = CoolBasketPhysicsEngine.coolBasket.rawValue
 
     var body: some SwiftUI.Scene {
-        WindowGroup {
+        WindowGroup(id: "Controls") {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Basket 🏀").font(.extraLargeTitle).fontWeight(.bold)
@@ -219,6 +220,11 @@ struct CoolBasketVisionOSXRApp: App {
                         let result = await openImmersiveSpace(id: "Court")
                         BasketXRHolder.shared.lastOpenResult = String(describing: result)
                         print("CoolBasket: auto-open → \(String(describing: result))")
+                        // `-hideWindow` also closes this control window so an
+                        // unattended screenshot sees the court, not the glass.
+                        if ProcessInfo.processInfo.arguments.contains("-hideWindow") {
+                            dismissWindow(id: "Controls")
+                        }
                     }
                 }
             }

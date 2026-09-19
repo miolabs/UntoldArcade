@@ -21,16 +21,16 @@ stays clear of the alley, remains solid.
 
 | Piece | What it demonstrates |
 |---|---|
-| `CoolBowlingScene` | The alley — lane plinth, pit, bumpers, backstop and the sloped ball return (static boxes), ten pins (a lathe mesh built at runtime by `CoolBowlingPinMesh` and handed to the engine with `setEntityMeshDirect`, with a **convex-hull collider** from the same profile), the ball (dynamic sphere, 6 kg), the placement ghost and two kinematic hand bodies — all in the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. |
+| `CoolBowlingScene` | The alley — lane plinth, pit, bumpers and backstop (static boxes); the pins, the ball, the pinsetter cover over the deck and the ball-return unit are **artist models** (`Resources/Models/*.untold`, loaded with `setEntityMesh`) with **analytic colliders** kept separate from the visuals: a convex hull of the regulation profile per pin, a sphere for the ball (6 kg), an invisible sloped trough of boxes behind the return, and the backstop box behind the cover's rear panel; plus the placement ghost and two kinematic hand bodies — all in the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. |
 | `CoolBowlingGame` | Gaze-driven lane placement, pinch grab and roll with the tracked hand velocity, pins-down scoring from pin orientation and displacement, the pit → return → frame cycle (deadwood parked by dropping its body, re-rack by teleporting pins through the backend), lost-ball recovery, contact-driven sounds. |
 | `CoolBowlingWorld` | ARKit planes as Jolt environment slabs, minus those intersecting the alley's keep-out box (a separating-axis test), plus the game's side channel (body state, teleports). |
 | `CoolBowlingSpatialSession` | Hand tracking (predicted poses), plane detection (floor-classified planes preferred), head tracking. |
 | `CoolBowlingAudio` | Synthesized thud, pin clack and strike fanfare in an AVAudioSourceNode mixer. |
 
-The pin mesh is revolved from a profile at runtime (the engine's file
-loaders only take cooked `.untold` assets); `Scripts/make_bowling_textures.swift`
-paints the ball, pin and lane textures. Everything is deterministic, no assets
-are hand-made.
+The pins, the ball, the pinsetter cover and the ball-return unit are cooked
+`.untold` models under `Sources/CoolBowling/Resources/Models` (the ball
+carries its own baked textures); `Scripts/make_bowling_textures.swift` paints
+the lane texture, which is the one thing still generated.
 
 ## Run it
 

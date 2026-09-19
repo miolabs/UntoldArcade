@@ -12,6 +12,7 @@
 
 import Foundation
 import simd
+import SwiftUI
 import UntoldEngine
 
 /// Node creation is main-actor (the DSL requirement); runtime mutation uses
@@ -43,9 +44,22 @@ public final class CoolBasketScene: @unchecked Sendable {
     /// fatter than the visual tube so bounces feel solid.
     static let rimColliderRadius: Float = 0.032
     static let rimSegmentCount = 16
-    static let boardWidth: Float = 0.9
-    static let boardHeight: Float = 0.6
-    static let boardThickness: Float = 0.03
+    /// The hoop model's proportions (a regulation outdoor unit with its
+    /// telescoping post lowered to the 2 m rim): glass, post and base as
+    /// measured in the asset, so the invisible colliders sit on the model.
+    static let boardWidth: Float = 1.78
+    static let boardHeight: Float = 1.02
+    static let boardThickness: Float = 0.04
+    /// Rim centre to the glass face.
+    static let boardSetback: Float = 0.38
+    /// The glass's bottom edge hangs this far below the rim.
+    static let boardBottomBelowRim: Float = 0.13
+    /// The post stands this far behind the glass.
+    static let poleSetback: Float = 0.91
+    static let poleHalfWidth: Float = 0.115
+    static let poleHeight: Float = 1.83
+    static let baseHalfWidth: Float = 0.23
+    static let baseHeight: Float = 0.46
     /// Basket trigger: a box this far under the rim plane, this big. The box
     /// alone cannot tell a made shot from a ball drifting in from the side
     /// or below — the game pairs it with a downward ring-crossing test.
@@ -64,9 +78,13 @@ public final class CoolBasketScene: @unchecked Sendable {
         let forward: SIMD3<Float> // toward the player
         let orientation: simd_quatf
         let rimCenter: SIMD3<Float>
+        /// Where the hoop model's origin goes: on the floor under the glass,
+        /// centred; its local +z faces the player.
+        let modelOrigin: SIMD3<Float>
         let boardCenter: SIMD3<Float>
         let poleCenter: SIMD3<Float>
         let poleHeight: Float
+        let baseCenter: SIMD3<Float>
 
         init(position: SIMD3<Float>, facing: SIMD3<Float>) {
             forward = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
@@ -76,22 +94,17 @@ public final class CoolBasketScene: @unchecked Sendable {
             rimCenter = SIMD3<Float>(
                 position.x, position.y + CoolBasketScene.rimHeight, position.z
             )
-            // Board hangs behind the rim, bottom edge just under rim level.
-            let boardFront = rimCenter
-                - forward * (CoolBasketScene.rimRadius + 0.06)
-            let boardCenterY = position.y + CoolBasketScene.rimHeight - 0.15
-                + CoolBasketScene.boardHeight * 0.5
-            boardCenter = SIMD3<Float>(
-                boardFront.x - forward.x * CoolBasketScene.boardThickness * 0.5,
-                boardCenterY,
-                boardFront.z - forward.z * CoolBasketScene.boardThickness * 0.5
-            )
-            // Pole runs from the floor up to the board, just behind it.
-            poleHeight = boardCenterY - position.y
-            let poleXZ = boardCenter - forward * (CoolBasketScene.boardThickness * 0.5 + 0.05)
-            poleCenter = SIMD3<Float>(
-                poleXZ.x, position.y + poleHeight * 0.5, poleXZ.z
-            )
+            modelOrigin = position - forward * CoolBasketScene.boardSetback
+            // The glass hangs behind the rim, its bottom edge just under rim
+            // level; the collider sits just behind its face.
+            boardCenter = modelOrigin
+                - forward * (CoolBasketScene.boardThickness * 0.5)
+                + SIMD3<Float>(0, CoolBasketScene.rimHeight - CoolBasketScene.boardBottomBelowRim + CoolBasketScene.boardHeight * 0.5, 0)
+            // The post and its padded base stand behind the glass.
+            poleHeight = CoolBasketScene.poleHeight
+            let postFoot = modelOrigin - forward * CoolBasketScene.poleSetback
+            poleCenter = postFoot + SIMD3<Float>(0, poleHeight * 0.5, 0)
+            baseCenter = postFoot + SIMD3<Float>(0, CoolBasketScene.baseHeight * 0.5, 0)
         }
 
         /// World position of rim segment `index` (of `rimSegmentCount`), and
@@ -126,33 +139,17 @@ public final class CoolBasketScene: @unchecked Sendable {
     /// Creates a ball at `position` as a dynamic body, at rest.
     @MainActor @discardableResult
     public func spawnBall(at position: SIMD3<Float>) -> EntityID {
-        let node = SphereNode(
-            radius: Self.ballRadius,
-            segments: [32, 24],
-            name: "CoolBasket.ball\(balls.count)"
-        )
-        .baseColor(1.0, 1.0, 1.0)
-        .roughness(0.7)
-        .metallic(0.0)
-        let entity = node.entityID
-
-        // Classic orange-with-black-channels artwork, equirectangular to
-        // match the sphere primitive's UVs. The engine resolves texture paths
-        // by name through its asset search paths, so point them at this
-        // package's resource bundle first — the demo loads no other engine
-        // assets, so claiming the base path is safe.
+        // A size-7 basketball model, seams and pebbling baked into its
+        // textures, origin at the ball's centre. The engine resolves assets
+        // through its search paths, so point them at this package's resource
+        // bundle first — the demo loads no other engine assets, so claiming
+        // the base path is safe.
         if let resourceRoot = Bundle.module.resourceURL {
             assetBasePath = resourceRoot
         }
-        if let textureURL = Bundle.module.url(
-            forResource: "basketball_baseColor", withExtension: "png"
-        ) {
-            updateMaterialTexture(
-                entityId: entity, textureType: .baseColor, path: textureURL
-            )
-        } else {
-            print("CoolBasket: ball texture missing from bundle — plain white ball")
-        }
+        let entity = createEntity()
+        setEntityName(entityId: entity, name: "CoolBasket.ball\(balls.count)")
+        setEntityMesh(entityId: entity, filename: "basketball", withExtension: "untold")
 
         translateTo(entityId: entity, position: position)
         balls.append(entity)
@@ -239,7 +236,7 @@ public final class CoolBasketScene: @unchecked Sendable {
         removeHoopGhost()
         var entities: [EntityID] = []
         for (name, scale) in [
-            ("CoolBasket.ghostPole", SIMD3<Float>(0.08, Self.rimHeight + 0.15, 0.08)),
+            ("CoolBasket.ghostPole", SIMD3<Float>(Self.poleHalfWidth * 2, Self.poleHeight, Self.poleHalfWidth * 2)),
             ("CoolBasket.ghostBoard", SIMD3<Float>(Self.boardWidth, Self.boardHeight, Self.boardThickness)),
             ("CoolBasket.ghostRim", SIMD3<Float>(Self.rimRadius * 2.2, Self.rimTubeRadius * 2, Self.rimRadius * 2.2)),
         ] {
@@ -281,99 +278,47 @@ public final class CoolBasketScene: @unchecked Sendable {
     // MARK: - Hoop
 
     /// Builds the hoop with its rim center above `position` (a floor point),
-    /// board facing `facing` (horizontal, toward the player). Pole and
-    /// backboard are static boxes; the rim is a ring of small static sphere
-    /// colliders (smooth ball-rim bounces with plain sphere-sphere math);
-    /// a trigger volume under the rim detects made baskets.
+    /// facing `facing` (horizontal, toward the player). The model — post,
+    /// arms, glass, rim and net — is one asset; what the ball hits is
+    /// invisible and analytic: boxes for the post, base and glass, a ring of
+    /// small spheres for the rim (smooth ball-rim bounces with plain
+    /// sphere-sphere math), and a trigger volume under the rim for made
+    /// baskets.
     @MainActor public func buildHoop(at position: SIMD3<Float>, facing: SIMD3<Float>) {
         clearHoop()
         let layout = HoopLayout(position: position, facing: facing)
         rimCenter = layout.rimCenter
         hoopForward = layout.forward
 
-        func staticBox(
-            node: PrimitiveNode,
-            at boxPosition: SIMD3<Float>,
-            halfExtents: SIMD3<Float>,
-            restitution: Float
-        ) {
-            let entity = node.entityID
-            translateTo(entityId: entity, position: boxPosition)
-            rotateTo(entityId: entity, rotation: layout.orientation)
-            registerComponent(entityId: entity, componentType: ColliderComponent.self)
-            registerComponent(entityId: entity, componentType: RigidBodyComponent.self)
-            if let collider = scene.get(component: ColliderComponent.self, for: entity) {
-                collider.shape = .box(halfExtents: halfExtents)
-                collider.restitution = restitution
-                collider.friction = 0.3
-            }
-            if let body = scene.get(component: RigidBodyComponent.self, for: entity) {
-                body.motionType = .static
-            }
-            hoopPartEntities.append(entity)
+        let model = createEntity()
+        setEntityName(entityId: model, name: "CoolBasket.hoop")
+        setEntityMesh(entityId: model, filename: "hoop", withExtension: "untold")
+        translateTo(entityId: model, position: layout.modelOrigin)
+        rotateTo(entityId: model, rotation: layout.orientation)
+        hoopPartEntities.append(model)
+        // The model's parts are child entities named after the Blender
+        // objects, and their meshes stream in after the load. The exporter
+        // writes the glass opaque: remember the glass parts and make them
+        // see-through once they have a mesh (`tintHoopGlassIfNeeded`).
+        hoopGlassEntities = descendants(of: model).filter {
+            getEntityName(entityId: $0).contains("tempered glass")
         }
 
-        // Pole.
-        let pole = CubeNode(size: 1.0, name: "CoolBasket.pole")
-            .baseColor(0.25, 0.26, 0.30)
-            .roughness(0.5)
-            .scaleTo(x: 0.08, y: layout.poleHeight, z: 0.08)
-        staticBox(
-            node: pole,
-            at: layout.poleCenter,
-            halfExtents: SIMD3<Float>(0.04, layout.poleHeight * 0.5, 0.04),
-            restitution: 0.4
-        )
-
-        // Backboard — the bank shot's best friend.
-        let board = CubeNode(size: 1.0, name: "CoolBasket.board")
-            .baseColor(1.0, 1.0, 1.0)
-            .roughness(0.35)
-            .scaleTo(x: Self.boardWidth, y: Self.boardHeight, z: Self.boardThickness)
-        if let textureURL = Bundle.module.url(
-            forResource: "backboard_baseColor", withExtension: "png"
-        ) {
-            updateMaterialTexture(
-                entityId: board.entityID, textureType: .baseColor, path: textureURL
-            )
+        addStaticCollider(name: "CoolBasket.poleCollider", at: layout.poleCenter, orientation: layout.orientation, restitution: 0.4) {
+            $0.shape = .box(halfExtents: SIMD3<Float>(Self.poleHalfWidth, layout.poleHeight * 0.5, Self.poleHalfWidth))
         }
-        staticBox(
-            node: board,
-            at: layout.boardCenter,
-            halfExtents: SIMD3<Float>(
-                Self.boardWidth * 0.5, Self.boardHeight * 0.5, Self.boardThickness * 0.5
-            ),
-            restitution: 0.72
-        )
-
-        // Rim: visual segments (a 16-gon of small boxes reads as a torus at
-        // this size) carrying the sphere colliders.
-        let segmentLength = 2 * Float.pi * Self.rimRadius / Float(Self.rimSegmentCount) * 1.12
+        addStaticCollider(name: "CoolBasket.baseCollider", at: layout.baseCenter, orientation: layout.orientation, restitution: 0.3) {
+            $0.shape = .box(halfExtents: SIMD3<Float>(Self.baseHalfWidth, Self.baseHeight * 0.5, Self.baseHalfWidth))
+        }
+        // The glass — the bank shot's best friend.
+        addStaticCollider(name: "CoolBasket.boardCollider", at: layout.boardCenter, orientation: layout.orientation, restitution: 0.72) {
+            $0.shape = .box(halfExtents: SIMD3<Float>(Self.boardWidth * 0.5, Self.boardHeight * 0.5, Self.boardThickness * 0.5))
+        }
         for index in 0 ..< Self.rimSegmentCount {
             let segment = layout.rimSegment(index)
-            let node = CubeNode(size: 1.0, name: "CoolBasket.rim\(index)")
-                .baseColor(0.90, 0.28, 0.08)
-                .roughness(0.35)
-                .metallic(0.4)
-                .scaleTo(
-                    x: segmentLength,
-                    y: Self.rimTubeRadius * 2,
-                    z: Self.rimTubeRadius * 2
-                )
-            let entity = node.entityID
-            translateTo(entityId: entity, position: segment.position)
-            rotateTo(entityId: entity, rotation: segment.orientation)
-            registerComponent(entityId: entity, componentType: ColliderComponent.self)
-            registerComponent(entityId: entity, componentType: RigidBodyComponent.self)
-            if let collider = scene.get(component: ColliderComponent.self, for: entity) {
-                collider.shape = .sphere(radius: Self.rimColliderRadius)
-                collider.restitution = 0.6
-                collider.friction = 0.3
+            addStaticCollider(name: "CoolBasket.rim\(index)", at: segment.position, orientation: segment.orientation, restitution: 0.6) {
+                $0.shape = .sphere(radius: Self.rimColliderRadius)
             }
-            if let body = scene.get(component: RigidBodyComponent.self, for: entity) {
-                body.motionType = .static
-            }
-            hoopPartEntities.append(entity)
         }
 
         // Basket trigger: a box under the rim mouth. It is open on every
@@ -404,9 +349,55 @@ public final class CoolBasketScene: @unchecked Sendable {
             destroyEntity(entityId: entity)
         }
         hoopPartEntities.removeAll()
+        hoopGlassEntities.removeAll()
         basketTriggerEntity = .invalid
         rimCenter = nil
         hoopForward = nil
+    }
+
+    /// The glass parts of the hoop model still waiting for their mesh.
+    private var hoopGlassEntities: [EntityID] = []
+
+    /// Makes the backboard glass see-through as soon as its mesh has
+    /// streamed in (an alpha below 1 switches the material to blend). Cheap
+    /// once done; the game calls it every frame.
+    public func tintHoopGlassIfNeeded() {
+        guard !hoopGlassEntities.isEmpty else { return }
+        hoopGlassEntities.removeAll { entity in
+            guard let render = scene.get(component: RenderComponent.self, for: entity), !render.mesh.isEmpty else { return false }
+            for index in render.mesh.indices {
+                updateMaterialColor(entityId: entity, color: Color(red: 0.88, green: 0.96, blue: 1.0, opacity: 0.3), meshIndex: index)
+            }
+            return true
+        }
+    }
+
+    private func descendants(of entity: EntityID) -> [EntityID] {
+        let children = getEntityChildren(parentId: entity)
+        return children + children.flatMap { descendants(of: $0) }
+    }
+
+    /// An invisible static body owned by the hoop: an entity with no mesh,
+    /// just the collider `configure` sets up.
+    private func addStaticCollider(
+        name: String, at position: SIMD3<Float>, orientation: simd_quatf,
+        restitution: Float, friction: Float = 0.3, configure: (ColliderComponent) -> Void
+    ) {
+        let entity = createEntity()
+        setEntityName(entityId: entity, name: name)
+        translateTo(entityId: entity, position: position)
+        rotateTo(entityId: entity, rotation: orientation)
+        registerComponent(entityId: entity, componentType: ColliderComponent.self)
+        registerComponent(entityId: entity, componentType: RigidBodyComponent.self)
+        if let collider = scene.get(component: ColliderComponent.self, for: entity) {
+            configure(collider)
+            collider.restitution = restitution
+            collider.friction = friction
+        }
+        if let body = scene.get(component: RigidBodyComponent.self, for: entity) {
+            body.motionType = .static
+        }
+        hoopPartEntities.append(entity)
     }
 
     // MARK: - Body proxies

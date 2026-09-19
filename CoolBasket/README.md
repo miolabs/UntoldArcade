@@ -17,7 +17,7 @@ score.
 |---|---|
 | `CoolBasketPhysicsBackend` | A complete pure-Swift `PhysicsBackend`: dynamic spheres vs. real-world planes, static box and sphere colliders, and kinematic hand bodies; restitution/friction/rolling; fixed-capacity contact & trigger buffers drained through the engine's `PhysicsEventSink`. |
 | `CoolBasketPlugin` | `PhysicsBackendPlugin` manifest + `registerCoolBasketPhysics()` — installed before renderer creation, driven by the engine's `PhysicsCoordinator`, zero engine changes. |
-| `CoolBasketScene` | Ball, hoop (pole + backboard as static boxes, the rim as a ring of static **sphere** colliders) and an invisible under-rim **trigger volume**, all expressed with the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. |
+| `CoolBasketScene` | The ball and the hoop are artist models (`Resources/Models`, cooked to `.untold` from Blender: a size-7 ball with baked seam and pebble textures, a regulation glass-and-post unit with its net, lowered to a 2 m rim). What the ball hits is analytic and invisible: boxes for the post, base and glass, a ring of static **sphere** colliders for the rim, and an under-rim **trigger volume** — all in the engine-owned `RigidBodyComponent`/`ColliderComponent` vocabulary. Grabbing removes the ball's body components, releasing re-adds them. |
 | `CoolBasketGame` | Gaze-driven hoop placement with a ghost preview. Any number of equal balls: grab the nearest via pinch, throw with the tracked hand velocity (grabbing removes the body, releasing re-adds it through the component seam), lost balls come back. Score via `PhysicsEvents.onTrigger`, counting only a downward pass through the rim. |
 | `CoolBasketSpatialSession` | visionOS ARKit adapter: hand tracking (predicted poses), plane detection feeding the backend's world planes, and head tracking for placement. The real floor height is measured from the detected planes; the simulator falls back to a flat floor. |
 
@@ -57,5 +57,5 @@ ball-against-ball contact, so balls fall through each other; Jolt piles them.
 
 ## Coming next
 
-An XPBD net hanging from the rim, reusing the backend's low-restitution
+A simulated (XPBD) net — the model's net is a static mesh for now — reusing the backend's low-restitution
 "catch" planes and `nudgeBody` reaction channel.

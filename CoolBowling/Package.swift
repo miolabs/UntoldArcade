@@ -26,8 +26,10 @@ let package = Package(
                 .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
             resources: [
-                .copy("Resources/bowlingball_baseColor.png"),
-                .copy("Resources/pin_baseColor.png"),
+                // The engine resolves `Models/<name>/<name>.untold` (and a
+                // model's `Textures/`) under its asset base path, so the
+                // folder is copied as-is.
+                .copy("Resources/Models"),
                 .copy("Resources/lane_baseColor.png"),
             ],
             swiftSettings: [
