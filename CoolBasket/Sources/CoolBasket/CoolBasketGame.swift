@@ -51,6 +51,9 @@ public final class CoolBasketGame: @unchecked Sendable {
     private var basketSubscription: EventSubscription?
     private var contactSubscription: EventSubscription?
     private var lastContactImpulse: Float = 0
+    /// The simulated net while a hoop stands on the Jolt backend (frame
+    /// thread; see `updateNet`).
+    private var net: CoolBasketNet?
 
     // Ring-crossing state per ball (guarded by `lock`: written by the
     // per-frame update, read by the trigger handler).
@@ -192,11 +195,21 @@ public final class CoolBasketGame: @unchecked Sendable {
 
         // Test hooks: `-autoPlaceHoop` confirms placement after a short beat,
         // so automated simulator runs reach the playing phase unattended;
-        // `-autoDropBalls` then drops five balls in front of the hoop.
+        // `-autoDropBalls` then drops five balls in front of the hoop,
+        // `-autoDropThroughRim` one through the rim, `-autoPlaceDistance`
+        // sets how far ahead the hoop goes.
         if ProcessInfo.processInfo.arguments.contains("-autoPlaceHoop") {
             lock.withLock {
                 autoPlaceDeadline = ProcessInfo.processInfo.systemUptime + 1.5
             }
+        }
+        // `-autoPlaceDistance <m>` puts the hoop that far ahead instead of
+        // 2.6 m (the simulator's fixed view sees the rim only from afar).
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-autoPlaceDistance"), index + 1 < arguments.count,
+           let distance = Float(arguments[index + 1]), distance > 0
+        {
+            lock.withLock { ghostTarget.z = -distance }
         }
     }
 
@@ -267,6 +280,17 @@ public final class CoolBasketGame: @unchecked Sendable {
         pushWorldPlanes()
         coolBasketLog.log("hoop placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
 
+        // `-autoDropThroughRim` drops one ball from above the rim centre —
+        // a swish, for watching the net — once the model has streamed in.
+        if ProcessInfo.processInfo.arguments.contains("-autoDropThroughRim"), let rimCenter = scene.rimCenter {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2.5))
+                let stillWanted = self.lock.withLock { self.phase == .playing && generation == self.placementGeneration }
+                guard stillWanted else { return }
+                self.scene.spawnBall(at: rimCenter + SIMD3<Float>(0, 0.6, 0))
+                coolBasketLog.log("dropped a ball through the rim")
+            }
+        }
         if ProcessInfo.processInfo.arguments.contains("-autoDropBalls"),
            let rimCenter = scene.rimCenter, let forward = scene.hoopForward
         {
@@ -373,6 +397,10 @@ public final class CoolBasketGame: @unchecked Sendable {
             throughRingAt.removeAll()
             previousCenters.removeAll()
         }
+        // The Jolt world outlives the space; a net left in it would go on
+        // catching balls, invisibly, next time.
+        net?.remove()
+        net = nil
         cancelGrab()
         audio.stop()
         #if os(visionOS)
@@ -484,6 +512,7 @@ public final class CoolBasketGame: @unchecked Sendable {
 
     public func update(deltaTime: Float) {
         scene.tintHoopGlassIfNeeded()
+        updateNet()
         let now = ProcessInfo.processInfo.systemUptime
         if currentPhase == .placingHoop {
             updatePlacement(now: now)
@@ -499,13 +528,38 @@ public final class CoolBasketGame: @unchecked Sendable {
         heartbeatAccumulator += deltaTime
         if heartbeatAccumulator > 1.0 {
             heartbeatAccumulator = 0
-            if let first = scene.balls.first, let state = backendStore.value?.bodyState(for: first) {
-                coolBasketLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) balls=\(self.scene.ballCount)")
+            for ball in scene.balls.suffix(2) {
+                guard let state = backendStore.value?.bodyState(for: ball) else { continue }
+                coolBasketLog.log("ball \(ball) y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) balls=\(self.scene.ballCount)")
+            }
+            if let net {
+                coolBasketLog.log("net peak displacement \(net.takePeakDisplacement(), format: .fixed(precision: 3)) m, driving \(net.boundMeshCount) meshes")
             }
         }
 
         recoverLostBalls()
     }
+
+    /// Keeps the simulated net in step with the hoop: built (as a Jolt soft
+    /// body) once a hoop stands on the Jolt backend, driven every frame,
+    /// removed when the hoop goes. On the built-in backend the model's net
+    /// stays static.
+    private func updateNet() {
+        guard let jolt = backendStore.value as? CoolBasketJoltSimulation else { return }
+        if let origin = scene.hoopModelOrigin, let orientation = scene.hoopModelOrientation {
+            if net == nil {
+                net = CoolBasketNet(backend: jolt.backend, origin: origin, orientation: orientation)
+                coolBasketLog.log("net: \(self.net == nil ? "refused by the world" : "simulating", privacy: .public)")
+            }
+            net?.update(partEntities: scene.netPartEntities)
+        } else if let standing = net {
+            standing.remove()
+            net = nil
+        }
+    }
+
+    /// Whether the net is simulating right now.
+    public var isNetSimulated: Bool { net != nil }
 
     /// Records a downward crossing of the rim plane inside the ring for each
     /// ball (arms its basket for `basketWindow`), and disarms when a ball

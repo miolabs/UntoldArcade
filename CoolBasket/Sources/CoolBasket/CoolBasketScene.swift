@@ -30,6 +30,13 @@ public final class CoolBasketScene: @unchecked Sendable {
     public private(set) var rimCenter: SIMD3<Float>?
     /// Horizontal direction from the hoop toward the player while it stands.
     public private(set) var hoopForward: SIMD3<Float>?
+    /// The hoop model's pose while it stands (its origin is on the floor
+    /// under the glass; local +z faces the player) — the frame the net's
+    /// lattice lives in.
+    public private(set) var hoopModelOrigin: SIMD3<Float>?
+    public private(set) var hoopModelOrientation: simd_quatf?
+    /// The model's net parts the simulated net drives (see `CoolBasketNet`).
+    public private(set) var netPartEntities: [EntityID] = []
 
     /// Size-7 basketball: radius ~0.12 m, mass ~0.62 kg — and bouncy.
     public static let ballRadius: Float = 0.121
@@ -290,6 +297,8 @@ public final class CoolBasketScene: @unchecked Sendable {
         let layout = HoopLayout(position: position, facing: facing)
         rimCenter = layout.rimCenter
         hoopForward = layout.forward
+        hoopModelOrigin = layout.modelOrigin
+        hoopModelOrientation = layout.orientation
 
         let model = createEntity()
         setEntityName(entityId: model, name: "CoolBasket.hoop")
@@ -301,8 +310,13 @@ public final class CoolBasketScene: @unchecked Sendable {
         // objects, and their meshes stream in after the load. The exporter
         // writes the glass opaque: remember the glass parts and make them
         // see-through once they have a mesh (`tintHoopGlassIfNeeded`).
-        hoopGlassEntities = descendants(of: model).filter {
+        let parts = descendants(of: model)
+        hoopGlassEntities = parts.filter {
             getEntityName(entityId: $0).contains("tempered glass")
+        }
+        netPartEntities = parts.filter { entity in
+            let name = getEntityName(entityId: entity)
+            return CoolBasketNet.drivenPartNames.contains { name.contains($0) }
         }
 
         addStaticCollider(name: "CoolBasket.poleCollider", at: layout.poleCenter, orientation: layout.orientation, restitution: 0.4) {
@@ -351,9 +365,12 @@ public final class CoolBasketScene: @unchecked Sendable {
         }
         hoopPartEntities.removeAll()
         hoopGlassEntities.removeAll()
+        netPartEntities.removeAll()
         basketTriggerEntity = .invalid
         rimCenter = nil
         hoopForward = nil
+        hoopModelOrigin = nil
+        hoopModelOrientation = nil
     }
 
     /// The glass parts of the hoop model still waiting for their mesh.
