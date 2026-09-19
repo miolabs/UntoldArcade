@@ -1,5 +1,6 @@
 import RealityKit
 import SwiftUI
+import UIKit
 
 /// Guided Object Capture flow: walk around the object, reconstruct on
 /// device, cook to `.untold`, and land the result in the scan library.
@@ -161,6 +162,17 @@ final class ScanFlowModel: ObservableObject {
             return
         }
 
+        // The GPU refuses work from a process it considers backgrounded
+        // (kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted),
+        // and a capture session created in that window never recovers. Wait
+        // until the app is genuinely foreground-active before touching it.
+        await waitUntilApplicationActive()
+
+        // Only one Metal render loop while scanning: Object Capture owns the
+        // camera and the GPU; the engine's off-screen MTKView would just
+        // compete with it.
+        SharedRenderer.pauseRendering()
+
         do {
             try FileManager.default.createDirectory(
                 at: imagesDirectory, withIntermediateDirectories: true
@@ -182,12 +194,14 @@ final class ScanFlowModel: ObservableObject {
 
         // Track the session until capture finishes or fails.
         for await state in session.stateUpdates {
+            print("CoolScan capture state: \(state)")
             switch state {
             case .completed:
                 await reconstruct()
                 return
             case let .failed(error):
                 phase = .failed("Capture failed: \(error.localizedDescription)")
+                cleanUp()
                 return
             default:
                 continue
@@ -196,8 +210,22 @@ final class ScanFlowModel: ObservableObject {
     }
 
     func beginDetecting() {
-        if session?.startDetecting() != true {
-            phase = .failed("Could not start object detection.")
+        guard let session else { return }
+        if !session.startDetecting() {
+            phase = .failed(
+                "Could not start object detection (session state: "
+                    + "\(session.state)). Make sure the app is in the "
+                    + "foreground and the device is unlocked, then try again."
+            )
+        }
+    }
+
+    private func waitUntilApplicationActive() async {
+        guard UIApplication.shared.applicationState != .active else { return }
+        for await _ in NotificationCenter.default.notifications(
+            named: UIApplication.didBecomeActiveNotification
+        ) {
+            if UIApplication.shared.applicationState == .active { break }
         }
     }
 
@@ -267,6 +295,7 @@ final class ScanFlowModel: ObservableObject {
     }
 
     private func cleanUp() {
+        SharedRenderer.resumeRendering()
         try? FileManager.default.removeItem(at: workDirectory)
     }
 }
