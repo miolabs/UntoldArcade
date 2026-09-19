@@ -1,19 +1,19 @@
 //
-//  CoolBallSpatialSession.swift
-//  CoolBall
+//  CoolBasketSpatialSession.swift
+//  CoolBasket
 //
 
 import Foundation
 import simd
 
-public enum CoolBallHandSide: CaseIterable, Sendable {
+public enum CoolBasketHandSide: CaseIterable, Sendable {
     case left
     case right
 }
 
 /// The joints the basketball demo needs: palm for the hand collider, thumb
 /// and index tips for the pinch grab.
-public struct CoolBallHandPose: Sendable {
+public struct CoolBasketHandPose: Sendable {
     public var isTracked: Bool
     public var palm: SIMD3<Float>
     public var thumbTip: SIMD3<Float>
@@ -34,16 +34,16 @@ import ARKit
 /// visionOS adapter running the demo's own ARKitSession — hand tracking for
 /// grab/swat input and plane detection for real-surface colliders. Fresh
 /// provider instances on every start: ARKit providers are one-shot.
-public final class CoolBallSpatialSession: @unchecked Sendable {
+public final class CoolBasketSpatialSession: @unchecked Sendable {
     private let session = ARKitSession()
     private let lock = NSLock()
     private var updateTask: Task<Void, Never>?
-    private var poses: [CoolBallHandSide: CoolBallHandPose] = [:]
-    private var planesByID: [UUID: CoolBallWorldPlane] = [:]
+    private var poses: [CoolBasketHandSide: CoolBasketHandPose] = [:]
+    private var planesByID: [UUID: CoolBasketWorldPlane] = [:]
     private var handTrackingProvider: HandTrackingProvider?
     private var worldTracking: WorldTrackingProvider?
     /// Called with the full plane set on every plane change (any thread).
-    public var onPlanesChanged: (@Sendable ([CoolBallWorldPlane]) -> Void)?
+    public var onPlanesChanged: (@Sendable ([CoolBasketWorldPlane]) -> Void)?
 
     public init() {}
 
@@ -82,7 +82,7 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
                 do {
                     try await session.run(providers)
                 } catch {
-                    print("CoolBall: ARKit session failed to run — \(error)")
+                    print("CoolBasket: ARKit session failed to run — \(error)")
                     self.clearTask()
                     return
                 }
@@ -127,9 +127,9 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
     /// the latest streamed pose. Prediction keeps the grab glued to a fast
     /// hand instead of trailing the anchor stream.
     public func predictedHandPose(
-        _ side: CoolBallHandSide,
+        _ side: CoolBasketHandSide,
         at timestamp: TimeInterval
-    ) -> CoolBallHandPose? {
+    ) -> CoolBasketHandPose? {
         let provider = lock.withLock { handTrackingProvider }
         if let provider, provider.state == .running {
             let anchors = provider.handAnchors(at: timestamp)
@@ -150,7 +150,7 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
         )?.originFromAnchorTransform
     }
 
-    public var detectedPlanes: [CoolBallWorldPlane] {
+    public var detectedPlanes: [CoolBasketWorldPlane] {
         lock.withLock { Array(planesByID.values) }
     }
 
@@ -158,7 +158,7 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
 
     private func handle(handUpdate update: AnchorUpdate<HandAnchor>) {
         let anchor = update.anchor
-        let side: CoolBallHandSide = anchor.chirality == .left ? .left : .right
+        let side: CoolBasketHandSide = anchor.chirality == .left ? .left : .right
         guard update.event != .removed else {
             lock.withLock { _ = poses.removeValue(forKey: side) }
             return
@@ -170,7 +170,7 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
         lock.withLock { poses[side] = pose }
     }
 
-    private static func makePose(from anchor: HandAnchor) -> CoolBallHandPose? {
+    private static func makePose(from anchor: HandAnchor) -> CoolBasketHandPose? {
         guard let skeleton = anchor.handSkeleton else { return nil }
         let originFromAnchor = anchor.originFromAnchorTransform
 
@@ -186,7 +186,7 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
 
         let wrist = world(.wrist)
         let knuckleCenter = (world(.indexFingerKnuckle) + world(.littleFingerKnuckle)) * 0.5
-        return CoolBallHandPose(
+        return CoolBasketHandPose(
             isTracked: anchor.isTracked,
             palm: (wrist + knuckleCenter) * 0.5,
             thumbTip: world(.thumbTip),
@@ -214,7 +214,7 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
     /// every plane sideways and the ball fell through the world; the first
     /// session's floating ball was the unmeasured floor offset plus a chair
     /// seat, not these axes.)
-    private static func makePlane(from anchor: PlaneAnchor) -> CoolBallWorldPlane {
+    private static func makePlane(from anchor: PlaneAnchor) -> CoolBasketWorldPlane {
         let extent = anchor.geometry.extent
         let transform = anchor.originFromAnchorTransform * extent.anchorFromExtentTransform
         let center = SIMD3<Float>(
@@ -229,7 +229,7 @@ public final class CoolBallSpatialSession: @unchecked Sendable {
         let normal = SIMD3<Float>(
             transform.columns.2.x, transform.columns.2.y, transform.columns.2.z
         )
-        return CoolBallWorldPlane(
+        return CoolBasketWorldPlane(
             id: anchor.id,
             center: center,
             normal: simd_normalize(normal),

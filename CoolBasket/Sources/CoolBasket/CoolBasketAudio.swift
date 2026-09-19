@@ -1,6 +1,6 @@
 //
-//  CoolBallAudio.swift
-//  CoolBall
+//  CoolBasketAudio.swift
+//  CoolBasket
 //
 //  Ball sound design with zero asset files: the bounce thump and the basket
 //  celebration are synthesized at startup and mixed in a single
@@ -16,7 +16,7 @@ import AVFAudio
 import Foundation
 import os
 
-public final class CoolBallAudio: @unchecked Sendable {
+public final class CoolBasketAudio: @unchecked Sendable {
     private struct OneShot {
         var bank: Int
         var position: Int = 0
@@ -28,7 +28,7 @@ public final class CoolBallAudio: @unchecked Sendable {
         static let score = 1
     }
 
-    private let queue = DispatchQueue(label: "com.miolabs.coolball.audio")
+    private let queue = DispatchQueue(label: "com.miolabs.coolbasket.audio")
     private let engine = AVAudioEngine()
     private var sourceNode: AVAudioSourceNode?
     private let sampleRate: Double = 48000
@@ -94,7 +94,7 @@ public final class CoolBallAudio: @unchecked Sendable {
                 oneShots.append(OneShot(bank: bank, volume: volume))
             }
         }
-        coolBallLog.debug("audio one-shot bank=\(bank) volume=\(volume, format: .fixed(precision: 2))")
+        coolBasketLog.debug("audio one-shot bank=\(bank) volume=\(volume, format: .fixed(precision: 2))")
     }
 
     // MARK: - Engine lifecycle (on `queue`)
@@ -150,9 +150,9 @@ public final class CoolBallAudio: @unchecked Sendable {
             started = true
             retryTimer?.cancel()
             retryTimer = nil
-            coolBallLog.log("audio engine running")
+            coolBasketLog.log("audio engine running")
         } catch {
-            coolBallLog.log("audio engine start failed (\(error, privacy: .public)) — retrying")
+            coolBasketLog.log("audio engine start failed (\(error, privacy: .public)) — retrying")
             started = false
             guard retryTimer == nil else { return }
             let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -182,7 +182,7 @@ public final class CoolBallAudio: @unchecked Sendable {
             guard let self, self.started else { return }
             let seen = self.stateLock.withLock { self.renderInvocations }
             if seen == self.watchdogLastSeen {
-                coolBallLog.log("audio IO stalled — restarting engine")
+                coolBasketLog.log("audio IO stalled — restarting engine")
                 self.engine.stop()
                 self.started = false
                 self.startEngineWithRetry()

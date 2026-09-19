@@ -1,6 +1,6 @@
 //
-//  CoolBallGame.swift
-//  CoolBall
+//  CoolBasketGame.swift
+//  CoolBasket
 //
 //  Frame-driven basketball logic. The hands are kinematic sphere bodies fed
 //  from hand tracking: they dribble and swat the ball through plain
@@ -16,11 +16,11 @@ import os
 import simd
 import UntoldEngine
 
-public final class CoolBallGame: @unchecked Sendable {
-    public let scene = CoolBallScene()
+public final class CoolBasketGame: @unchecked Sendable {
+    public let scene = CoolBasketScene()
     /// Synthesized bounce/score sounds (no asset files).
-    public let audio = CoolBallAudio()
-    private let backendStore = CoolBallLockedBox<CoolBallPhysicsBackend?>(nil)
+    public let audio = CoolBasketAudio()
+    private let backendStore = CoolBasketLockedBox<CoolBasketPhysicsBackend?>(nil)
 
     /// The demo starts by placing the hoop: a translucent ghost follows the
     /// player's gaze along the floor until they confirm (pinch, or the
@@ -33,14 +33,14 @@ public final class CoolBallGame: @unchecked Sendable {
     private let lock = NSLock()
     private var phase = Phase.placingHoop
     private var placePending = false
-    private var ghostTarget = SIMD3<Float>(0, CoolBallGame.floorY, -2.6)
+    private var ghostTarget = SIMD3<Float>(0, CoolBasketGame.floorY, -2.6)
     private var ghostFacing = SIMD3<Float>(0, 0, 1)
     private var autoPlaceDeadline: TimeInterval?
     /// Placement ignores pinches until this time (the pinch that pressed
     /// 'Move hoop' must not instantly re-place the hoop) and requires each
     /// confirming pinch to be freshly closed.
     private var placementPinchGraceUntil: TimeInterval = 0
-    private var pinchWasClosed: [CoolBallHandSide: Bool] = [:]
+    private var pinchWasClosed: [CoolBasketHandSide: Bool] = [:]
     /// Bumped by 'Move hoop': a court build scheduled before the move must
     /// not land after it.
     private var placementGeneration: UInt64 = 0
@@ -59,11 +59,11 @@ public final class CoolBallGame: @unchecked Sendable {
     private let basketWindow: TimeInterval = 0.6
 
     // Grab state (game thread only).
-    private var grabbingSide: CoolBallHandSide?
+    private var grabbingSide: CoolBasketHandSide?
     private var grabSamples: [(position: SIMD3<Float>, time: TimeInterval)] = []
     /// The hand that just threw is parked briefly so the ball, re-added at
     /// the pinch point, isn't shoved by that hand's own collider.
-    private var handParkedUntil: [CoolBallHandSide: TimeInterval] = [:]
+    private var handParkedUntil: [CoolBasketHandSide: TimeInterval] = [:]
     private let releaseCooldown: TimeInterval = 0.12
     /// Pinch tighter than this grabs; wider than this releases (hysteresis).
     private let pinchGrabDistance: Float = 0.025
@@ -83,20 +83,20 @@ public final class CoolBallGame: @unchecked Sendable {
     /// Ball spawns chest-high, drops in and settles on the floor — visibly in
     /// front of the player (and inside the simulator's fixed view).
     public var ballSpawnPosition = SIMD3<Float>(
-        0.0, CoolBallGame.floorY + 1.1, -1.6
+        0.0, CoolBasketGame.floorY + 1.1, -1.6
     )
     /// Ball this far below the floor is considered lost and respawns.
     private var respawnDepth: Float = 3.0
 
     #if os(visionOS)
-    public let session = CoolBallSpatialSession()
+    public let session = CoolBasketSpatialSession()
     #endif
 
-    private let detectedPlanes = CoolBallLockedBox<[CoolBallWorldPlane]>([])
+    private let detectedPlanes = CoolBasketLockedBox<[CoolBasketWorldPlane]>([])
     /// The real floor height, measured from detected upward planes below the
     /// head (the compile-time constant is only the pre-scan default: on
     /// device the world origin is NOT reliably on the real floor).
-    private let floorLevel = CoolBallLockedBox<Float>(CoolBallGame.floorY)
+    private let floorLevel = CoolBasketLockedBox<Float>(CoolBasketGame.floorY)
     private var heartbeatAccumulator: Float = 0
 
     public init() {}
@@ -106,7 +106,7 @@ public final class CoolBallGame: @unchecked Sendable {
     /// Installs the physics backend. Must run before the renderer is created.
     @discardableResult
     public func installPhysics() -> Bool {
-        guard let backend = registerCoolBallPhysics() else { return false }
+        guard let backend = registerCoolBasketPhysics() else { return false }
         backendStore.value = backend
         pushWorldPlanes()
         return true
@@ -234,7 +234,7 @@ public final class CoolBallGame: @unchecked Sendable {
         ballSpawnPosition = spawn
         scene.spawnBall(at: spawn)
         pushWorldPlanes()
-        coolBallLog.log("hoop placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
+        coolBasketLog.log("hoop placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
     }
 
     /// Rebuilds the backend's plane set: detected real surfaces plus a
@@ -350,8 +350,8 @@ public final class CoolBallGame: @unchecked Sendable {
                           Self.crossedRimDownward(
                               previous: previous, current: state.position,
                               rimCenter: rimCenter,
-                              rimRadius: CoolBallScene.rimRadius,
-                              ballRadius: CoolBallScene.ballRadius
+                              rimRadius: CoolBasketScene.rimRadius,
+                              ballRadius: CoolBasketScene.ballRadius
                           )
                 {
                     armed = true
@@ -363,7 +363,7 @@ public final class CoolBallGame: @unchecked Sendable {
             }
             guard let total else { return }
             self.audio.playScore()
-            print("CoolBall: 🏀 BASKET! score \(total)")
+            print("CoolBasket: 🏀 BASKET! score \(total)")
         }
         contactSubscription = PhysicsEvents.shared.onContact { [weak self] event in
             guard let self else { return }
@@ -418,7 +418,7 @@ public final class CoolBallGame: @unchecked Sendable {
         if heartbeatAccumulator > 1.0 {
             heartbeatAccumulator = 0
             if let state = backendStore.value?.bodyState(for: scene.ballEntity) {
-                coolBallLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3))")
+                coolBasketLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3))")
             }
         }
 
@@ -439,8 +439,8 @@ public final class CoolBallGame: @unchecked Sendable {
             if Self.crossedRimDownward(
                 previous: previous, current: state.position,
                 rimCenter: rimCenter,
-                rimRadius: CoolBallScene.rimRadius,
-                ballRadius: CoolBallScene.ballRadius
+                rimRadius: CoolBasketScene.rimRadius,
+                ballRadius: CoolBasketScene.ballRadius
             ) {
                 throughRingAt = now
             } else if previous.y < rimCenter.y, state.position.y >= rimCenter.y {
@@ -487,7 +487,7 @@ public final class CoolBallGame: @unchecked Sendable {
             // period: the pinch that pressed 'Move hoop' (or opened the
             // space) must not instantly re-place the hoop.
             let graceOver = lock.withLock { now >= placementPinchGraceUntil }
-            for side in CoolBallHandSide.allCases {
+            for side in CoolBasketHandSide.allCases {
                 guard let pose = session.predictedHandPose(side, at: now),
                       pose.isTracked
                 else {
@@ -536,7 +536,7 @@ public final class CoolBallGame: @unchecked Sendable {
 
     #if os(visionOS)
     private func updateHands(now: TimeInterval) {
-        for side in CoolBallHandSide.allCases {
+        for side in CoolBasketHandSide.allCases {
             let handEntity = side == .left
                 ? scene.leftHandEntity
                 : scene.rightHandEntity
@@ -562,7 +562,7 @@ public final class CoolBallGame: @unchecked Sendable {
         }
     }
 
-    private func updateGrab(side: CoolBallHandSide, pose: CoolBallHandPose, now: TimeInterval) {
+    private func updateGrab(side: CoolBasketHandSide, pose: CoolBasketHandPose, now: TimeInterval) {
         if grabbingSide == side {
             if pose.pinchDistance > pinchReleaseDistance {
                 releaseBall(at: pose.pinchPoint, now: now)
@@ -592,7 +592,7 @@ public final class CoolBallGame: @unchecked Sendable {
         }
         scene.detachBallBody()
         scene.moveBall(to: pose.pinchPoint)
-        print("CoolBall: ball grabbed (\(side == .left ? "left" : "right"))")
+        print("CoolBasket: ball grabbed (\(side == .left ? "left" : "right"))")
     }
 
     private func releaseBall(at position: SIMD3<Float>?, now: TimeInterval) {
@@ -615,7 +615,7 @@ public final class CoolBallGame: @unchecked Sendable {
         }
         scene.attachBallBody(velocity: velocity, at: releasePoint)
         print(String(
-            format: "CoolBall: thrown at %.1f m/s", simd_length(velocity)
+            format: "CoolBasket: thrown at %.1f m/s", simd_length(velocity)
         ))
     }
     #endif
@@ -633,7 +633,7 @@ public final class CoolBallGame: @unchecked Sendable {
               position.y < floorLevel.value - respawnDepth
         else { return }
         resetBall()
-        print("CoolBall: ball lost below the world — respawned")
+        print("CoolBasket: ball lost below the world — respawned")
     }
 
     // MARK: - Diagnostics
@@ -650,7 +650,7 @@ public final class CoolBallGame: @unchecked Sendable {
     /// Updates the floor estimate: the lowest upward-facing detected plane
     /// in a plausible band below the head — preferring planes ARKit itself
     /// classified as floor, so a low table or a stair landing can't win.
-    private func updateFloorLevel(planes: [CoolBallWorldPlane], headY: Float?) {
+    private func updateFloorLevel(planes: [CoolBasketWorldPlane], headY: Float?) {
         let reference = headY ?? 0
         let candidates = planes.filter { plane in
             plane.normal.y > 0.85
@@ -665,7 +665,7 @@ public final class CoolBallGame: @unchecked Sendable {
 }
 
 /// Minimal lock-guarded box for cross-thread handoff.
-final class CoolBallLockedBox<Value>: @unchecked Sendable {
+final class CoolBasketLockedBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: Value
 
@@ -687,4 +687,4 @@ final class CoolBallLockedBox<Value>: @unchecked Sendable {
     }
 }
 
-let coolBallLog = Logger(subsystem: "com.miolabs.coolball", category: "game")
+let coolBasketLog = Logger(subsystem: "com.miolabs.coolbasket", category: "game")

@@ -1,26 +1,26 @@
 //
-//  BallXRGame.swift  (visionOS)
-//  CoolBall
+//  BasketXRGame.swift  (visionOS)
+//  CoolBasket
 //
-//  Thin adapter between the XR render loop and the CoolBall package: the
+//  Thin adapter between the XR render loop and the CoolBasket package: the
 //  package owns the physics backend, the scene, the grab/throw logic and the
 //  score; this file forwards frames and publishes diagnostics for the
 //  control window.
 //
 
-import CoolBall
+import CoolBasket
 import Foundation
 import simd
 
-final class BallXRGame: @unchecked Sendable {
-    let game = CoolBallGame()
+final class BasketXRGame: @unchecked Sendable {
+    let game = CoolBasketGame()
     private var started = false
 
     func start() {
         guard !started else { return }
         started = true
         game.start()
-        BallXRHolder.shared.resetDiagnostics()
+        BasketXRHolder.shared.resetDiagnostics()
     }
 
     func shutdown() {
@@ -30,7 +30,7 @@ final class BallXRGame: @unchecked Sendable {
 
     /// Called by the engine once per frame on the XR render thread.
     func update(deltaTime: Float) {
-        let holder = BallXRHolder.shared
+        let holder = BasketXRHolder.shared
 
         if holder.takePlaceHoopRequest() {
             game.requestHoopPlacement()

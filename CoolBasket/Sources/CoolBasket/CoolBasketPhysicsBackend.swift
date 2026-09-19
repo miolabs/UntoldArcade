@@ -1,6 +1,6 @@
 //
-//  CoolBallPhysicsBackend.swift
-//  CoolBall
+//  CoolBasketPhysicsBackend.swift
+//  CoolBasket
 //
 //  A small pure-Swift physics backend for the basketball demo — the first
 //  real consumer of the engine's PhysicsBackend plugin seam. It simulates
@@ -21,7 +21,7 @@ import UntoldEngine
 /// A bounded real-world surface (from ARKit plane detection) the ball
 /// collides with. `center`/`normal` in world space; `extents` are the
 /// half-sizes along the plane's two tangent axes.
-public struct CoolBallWorldPlane: Sendable {
+public struct CoolBasketWorldPlane: Sendable {
     public let id: UUID
     public var center: SIMD3<Float>
     public var normal: SIMD3<Float>
@@ -60,8 +60,8 @@ public struct CoolBallWorldPlane: Sendable {
 
     /// An unbounded horizontal floor — the simulator fallback when no real
     /// surfaces are available.
-    public static func infiniteFloor(y: Float = 0.0) -> CoolBallWorldPlane {
-        CoolBallWorldPlane(
+    public static func infiniteFloor(y: Float = 0.0) -> CoolBasketWorldPlane {
+        CoolBasketWorldPlane(
             id: UUID(),
             center: SIMD3<Float>(0.0, y, 0.0),
             normal: SIMD3<Float>(0.0, 1.0, 0.0),
@@ -73,8 +73,8 @@ public struct CoolBallWorldPlane: Sendable {
     }
 }
 
-public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
-    public let id = CoolBallPluginContract.backendID
+public final class CoolBasketPhysicsBackend: PhysicsBackend, @unchecked Sendable {
+    public let id = CoolBasketPluginContract.backendID
     public let capabilities: PhysicsCapabilities = [.collisions, .triggers]
 
     /// Entity reported for contacts against real-world surfaces, which have no
@@ -116,7 +116,7 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
     private var kinematicBodies: [EntityID: Body] = [:]
     private var staticBodies: [EntityID: Body] = [:]
     private var triggers: [EntityID: TriggerVolume] = [:]
-    private var worldPlanes: [CoolBallWorldPlane] = []
+    private var worldPlanes: [CoolBasketWorldPlane] = []
 
     // Fixed-capacity event buffers, per the backend threading contract:
     // filled during step, handed over in drainEvents, overflow only counted.
@@ -138,7 +138,7 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
 
     /// Replaces the set of real-world surfaces. Called from the ARKit plane
     /// stream (any thread); the simulation reads a snapshot each substep.
-    public func setWorldPlanes(_ planes: [CoolBallWorldPlane]) {
+    public func setWorldPlanes(_ planes: [CoolBasketWorldPlane]) {
         lock.lock()
         worldPlanes = planes
         lock.unlock()
@@ -401,7 +401,7 @@ public final class CoolBallPhysicsBackend: PhysicsBackend, @unchecked Sendable {
     private func resolveSphereVsPlane(
         _ body: inout Body,
         entity: EntityID,
-        plane: CoolBallWorldPlane,
+        plane: CoolBasketWorldPlane,
         restitution: Float,
         friction: Float,
         deltaTime: Float

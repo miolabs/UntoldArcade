@@ -1,6 +1,6 @@
 //
-//  CoolBallScene.swift
-//  CoolBall
+//  CoolBasketScene.swift
+//  CoolBasket
 //
 //  Entity construction for the basketball demo: the ball (dynamic body), the
 //  hoop (static pole + backboard boxes, a rim made of a ring of static sphere
@@ -16,7 +16,7 @@ import UntoldEngine
 
 /// Node creation is main-actor (the DSL requirement); runtime mutation uses
 /// the engine's lock-backed nonisolated API, callable from the XR game thread.
-public final class CoolBallScene: @unchecked Sendable {
+public final class CoolBasketScene: @unchecked Sendable {
     public private(set) var ballEntity: EntityID = .invalid
     public private(set) var basketTriggerEntity: EntityID = .invalid
     public private(set) var leftHandEntity: EntityID = .invalid
@@ -73,21 +73,21 @@ public final class CoolBallScene: @unchecked Sendable {
             orientation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
 
             rimCenter = SIMD3<Float>(
-                position.x, position.y + CoolBallScene.rimHeight, position.z
+                position.x, position.y + CoolBasketScene.rimHeight, position.z
             )
             // Board hangs behind the rim, bottom edge just under rim level.
             let boardFront = rimCenter
-                - forward * (CoolBallScene.rimRadius + 0.06)
-            let boardCenterY = position.y + CoolBallScene.rimHeight - 0.15
-                + CoolBallScene.boardHeight * 0.5
+                - forward * (CoolBasketScene.rimRadius + 0.06)
+            let boardCenterY = position.y + CoolBasketScene.rimHeight - 0.15
+                + CoolBasketScene.boardHeight * 0.5
             boardCenter = SIMD3<Float>(
-                boardFront.x - forward.x * CoolBallScene.boardThickness * 0.5,
+                boardFront.x - forward.x * CoolBasketScene.boardThickness * 0.5,
                 boardCenterY,
-                boardFront.z - forward.z * CoolBallScene.boardThickness * 0.5
+                boardFront.z - forward.z * CoolBasketScene.boardThickness * 0.5
             )
             // Pole runs from the floor up to the board, just behind it.
             poleHeight = boardCenterY - position.y
-            let poleXZ = boardCenter - forward * (CoolBallScene.boardThickness * 0.5 + 0.05)
+            let poleXZ = boardCenter - forward * (CoolBasketScene.boardThickness * 0.5 + 0.05)
             poleCenter = SIMD3<Float>(
                 poleXZ.x, position.y + poleHeight * 0.5, poleXZ.z
             )
@@ -96,14 +96,14 @@ public final class CoolBallScene: @unchecked Sendable {
         /// World position of rim segment `index` (of `rimSegmentCount`), and
         /// the yaw orientation that lays a box's local X along the tangent.
         func rimSegment(_ index: Int) -> (position: SIMD3<Float>, orientation: simd_quatf) {
-            let angle = Float(index) / Float(CoolBallScene.rimSegmentCount) * 2 * .pi
+            let angle = Float(index) / Float(CoolBasketScene.rimSegmentCount) * 2 * .pi
             let up = SIMD3<Float>(0, 1, 0)
             let right = simd_normalize(simd_cross(up, forward))
             let radial = right * cosf(angle) + forward * sinf(angle)
             let tangent = -right * sinf(angle) + forward * cosf(angle)
             let yaw = atan2f(-tangent.z, tangent.x)
             return (
-                rimCenter + radial * CoolBallScene.rimRadius,
+                rimCenter + radial * CoolBasketScene.rimRadius,
                 simd_quatf(angle: yaw, axis: up)
             )
         }
@@ -119,7 +119,7 @@ public final class CoolBallScene: @unchecked Sendable {
         let node = SphereNode(
             radius: Self.ballRadius,
             segments: [32, 24],
-            name: "CoolBall.ball"
+            name: "CoolBasket.ball"
         )
         .baseColor(1.0, 1.0, 1.0)
         .roughness(0.7)
@@ -141,7 +141,7 @@ public final class CoolBallScene: @unchecked Sendable {
                 entityId: ballEntity, textureType: .baseColor, path: textureURL
             )
         } else {
-            print("CoolBall: ball texture missing from bundle — plain white ball")
+            print("CoolBasket: ball texture missing from bundle — plain white ball")
         }
 
         translateTo(entityId: ballEntity, position: position)
@@ -193,7 +193,7 @@ public final class CoolBallScene: @unchecked Sendable {
     /// ambient blobs.
     @MainActor public func addLighting() {
         guard sunEntity == .invalid else { return }
-        let sun = DirectionalLightNode(name: "CoolBall.sun")
+        let sun = DirectionalLightNode(name: "CoolBasket.sun")
             .color(1.0, 0.98, 0.92)
             .intensity(2.0)
             .rotateBy(angle: -50, axis: [.x])
@@ -210,9 +210,9 @@ public final class CoolBallScene: @unchecked Sendable {
         removeHoopGhost()
         var entities: [EntityID] = []
         for (name, scale) in [
-            ("CoolBall.ghostPole", SIMD3<Float>(0.08, Self.rimHeight + 0.15, 0.08)),
-            ("CoolBall.ghostBoard", SIMD3<Float>(Self.boardWidth, Self.boardHeight, Self.boardThickness)),
-            ("CoolBall.ghostRim", SIMD3<Float>(Self.rimRadius * 2.2, Self.rimTubeRadius * 2, Self.rimRadius * 2.2)),
+            ("CoolBasket.ghostPole", SIMD3<Float>(0.08, Self.rimHeight + 0.15, 0.08)),
+            ("CoolBasket.ghostBoard", SIMD3<Float>(Self.boardWidth, Self.boardHeight, Self.boardThickness)),
+            ("CoolBasket.ghostRim", SIMD3<Float>(Self.rimRadius * 2.2, Self.rimTubeRadius * 2, Self.rimRadius * 2.2)),
         ] {
             let node = CubeNode(size: 1.0, name: name)
                 .baseColor(1.0, 0.55, 0.15, 0.4)
@@ -284,7 +284,7 @@ public final class CoolBallScene: @unchecked Sendable {
         }
 
         // Pole.
-        let pole = CubeNode(size: 1.0, name: "CoolBall.pole")
+        let pole = CubeNode(size: 1.0, name: "CoolBasket.pole")
             .baseColor(0.25, 0.26, 0.30)
             .roughness(0.5)
             .scaleTo(x: 0.08, y: layout.poleHeight, z: 0.08)
@@ -296,7 +296,7 @@ public final class CoolBallScene: @unchecked Sendable {
         )
 
         // Backboard — the bank shot's best friend.
-        let board = CubeNode(size: 1.0, name: "CoolBall.board")
+        let board = CubeNode(size: 1.0, name: "CoolBasket.board")
             .baseColor(1.0, 1.0, 1.0)
             .roughness(0.35)
             .scaleTo(x: Self.boardWidth, y: Self.boardHeight, z: Self.boardThickness)
@@ -321,7 +321,7 @@ public final class CoolBallScene: @unchecked Sendable {
         let segmentLength = 2 * Float.pi * Self.rimRadius / Float(Self.rimSegmentCount) * 1.12
         for index in 0 ..< Self.rimSegmentCount {
             let segment = layout.rimSegment(index)
-            let node = CubeNode(size: 1.0, name: "CoolBall.rim\(index)")
+            let node = CubeNode(size: 1.0, name: "CoolBasket.rim\(index)")
                 .baseColor(0.90, 0.28, 0.08)
                 .roughness(0.35)
                 .metallic(0.4)
@@ -350,7 +350,7 @@ public final class CoolBallScene: @unchecked Sendable {
         // side, so by itself it also catches balls drifting in from below or
         // from the side — the game only counts its entry right after a
         // downward crossing of the rim plane inside the ring.
-        let triggerNode = Node(name: "CoolBall.basketTrigger")
+        let triggerNode = Node(name: "CoolBasket.basketTrigger")
         basketTriggerEntity = triggerNode.entityID
         translateTo(
             entityId: basketTriggerEntity,
@@ -384,8 +384,8 @@ public final class CoolBallScene: @unchecked Sendable {
     /// against: the player's hands — they dribble, swat, and (with the pinch
     /// grab in the game logic) catch and throw.
     @MainActor public func createBodyProxies() {
-        leftHandEntity = makeKinematicSphere(name: "CoolBall.handL", radius: Self.handRadius)
-        rightHandEntity = makeKinematicSphere(name: "CoolBall.handR", radius: Self.handRadius)
+        leftHandEntity = makeKinematicSphere(name: "CoolBasket.handL", radius: Self.handRadius)
+        rightHandEntity = makeKinematicSphere(name: "CoolBasket.handR", radius: Self.handRadius)
     }
 
     private func makeKinematicSphere(name: String, radius: Float) -> EntityID {

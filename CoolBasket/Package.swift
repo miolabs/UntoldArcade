@@ -3,21 +3,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "CoolBall",
+    name: "CoolBasket",
     platforms: [
         .macOS(.v14),
         .iOS(.v17),
         .visionOS(.v2),
     ],
     products: [
-        .library(name: "CoolBall", targets: ["CoolBall"]),
+        .library(name: "CoolBasket", targets: ["CoolBasket"]),
     ],
     dependencies: [
         .package(url: "https://github.com/untoldengine/UntoldEngine.git", branch: "develop"),
     ],
     targets: [
         .target(
-            name: "CoolBall",
+            name: "CoolBasket",
             dependencies: [
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
             ],
@@ -30,9 +30,9 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "CoolBallTests",
+            name: "CoolBasketTests",
             dependencies: [
-                "CoolBall",
+                "CoolBasket",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
             ],
             swiftSettings: [
