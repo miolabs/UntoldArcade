@@ -96,27 +96,44 @@ struct ScanLibraryView: View {
                         .foregroundStyle(.secondary)
                     }
                 }
-                .swipeActions(edge: .leading) {
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        store.delete(scan)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
                     if store.canRecook(scan) {
-                        Button {
-                            Task {
-                                if let cooked = await store.recook(scan) {
-                                    path = [cooked.id]
-                                }
-                            }
-                        } label: {
-                            Label("Re-cook", systemImage: "arrow.clockwise")
-                        }
-                        .tint(.orange)
+                        recookButton(for: scan)
+                    }
+                }
+                .contextMenu {
+                    if store.canRecook(scan) {
+                        recookButton(for: scan)
+                    }
+                    Button(role: .destructive) {
+                        store.delete(scan)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
                 }
             }
-            .onDelete { offsets in
-                for index in offsets {
-                    store.delete(store.scans[index])
+        }
+    }
+
+    /// Rebuilds a scan from its kept source through the current pipeline
+    /// and opens the result (the original stays for comparison).
+    private func recookButton(for scan: ScanRecord) -> some View {
+        Button {
+            Task {
+                if let cooked = await store.recook(scan) {
+                    path = [cooked.id]
                 }
             }
+        } label: {
+            Label("Re-cook", systemImage: "arrow.clockwise")
         }
+        .tint(.orange)
+        .disabled(store.isCooking)
     }
 
     private var emptyState: some View {
