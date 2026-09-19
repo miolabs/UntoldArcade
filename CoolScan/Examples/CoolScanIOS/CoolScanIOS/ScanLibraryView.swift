@@ -49,7 +49,7 @@ struct ScanLibraryView: View {
                 }
             }
             .alert(
-                "Import failed",
+                "Scan library",
                 isPresented: Binding(
                     get: { store.lastError != nil },
                     set: { if !$0 { store.lastError = nil } }
@@ -91,6 +91,7 @@ struct ScanLibraryView: View {
                                 + scan.metadata.createdAt.formatted(
                                     date: .abbreviated, time: .shortened
                                 )
+                                + (store.canRecook(scan) ? " · source kept" : "")
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -102,14 +103,10 @@ struct ScanLibraryView: View {
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
-                    if store.canRecook(scan) {
-                        recookButton(for: scan)
-                    }
+                    recookButton(for: scan)
                 }
                 .contextMenu {
-                    if store.canRecook(scan) {
-                        recookButton(for: scan)
-                    }
+                    recookButton(for: scan)
                     Button(role: .destructive) {
                         store.delete(scan)
                     } label: {
@@ -121,7 +118,8 @@ struct ScanLibraryView: View {
     }
 
     /// Rebuilds a scan from its kept source through the current pipeline
-    /// and opens the result (the original stays for comparison).
+    /// and opens the result (the original stays for comparison). Always
+    /// offered; a scan without a kept source explains itself via the alert.
     private func recookButton(for scan: ScanRecord) -> some View {
         Button {
             Task {

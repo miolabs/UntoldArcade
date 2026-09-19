@@ -73,6 +73,10 @@ final class ScanStore: ObservableObject {
             )
         }
         .sorted { $0.metadata.createdAt > $1.metadata.createdAt }
+
+        for scan in scans {
+            print("CoolScan: library — \(scan.metadata.name): source \(canRecook(scan) ? "kept" : "MISSING") at \(scan.folder.path)")
+        }
     }
 
     func delete(_ scan: ScanRecord) {
@@ -135,9 +139,13 @@ final class ScanStore: ObservableObject {
             try metaData.write(to: folder.appendingPathComponent("meta.json"))
             // Keep the source next to the cooked asset so the scan can be
             // re-cooked after pipeline improvements without rescanning.
-            try? FileManager.default.copyItem(
-                at: usdzURL, to: folder.appendingPathComponent("source.usdz")
-            )
+            do {
+                try FileManager.default.copyItem(
+                    at: usdzURL, to: folder.appendingPathComponent("source.usdz")
+                )
+            } catch {
+                print("CoolScan: could not keep source USDZ for \(name) — \(error)")
+            }
             reload()
             print(
                 "CoolScan: cooked \(name) — \(cooked.vertexCount) vertices, "
