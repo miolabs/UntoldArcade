@@ -15,7 +15,7 @@ Clone it, open a folder, hit `⌘R`, and you're looking at the feature instead o
 
 ## 📺 Demos
 
-Each demo is a **standalone Xcode project** with its own README, tutorial, and bundled assets — no setup beyond opening the `.xcodeproj`. The three Rendering Extensions (CoolSaber, CoolWater, CoolCloth) are reusable plugins — each ships its own shader library, pipelines, and render-graph passes, and can be dropped into any project. CoolBall does the same for physics: it ships a `PhysicsBackend` plugin the engine drives through its physics coordinator.
+Each demo is a **standalone Xcode project** with its own README, tutorial, and bundled assets — no setup beyond opening the `.xcodeproj`. The three Rendering Extensions (CoolSaber, CoolWater, CoolCloth) are reusable plugins — each ships its own shader library, pipelines, and render-graph passes, and can be dropped into any project. CoolBasket does the same for physics: it ships a `PhysicsBackend` plugin the engine drives through its physics coordinator.
 
 ### ⚔️ CoolSaber — *visionOS · Rendering Extension*
 
@@ -47,10 +47,10 @@ GPU cloth simulation (XPBD, small-steps scheme) hanging in your real room — pi
 open CoolCloth/Examples/CoolClothVisionOS/CoolClothVisionOS.xcodeproj
 ```
 
-### 🏀 CoolBall — *visionOS · Physics Backend*
+### 🏀 CoolBasket — *visionOS · Physics Backend*
 
-<!-- MEDIA: docs/media/CoolBall/demo.gif -->
-<!-- ![CoolBall demo](docs/media/CoolBall/demo.gif) -->
+<!-- MEDIA: docs/media/CoolBasket/demo.gif -->
+<!-- ![CoolBasket demo](docs/media/CoolBasket/demo.gif) -->
 
 Mixed-reality basketball, and the first consumer of the engine's physics backend plugin seam: a pure-Swift `PhysicsBackend` simulates the ball against your real floor, walls and furniture (ARKit plane detection), the hoop you place in your room, and your hands. Look at the floor and pinch to place the hoop, pinch near the ball to pick it up, flick to throw — a shot only counts when it comes down through the rim.
 
@@ -59,12 +59,12 @@ Mixed-reality basketball, and the first consumer of the engine's physics backend
 - Contact and trigger events delivered through `PhysicsEvents`
 
 ```bash
-open CoolBall/Examples/CoolBallVisionOS/CoolBallVisionOS.xcodeproj
+open CoolBasket/Examples/CoolBasketVisionOS/CoolBasketVisionOS.xcodeproj
 ```
 
 ### 🧲 UntoldJoltPhysics — *plugin · Physics Backend*
 
-[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, packaged for every demo to use (`Plugins/UntoldJoltPhysics`). Jolt is vendored as source and compiled by SwiftPM — no binaries — for macOS, iOS and visionOS. CoolBall can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, packaged for every demo to use (`Plugins/UntoldJoltPhysics`). Jolt is vendored as source and compiled by SwiftPM — no binaries — for macOS, iOS and visionOS. CoolBasket can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
 
 ```bash
 open Plugins/UntoldJoltPhysics/Package.swift

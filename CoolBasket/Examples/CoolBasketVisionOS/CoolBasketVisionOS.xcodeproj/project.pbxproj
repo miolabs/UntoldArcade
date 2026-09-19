@@ -11,16 +11,16 @@
 		0381AEB92FF56BC900219038 /* UntoldEngineAR in Frameworks */ = {isa = PBXBuildFile; productRef = 0381AEB82FF56BC900219038 /* UntoldEngineAR */; };
 		0381AEBB2FF56BC900219038 /* UntoldEngineShaderSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 0381AEBA2FF56BC900219038 /* UntoldEngineShaderSupport */; };
 		0381AEBD2FF56BC900219038 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 0381AEBC2FF56BC900219038 /* UntoldEngineXR */; };
-		AEEF779EA5664684FED5A349 /* BallXRGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8305CF5771FC5CB5D3AB39E3 /* BallXRGame.swift */; };
-		C00000000000000000000001 /* CoolBall in Frameworks */ = {isa = PBXBuildFile; productRef = C00000000000000000000003 /* CoolBall */; };
-		E86F705EBDEC6F06F3A9548D /* CoolBallVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E415EA5C6AC6B2F8E6D53682 /* CoolBallVisionOSXRApp.swift */; };
+		AEEF779EA5664684FED5A349 /* BasketXRGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8305CF5771FC5CB5D3AB39E3 /* BasketXRGame.swift */; };
+		C00000000000000000000001 /* CoolBasket in Frameworks */ = {isa = PBXBuildFile; productRef = C00000000000000000000003 /* CoolBasket */; };
+		E86F705EBDEC6F06F3A9548D /* CoolBasketVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E415EA5C6AC6B2F8E6D53682 /* CoolBasketVisionOSXRApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		8305CF5771FC5CB5D3AB39E3 /* BallXRGame.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BallXRGame.swift; path = visionOS/BallXRGame.swift; sourceTree = "<group>"; };
+		8305CF5771FC5CB5D3AB39E3 /* BasketXRGame.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = BasketXRGame.swift; path = visionOS/BasketXRGame.swift; sourceTree = "<group>"; };
 		BB77BBC36715D839F6983304 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = visionOS/Info.plist; sourceTree = "<group>"; };
-		DC2407AD362C1A348AE76BAD /* CoolBallVisionOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoolBallVisionOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		E415EA5C6AC6B2F8E6D53682 /* CoolBallVisionOSXRApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CoolBallVisionOSXRApp.swift; path = visionOS/CoolBallVisionOSXRApp.swift; sourceTree = "<group>"; };
+		DC2407AD362C1A348AE76BAD /* CoolBasketVisionOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoolBasketVisionOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E415EA5C6AC6B2F8E6D53682 /* CoolBasketVisionOSXRApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CoolBasketVisionOSXRApp.swift; path = visionOS/CoolBasketVisionOSXRApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -32,7 +32,7 @@
 				0381AEB92FF56BC900219038 /* UntoldEngineAR in Frameworks */,
 				0381AEB72FF56BC900219038 /* UntoldEngine in Frameworks */,
 				0381AEBB2FF56BC900219038 /* UntoldEngineShaderSupport in Frameworks */,
-				C00000000000000000000001 /* CoolBall in Frameworks */,
+				C00000000000000000000001 /* CoolBasket in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -43,19 +43,19 @@
 			isa = PBXGroup;
 			children = (
 				E4BBF9A2E21E273BA7ACC193 /* Products */,
-				67CE3A747DF41B5CABDE30AF /* CoolBallVisionOS */,
+				67CE3A747DF41B5CABDE30AF /* CoolBasketVisionOS */,
 			);
 			sourceTree = "<group>";
 		};
-		67CE3A747DF41B5CABDE30AF /* CoolBallVisionOS */ = {
+		67CE3A747DF41B5CABDE30AF /* CoolBasketVisionOS */ = {
 			isa = PBXGroup;
 			children = (
 				A3E491D855CDE79F0C0489DF /* visionOS */,
-				E415EA5C6AC6B2F8E6D53682 /* CoolBallVisionOSXRApp.swift */,
-				8305CF5771FC5CB5D3AB39E3 /* BallXRGame.swift */,
+				E415EA5C6AC6B2F8E6D53682 /* CoolBasketVisionOSXRApp.swift */,
+				8305CF5771FC5CB5D3AB39E3 /* BasketXRGame.swift */,
 				BB77BBC36715D839F6983304 /* Info.plist */,
 			);
-			path = CoolBallVisionOS;
+			path = CoolBasketVisionOS;
 			sourceTree = "<group>";
 		};
 		A3E491D855CDE79F0C0489DF /* visionOS */ = {
@@ -68,7 +68,7 @@
 		E4BBF9A2E21E273BA7ACC193 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				DC2407AD362C1A348AE76BAD /* CoolBallVisionOS.app */,
+				DC2407AD362C1A348AE76BAD /* CoolBasketVisionOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,9 +76,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C99CBFC28E5CD3B80BBF8B40 /* CoolBallVisionOS-visionOS */ = {
+		C99CBFC28E5CD3B80BBF8B40 /* CoolBasketVisionOS-visionOS */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 4601B62BF76F0F5CED474FDC /* Build configuration list for PBXNativeTarget "CoolBallVisionOS-visionOS" */;
+			buildConfigurationList = 4601B62BF76F0F5CED474FDC /* Build configuration list for PBXNativeTarget "CoolBasketVisionOS-visionOS" */;
 			buildPhases = (
 				3E4FCD7B0562EC432A3ED62D /* Sources */,
 				0BC65BD0B381DEDDA8BA95CB /* Frameworks */,
@@ -88,16 +88,16 @@
 			);
 			dependencies = (
 			);
-			name = "CoolBallVisionOS-visionOS";
+			name = "CoolBasketVisionOS-visionOS";
 			packageProductDependencies = (
-				C00000000000000000000003 /* CoolBall */,
+				C00000000000000000000003 /* CoolBasket */,
 				0381AEB62FF56BC900219038 /* UntoldEngine */,
 				0381AEB82FF56BC900219038 /* UntoldEngineAR */,
 				0381AEBA2FF56BC900219038 /* UntoldEngineShaderSupport */,
 				0381AEBC2FF56BC900219038 /* UntoldEngineXR */,
 			);
-			productName = "CoolBallVisionOS-visionOS";
-			productReference = DC2407AD362C1A348AE76BAD /* CoolBallVisionOS.app */;
+			productName = "CoolBasketVisionOS-visionOS";
+			productReference = DC2407AD362C1A348AE76BAD /* CoolBasketVisionOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -109,7 +109,7 @@
 				LastSwiftUpdateCheck = 1100;
 				LastUpgradeCheck = 1100;
 			};
-			buildConfigurationList = 720C2B3659924CC0E3EA7E7D /* Build configuration list for PBXProject "CoolBallVisionOS" */;
+			buildConfigurationList = 720C2B3659924CC0E3EA7E7D /* Build configuration list for PBXProject "CoolBasketVisionOS" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -126,7 +126,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C99CBFC28E5CD3B80BBF8B40 /* CoolBallVisionOS-visionOS */,
+				C99CBFC28E5CD3B80BBF8B40 /* CoolBasketVisionOS-visionOS */,
 			);
 		};
 /* End PBXProject section */
@@ -146,8 +146,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E86F705EBDEC6F06F3A9548D /* CoolBallVisionOSXRApp.swift in Sources */,
-				AEEF779EA5664684FED5A349 /* BallXRGame.swift in Sources */,
+				E86F705EBDEC6F06F3A9548D /* CoolBasketVisionOSXRApp.swift in Sources */,
+				AEEF779EA5664684FED5A349 /* BasketXRGame.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -278,14 +278,14 @@
 				DEVELOPMENT_TEAM = 53X2422NYU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = CoolBallVisionOS/visionOS/Info.plist;
+				INFOPLIST_FILE = CoolBasketVisionOS/visionOS/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.CoolBallVisionOS;
-				PRODUCT_NAME = CoolBallVisionOS;
+				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.CoolBasketVisionOS;
+				PRODUCT_NAME = CoolBasketVisionOS;
 				SDKROOT = xros;
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
 				SWIFT_VERSION = 5.0;
@@ -305,14 +305,14 @@
 				DEVELOPMENT_TEAM = 53X2422NYU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = CoolBallVisionOS/visionOS/Info.plist;
+				INFOPLIST_FILE = CoolBasketVisionOS/visionOS/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.CoolBallVisionOS;
-				PRODUCT_NAME = CoolBallVisionOS;
+				PRODUCT_BUNDLE_IDENTIFIER = com.miolabs.CoolBasketVisionOS;
+				PRODUCT_NAME = CoolBasketVisionOS;
 				SDKROOT = xros;
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
 				SWIFT_VERSION = 5.0;
@@ -325,7 +325,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		4601B62BF76F0F5CED474FDC /* Build configuration list for PBXNativeTarget "CoolBallVisionOS-visionOS" */ = {
+		4601B62BF76F0F5CED474FDC /* Build configuration list for PBXNativeTarget "CoolBasketVisionOS-visionOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E85CF89908B670A76A29A958 /* Release */,
@@ -334,7 +334,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		720C2B3659924CC0E3EA7E7D /* Build configuration list for PBXProject "CoolBallVisionOS" */ = {
+		720C2B3659924CC0E3EA7E7D /* Build configuration list for PBXProject "CoolBasketVisionOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5CBE3662D09FF0671D31EFB3 /* Debug */,
@@ -384,10 +384,10 @@
 			package = 0381AEB52FF56BC900219038 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngineXR;
 		};
-		C00000000000000000000003 /* CoolBall */ = {
+		C00000000000000000000003 /* CoolBasket */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C00000000000000000000002 /* XCLocalSwiftPackageReference "../.." */;
-			productName = CoolBall;
+			productName = CoolBasket;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

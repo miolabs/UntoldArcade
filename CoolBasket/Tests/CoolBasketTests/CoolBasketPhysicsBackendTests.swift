@@ -1,9 +1,9 @@
 //
-//  CoolBallPhysicsBackendTests.swift
-//  CoolBallTests
+//  CoolBasketPhysicsBackendTests.swift
+//  CoolBasketTests
 //
 
-@testable import CoolBall
+@testable import CoolBasket
 import simd
 import UntoldEngine
 import XCTest
@@ -19,11 +19,11 @@ private final class RecordingSink: PhysicsEventSink {
     func reportDroppedEvents(count: Int) { dropped += count }
 }
 
-final class CoolBallPhysicsBackendTests: XCTestCase {
+final class CoolBasketPhysicsBackendTests: XCTestCase {
     private let step: Float = 1.0 / 60.0
 
-    private func makeBackend(planes: [CoolBallWorldPlane] = [.infiniteFloor()]) -> CoolBallPhysicsBackend {
-        let backend = CoolBallPhysicsBackend()
+    private func makeBackend(planes: [CoolBasketWorldPlane] = [.infiniteFloor()]) -> CoolBasketPhysicsBackend {
+        let backend = CoolBasketPhysicsBackend()
         backend.configure(PhysicsWorldConfiguration())
         backend.setWorldPlanes(planes)
         return backend
@@ -47,7 +47,7 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
         )
     }
 
-    private func advance(_ backend: CoolBallPhysicsBackend, seconds: Float) {
+    private func advance(_ backend: CoolBasketPhysicsBackend, seconds: Float) {
         var elapsed: Float = 0
         while elapsed < seconds {
             backend.step(deltaTime: step)
@@ -68,7 +68,7 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
         let sink = RecordingSink()
         backend.drainEvents(into: sink)
         XCTAssertFalse(sink.contacts.isEmpty)
-        XCTAssertEqual(sink.contacts.first?.entityB, CoolBallPhysicsBackend.environmentEntity)
+        XCTAssertEqual(sink.contacts.first?.entityB, CoolBasketPhysicsBackend.environmentEntity)
         XCTAssertGreaterThan(sink.contacts.first?.normal.y ?? 0, 0.9)
     }
 
@@ -83,7 +83,7 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
     }
 
     func testBoundedPlaneOnlyCollidesInsideItsExtent() {
-        let table = CoolBallWorldPlane(
+        let table = CoolBasketWorldPlane(
             id: UUID(),
             center: SIMD3<Float>(0, 0.7, 0),
             normal: SIMD3<Float>(0, 1, 0),
@@ -201,11 +201,11 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
         PhysicsBodyDescriptor(
             motionType: .dynamic,
             collider: PhysicsColliderDescriptor(
-                shape: .sphere(radius: CoolBallScene.ballRadius),
+                shape: .sphere(radius: CoolBasketScene.ballRadius),
                 friction: 0.4,
-                restitution: CoolBallScene.ballRestitution
+                restitution: CoolBasketScene.ballRestitution
             ),
-            mass: CoolBallScene.ballMass,
+            mass: CoolBasketScene.ballMass,
             position: position,
             linearVelocity: velocity
         )
@@ -217,15 +217,15 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
     /// 100… are rim segments; 50 is the trigger. Returns the rim center.
     @discardableResult
     private func addHoop(
-        to backend: CoolBallPhysicsBackend,
+        to backend: CoolBasketPhysicsBackend,
         floorPoint: SIMD3<Float> = .zero
     ) -> SIMD3<Float> {
-        let layout = CoolBallScene.HoopLayout(position: floorPoint, facing: SIMD3<Float>(0, 0, 1))
-        for index in 0 ..< CoolBallScene.rimSegmentCount {
+        let layout = CoolBasketScene.HoopLayout(position: floorPoint, facing: SIMD3<Float>(0, 0, 1))
+        for index in 0 ..< CoolBasketScene.rimSegmentCount {
             backend.didAddBody(entity: EntityID(100 + index), descriptor: PhysicsBodyDescriptor(
                 motionType: .static,
                 collider: PhysicsColliderDescriptor(
-                    shape: .sphere(radius: CoolBallScene.rimColliderRadius),
+                    shape: .sphere(radius: CoolBasketScene.rimColliderRadius),
                     restitution: 0.6
                 ),
                 position: layout.rimSegment(index).position
@@ -234,27 +234,27 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
         backend.didAddBody(entity: 50, descriptor: PhysicsBodyDescriptor(
             motionType: .static,
             collider: PhysicsColliderDescriptor(
-                shape: .box(halfExtents: CoolBallScene.basketTriggerHalfExtents),
+                shape: .box(halfExtents: CoolBasketScene.basketTriggerHalfExtents),
                 isTrigger: true
             ),
-            position: layout.rimCenter - SIMD3<Float>(0, CoolBallScene.basketTriggerDrop, 0)
+            position: layout.rimCenter - SIMD3<Float>(0, CoolBasketScene.basketTriggerDrop, 0)
         ))
         return layout.rimCenter
     }
 
     func testHoopLayoutFacesThePlayerWithThePoleBehind() {
         let facing = SIMD3<Float>(0, 0, 1) // player stands at +z
-        let layout = CoolBallScene.HoopLayout(position: .zero, facing: facing)
-        XCTAssertEqual(layout.rimCenter.y, CoolBallScene.rimHeight, accuracy: 1e-5)
+        let layout = CoolBasketScene.HoopLayout(position: .zero, facing: facing)
+        XCTAssertEqual(layout.rimCenter.y, CoolBasketScene.rimHeight, accuracy: 1e-5)
         // Board behind the rim (toward -z), pole behind the board.
-        XCTAssertLessThan(layout.boardCenter.z, layout.rimCenter.z - CoolBallScene.rimRadius)
+        XCTAssertLessThan(layout.boardCenter.z, layout.rimCenter.z - CoolBasketScene.rimRadius)
         XCTAssertLessThan(layout.poleCenter.z, layout.boardCenter.z)
         // Rim segments sit on the ring, and each box's local X runs along the
         // ring tangent (perpendicular to its radial direction).
-        for index in 0 ..< CoolBallScene.rimSegmentCount {
+        for index in 0 ..< CoolBasketScene.rimSegmentCount {
             let segment = layout.rimSegment(index)
             let radial = segment.position - layout.rimCenter
-            XCTAssertEqual(simd_length(radial), CoolBallScene.rimRadius, accuracy: 1e-4)
+            XCTAssertEqual(simd_length(radial), CoolBasketScene.rimRadius, accuracy: 1e-4)
             let localX = segment.orientation.act(SIMD3<Float>(1, 0, 0))
             XCTAssertEqual(simd_dot(localX, simd_normalize(radial)), 0, accuracy: 1e-4)
             XCTAssertEqual(localX.y, 0, accuracy: 1e-5)
@@ -289,7 +289,7 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
         let rimCenter = addHoop(to: backend)
         // Dropped directly onto the ring itself.
         backend.didAddBody(entity: 1, descriptor: basketball(
-            position: rimCenter + SIMD3<Float>(CoolBallScene.rimRadius, 0.6, 0)
+            position: rimCenter + SIMD3<Float>(CoolBasketScene.rimRadius, 0.6, 0)
         ))
 
         advance(backend, seconds: 0.8)
@@ -304,9 +304,9 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
     func testRingCrossingDetection() {
         let rim = SIMD3<Float>(0, 2, 0)
         func crossed(_ from: SIMD3<Float>, _ to: SIMD3<Float>) -> Bool {
-            CoolBallGame.crossedRimDownward(
+            CoolBasketGame.crossedRimDownward(
                 previous: from, current: to, rimCenter: rim,
-                rimRadius: CoolBallScene.rimRadius, ballRadius: CoolBallScene.ballRadius
+                rimRadius: CoolBasketScene.rimRadius, ballRadius: CoolBasketScene.ballRadius
             )
         }
         // Straight down through the center.
@@ -376,7 +376,7 @@ final class CoolBallPhysicsBackendTests: XCTestCase {
     }
 
     func testSphereVsBoxContactGeometry() {
-        let contact = CoolBallPhysicsBackend.sphereVsBox(
+        let contact = CoolBasketPhysicsBackend.sphereVsBox(
             center: SIMD3<Float>(0, 0.6, 0),
             radius: 0.11,
             boxCenter: SIMD3<Float>(0, 0.25, 0),
