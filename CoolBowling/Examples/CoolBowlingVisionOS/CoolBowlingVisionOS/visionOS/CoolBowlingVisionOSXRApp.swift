@@ -94,7 +94,7 @@ struct CoolBowlingVisionOSXRApp: App {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Bowling 🎳").font(.extraLargeTitle).fontWeight(.bold)
-                    Text("First, place your lane: look at the floor where the foul line should be — the ghost lane\nruns away from you — and pinch (or press Place lane here). Then pinch the ball off the rack\non your right and roll it down the lane: the pit swallows it and the return brings it back.\nTwo balls a frame; ten real pins on Jolt Physics.")
+                    Text("First, place your lane: look at the floor where the foul line should be — the ghost lane\nruns away from you — and pinch (or press Place lane here). Then pinch the ball off the return\nunit on your left and roll it down the lane: it vanishes under the cover and comes back up through the hood.\nTwo balls a frame; ten real pins on Jolt Physics.")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Button {

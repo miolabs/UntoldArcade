@@ -30,20 +30,16 @@ final class CoolBowlingTests: XCTestCase {
         // Pin 7 is at the player's left: negative X when facing -Z.
         XCTAssertLessThan(layout.pinPositions[6].x, 0)
         XCTAssertGreaterThan(layout.pinPositions[9].x, 0)
-        // A pin's length plus margin between the back row and the pit wall.
-        let backRowZ = layout.pinPositions[6].z
-        XCTAssertGreaterThan(backRowZ + CoolBowlingScene.laneLength, CoolBowlingScene.pinHeight + 0.2)
         XCTAssertEqual(head.y, CoolBowlingScene.laneSurfaceHeight, accuracy: 1e-5, "Pins stand on the lane surface")
         // Neighbours 12 inches apart; the back row is 10 wide (7 … 10).
         XCTAssertEqual(simd_length(layout.pinPositions[1] - layout.pinPositions[2]), CoolBowlingScene.pinSpacing, accuracy: 1e-4)
         XCTAssertEqual(simd_length(layout.pinPositions[0] - layout.pinPositions[1]), CoolBowlingScene.pinSpacing, accuracy: 1e-4)
         XCTAssertEqual(simd_length(layout.pinPositions[6] - layout.pinPositions[9]), CoolBowlingScene.pinSpacing * 3, accuracy: 1e-4)
-        // The plinth runs from the foul line to the pit; the surface is its top.
-        XCTAssertEqual(layout.laneCenter.z, -CoolBowlingScene.pitStart * 0.5, accuracy: 1e-5)
-        XCTAssertEqual(layout.laneCenter.y, CoolBowlingScene.laneSurfaceHeight * 0.5, accuracy: 1e-6)
-        XCTAssertEqual(layout.surfaceY, CoolBowlingScene.laneSurfaceHeight, accuracy: 1e-6)
-        // The back row keeps a margin before the pit edge.
-        XCTAssertLessThan(-layout.pinPositions[6].z + CoolBowlingScene.pinMaxRadius, CoolBowlingScene.pitStart - 0.1)
+        // The lane lies on the floor from the foul line to its end.
+        XCTAssertEqual(layout.laneCenter.z, -CoolBowlingScene.laneLength * 0.5, accuracy: 1e-5)
+        XCTAssertEqual(layout.surfaceY, 0, accuracy: 1e-6)
+        // The back row stands before the lane's end, as in the scene.
+        XCTAssertLessThan(-layout.pinPositions[6].z + CoolBowlingScene.pinMaxRadius, CoolBowlingScene.laneLength)
         // Local +Z of the orientation points down the lane.
         XCTAssertEqual(simd_dot(layout.orientation.act(SIMD3<Float>(0, 0, 1)), layout.forward), 1.0, accuracy: 1e-4)
     }
@@ -61,67 +57,60 @@ final class CoolBowlingTests: XCTestCase {
 
     func testPitDetection() {
         let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1))
-        // On the deck, on the surface: not in the pit.
-        XCTAssertFalse(layout.isInPit(layout.pinPositions[0] + SIMD3<Float>(0, CoolBowlingScene.ballRadius, 0)))
-        // Past the lane end and still at surface height (in the air over the pit): not yet.
-        let overPit = layout.worldPoint(SIMD3<Float>(0, CoolBowlingScene.laneSurfaceHeight + CoolBowlingScene.ballRadius, CoolBowlingScene.pitStart + 0.3))
-        XCTAssertFalse(layout.isInPit(overPit))
-        // Resting on the pit floor: in the pit.
-        let onPitFloor = layout.worldPoint(SIMD3<Float>(0.1, 0.02 + CoolBowlingScene.ballRadius, CoolBowlingScene.pitStart + 0.3))
-        XCTAssertTrue(layout.isInPit(onPitFloor))
-        // Resting on a pin lying in the pit, or on deadwood piled in the
-        // backstop corner (a pose Jolt produced): still the pit.
-        let onAPin = layout.worldPoint(SIMD3<Float>(0.1, 0.02 + 2 * CoolBowlingScene.pinMaxRadius + CoolBowlingScene.ballRadius, CoolBowlingScene.pitStart + 0.3))
-        XCTAssertTrue(layout.isInPit(onAPin))
-        XCTAssertTrue(layout.isInPit(layout.worldPoint(SIMD3<Float>(-0.27, 0.19, 4.39))))
-        // Against the pit's front wall, on the floor: the pit.
-        XCTAssertTrue(layout.isInPit(layout.worldPoint(SIMD3<Float>(0, 0.02 + CoolBowlingScene.ballRadius, CoolBowlingScene.pitStart + CoolBowlingScene.ballRadius))))
-        // Pivoting on the deck's edge, still at rolling height: not yet.
         let r = CoolBowlingScene.ballRadius
-        XCTAssertFalse(layout.isInPit(layout.worldPoint(SIMD3<Float>(0, CoolBowlingScene.laneSurfaceHeight + sqrtf(r * r - (r / 2) * (r / 2)), CoolBowlingScene.pitStart + r / 2))))
-        // Beyond the backstop or outside the bumpers: not the pit.
-        XCTAssertFalse(layout.isInPit(layout.worldPoint(SIMD3<Float>(0, 0.1, CoolBowlingScene.laneLength + 0.5))))
-        XCTAssertFalse(layout.isInPit(layout.worldPoint(SIMD3<Float>(1.0, 0.1, CoolBowlingScene.pitStart + 0.3))))
+        let end = CoolBowlingScene.laneLength
+        // On the deck, on the surface: not the pit.
+        XCTAssertFalse(layout.isInPit(layout.pinPositions[0] + SIMD3<Float>(0, r, 0)))
+        // Under the cover, on the floor: the pit.
+        XCTAssertTrue(layout.isInPit(layout.worldPoint(SIMD3<Float>(0.1, r, end + 0.3))))
+        // Resting on a pin lying under the cover, or on deadwood piled in the
+        // corner: still the pit.
+        XCTAssertTrue(layout.isInPit(layout.worldPoint(SIMD3<Float>(0.1, 2 * CoolBowlingScene.pinMaxRadius + r, end + 0.3))))
+        XCTAssertTrue(layout.isInPit(layout.worldPoint(SIMD3<Float>(-0.27, 0.19, end + 1.4))))
+        // Just off the lane's end, on the floor: the pit.
+        XCTAssertTrue(layout.isInPit(layout.worldPoint(SIMD3<Float>(0, r, end + r))))
+        // Pivoting on the lane's edge: not yet.
+        XCTAssertFalse(layout.isInPit(layout.worldPoint(SIMD3<Float>(0, sqrtf(r * r - (r / 2) * (r / 2)), end + r / 2))))
+        // Behind the cover, or outside it: not the pit.
+        XCTAssertFalse(layout.isInPit(layout.worldPoint(SIMD3<Float>(0, 0.1, layout.pitRearZ + 0.5))))
+        XCTAssertFalse(layout.isInPit(layout.worldPoint(SIMD3<Float>(1.2, 0.1, end + 0.3))))
     }
 
     func testBallInPlayRegions() {
-        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1), approachLength: 1.2)
-        // At the rack, and half way down the return: in play.
+        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1))
+        let r = CoolBowlingScene.ballRadius
+        // At the rack, and half way along the unit's rails: in play.
         XCTAssertTrue(layout.isAtRack(layout.rackPoint))
         XCTAssertTrue(layout.isOnReturn(layout.rackPoint))
         XCTAssertTrue(layout.isOnReturn(layout.returnStart))
-        let midZ: Float = 0.3
-        XCTAssertTrue(layout.isOnReturn(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, layout.returnFloorTop(atZ: midZ) + CoolBowlingScene.ballRadius, midZ))))
-        // Beside the lane past the unit's hood: not the return.
-        XCTAssertFalse(layout.isOnReturn(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, 0.5, 3.0))))
+        let midZ: Float = -2.0
+        XCTAssertTrue(layout.isOnReturn(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, layout.returnFloorTop(atZ: midZ) + r, midZ))))
         XCTAssertFalse(layout.isAtRack(layout.returnStart))
-        // On the lane: over the alley, not on the return, not lost.
-        let onLane = layout.worldPoint(SIMD3<Float>(0.2, CoolBowlingScene.laneSurfaceHeight + CoolBowlingScene.ballRadius, 2.0))
-        XCTAssertTrue(layout.isOverAlley(onLane))
-        XCTAssertFalse(layout.isOnReturn(onLane))
-        XCTAssertFalse(layout.isLost(onLane))
-        // On the ramp and at its foot: still the alley.
-        XCTAssertTrue(layout.isOverAlley(layout.worldPoint(SIMD3<Float>(0, CoolBowlingScene.ballRadius, -0.9))))
-        // On the real floor beside the left bumper, or behind the backstop: lost.
-        XCTAssertTrue(layout.isLost(layout.worldPoint(SIMD3<Float>(-1.0, CoolBowlingScene.ballRadius, 2.0))))
-        XCTAssertTrue(layout.isLost(layout.worldPoint(SIMD3<Float>(0, CoolBowlingScene.ballRadius, CoolBowlingScene.laneLength + 0.5))))
-        // Flying over the bumper, still high: not lost yet.
-        XCTAssertFalse(layout.isLost(layout.worldPoint(SIMD3<Float>(-1.0, 1.2, 2.0))))
-        // Under the return, on the floor (fell off the trough): lost.
-        XCTAssertTrue(layout.isLost(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, CoolBowlingScene.ballRadius, 1.0))))
+        // Beside the lane, past the unit's hood: not the return.
+        XCTAssertFalse(layout.isOnReturn(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, 0.5, 1.0))))
+        // On the lane, in a gutter, on the approach: over the alley, not lost.
+        for local in [SIMD3<Float>(0.2, r, 2.0), SIMD3<Float>(0.65, r, 2.0), SIMD3<Float>(1.2, r, -2.0)] {
+            XCTAssertTrue(layout.isOverAlley(layout.worldPoint(local)), "\(local)")
+            XCTAssertFalse(layout.isOnReturn(layout.worldPoint(local)))
+            XCTAssertFalse(layout.isLost(layout.worldPoint(local)))
+        }
+        // On the real floor beyond a rail, or behind the cover: lost.
+        XCTAssertTrue(layout.isLost(layout.worldPoint(SIMD3<Float>(1.1, r, 2.0))))
+        XCTAssertTrue(layout.isLost(layout.worldPoint(SIMD3<Float>(0, r, layout.pitRearZ + 0.5))))
+        // Flying over a rail, still high: not lost yet.
+        XCTAssertFalse(layout.isLost(layout.worldPoint(SIMD3<Float>(1.1, 1.2, 2.0))))
     }
 
-    func testBallReturnRunsDownhillToARackBesideThePlayer() {
-        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1), approachLength: 1.2)
-        // On the player's right, clear of the bumper, above the lane.
-        XCTAssertGreaterThan(layout.returnCenterX - CoolBowlingScene.returnInnerWidth * 0.5, CoolBowlingScene.laneWidth * 0.5 + 0.08)
-        XCTAssertGreaterThan(layout.returnFloorTop(atZ: 0), CoolBowlingScene.laneSurfaceHeight + 0.1)
-        // The rack end, in the approach, is the low end; the hood end lies by the lane.
-        XCTAssertEqual(layout.returnNearZ, -1.2)
-        XCTAssertGreaterThan(layout.returnFarZ, 0)
-        XCTAssertLessThan(layout.returnFarZ, CoolBowlingScene.pinDeckDistance)
+    func testBallReturnRunsDownhillToARackOnTheApproach() {
+        let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1))
+        // On the player's left, clear of the lane, standing on the approach.
+        XCTAssertLessThan(layout.returnCenterX + CoolBowlingScene.returnInnerWidth * 0.5, -CoolBowlingScene.laneWidth * 0.5)
+        XCTAssertLessThan(layout.returnFarZ, 0)
+        XCTAssertGreaterThan(layout.returnNearZ, -CoolBowlingScene.approachLength)
+        // The rack end is the low end; the ball sits as the scene's balls do.
         XCTAssertLessThan(layout.returnFloorTop(atZ: layout.returnNearZ), layout.returnFloorTop(atZ: layout.returnFarZ))
         XCTAssertEqual(layout.returnFloorTop(atZ: layout.returnNearZ), CoolBowlingScene.returnRackHeight, accuracy: 1e-6)
+        XCTAssertEqual(layout.localPoint(layout.rackPoint).y, 0.57, accuracy: 0.01)
         // The ball reappears inside the hood, above the rails, and rolls toward the player.
         let start = layout.localPoint(layout.returnStart)
         XCTAssertEqual(start.x, layout.returnCenterX, accuracy: 1e-5)
@@ -129,11 +118,11 @@ final class CoolBowlingTests: XCTestCase {
         XCTAssertGreaterThan(start.z, layout.returnFarZ - 0.81, "Inside the hood")
         XCTAssertGreaterThan(start.y, layout.returnFloorTop(atZ: start.z) + CoolBowlingScene.ballRadius)
         XCTAssertLessThan(simd_dot(layout.returnVelocity, layout.forward), 0)
-        // The rack point is in the approach, on the player's right, at the stop.
+        // The rack point is at the stop, behind the foul line, on the player's left.
         let rack = layout.localPoint(layout.rackPoint)
         XCTAssertLessThan(rack.z, 0)
         XCTAssertLessThan(rack.z - layout.returnNearZ, 0.2)
-        XCTAssertGreaterThan(rack.x, CoolBowlingScene.laneWidth * 0.5)
+        XCTAssertLessThan(rack.x, -CoolBowlingScene.laneWidth * 0.5)
     }
 
     func testFrameCycleReturnsThenResolves() {
@@ -198,23 +187,23 @@ final class CoolBowlingTests: XCTestCase {
         }
         let floor = CoolBowlingWorldPlane.infiniteFloor(y: 0)
         let chairSeat = plane(SIMD3<Float>(0.1, 0.45, -2.0), normal: SIMD3<Float>(0, 1, 0), u: SIMD3<Float>(1, 0, 0), v: SIMD3<Float>(0, 0, 1), eu: 0.25, ev: 0.25)
-        let tableOverReturn = plane(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, 0.75, 1.0)), normal: SIMD3<Float>(0, 1, 0), u: SIMD3<Float>(1, 0, 0), v: SIMD3<Float>(0, 0, 1), eu: 0.4, ev: 0.4)
+        let tableOverReturn = plane(layout.worldPoint(SIMD3<Float>(layout.returnCenterX, 0.75, -2.0)), normal: SIMD3<Float>(0, 1, 0), u: SIMD3<Float>(1, 0, 0), v: SIMD3<Float>(0, 0, 1), eu: 0.4, ev: 0.4)
         let wallAcross = plane(SIMD3<Float>(0, 1.3, -3.0), normal: SIMD3<Float>(0, 0, 1), u: SIMD3<Float>(1, 0, 0), v: SIMD3<Float>(0, 1, 0), eu: 3.0, ev: 1.3)
         let wallBeside = plane(SIMD3<Float>(-2.5, 1.3, -2.0), normal: SIMD3<Float>(1, 0, 0), u: SIMD3<Float>(0, 0, 1), v: SIMD3<Float>(0, 1, 0), eu: 4.0, ev: 1.3)
-        let sofaBehind = plane(SIMD3<Float>(0, 0.45, 2.5), normal: SIMD3<Float>(0, 1, 0), u: SIMD3<Float>(1, 0, 0), v: SIMD3<Float>(0, 0, 1), eu: 0.9, ev: 0.4)
+        let sofaBehind = plane(SIMD3<Float>(0, 0.45, 5.5), normal: SIMD3<Float>(0, 1, 0), u: SIMD3<Float>(1, 0, 0), v: SIMD3<Float>(0, 0, 1), eu: 0.9, ev: 0.4)
         let X = SIMD3<Float>(1, 0, 0), Y = SIMD3<Float>(0, 1, 0), Z = SIMD3<Float>(0, 0, 1)
         let c30 = cosf(30 * .pi / 180), s30 = sinf(30 * .pi / 180)
-        // Centre well outside on the left, but a 1.6 m top reaching over the bumper.
+        // Centre well outside on the left, but a 1.6 m top reaching over the alley.
         let longTableBeside = plane(SIMD3<Float>(-1.2, 0.75, -2.0), normal: Y, u: X, v: Z, eu: 0.8, ev: 0.4)
-        // Sloped 30°, centre outside, its extent crossing the bumper line.
+        // Sloped 30°, centre outside, its extent crossing the alley's edge.
         let slopedIntoAlley = plane(SIMD3<Float>(-1.0, 0.9, -2.0), normal: SIMD3<Float>(-s30, c30, 0), u: SIMD3<Float>(c30, s30, 0), v: Z, eu: 0.5, ev: 0.5)
         // Floor patches a few centimetres above the placement floor: the floor, kept.
         let floorPatchLow = plane(SIMD3<Float>(0.2, 0.03, -2.0), normal: Y, u: X, v: Z, eu: 1.0, ev: 1.0)
         let floorPatchHigh = plane(SIMD3<Float>(0.2, 0.08, -2.0), normal: Y, u: X, v: Z, eu: 1.0, ev: 1.0)
         // A low shelf over the lane: not the floor, out.
         let lowShelf = plane(SIMD3<Float>(0, 0.25, -2.0), normal: Y, u: X, v: Z, eu: 0.3, ev: 0.3)
-        // A wall just behind the backstop: clear of the alley, kept.
-        let wallBehindPit = plane(SIMD3<Float>(0, 1.3, -4.9), normal: Z, u: X, v: Y, eu: 3.0, ev: 1.3)
+        // A wall just behind the pinsetter cover: clear of the alley, kept.
+        let wallBehindPit = plane(SIMD3<Float>(0, 1.3, -6.6), normal: Z, u: X, v: Y, eu: 3.0, ev: 1.3)
         let planes = [floor, chairSeat, tableOverReturn, wallAcross, wallBeside, sofaBehind,
                       longTableBeside, slopedIntoAlley, floorPatchLow, floorPatchHigh, lowShelf, wallBehindPit]
 
@@ -263,34 +252,27 @@ final class CoolBowlingTests: XCTestCase {
         backend.configure(PhysicsWorldConfiguration())
         let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1))
 
-        // The lane plinth, the pit floor and the backstop.
+        // The lane's surface (a hair above the floor), the rails, the cover's
+        // rear panel, and the floor everywhere (the gutters and the pit).
+        let end = CoolBowlingScene.laneLength
         backend.didAddBody(entity: 100, descriptor: PhysicsBodyDescriptor(
             motionType: .static,
             collider: PhysicsColliderDescriptor(
-                shape: .box(halfExtents: SIMD3<Float>(CoolBowlingScene.laneWidth * 0.5, CoolBowlingScene.laneSurfaceHeight * 0.5, CoolBowlingScene.pitStart * 0.5)),
+                shape: .box(halfExtents: SIMD3<Float>(CoolBowlingScene.laneWidth * 0.5, 0.01, end * 0.5)),
                 friction: CoolBowlingScene.laneFriction, restitution: 0.1
             ),
-            position: layout.laneCenter, orientation: layout.orientation
-        ))
-        backend.didAddBody(entity: 101, descriptor: PhysicsBodyDescriptor(
-            motionType: .static,
-            collider: PhysicsColliderDescriptor(
-                shape: .box(halfExtents: SIMD3<Float>(CoolBowlingScene.laneWidth * 0.5, 0.01, CoolBowlingScene.pitLength * 0.5)),
-                friction: 0.6, restitution: 0.05
-            ),
-            position: layout.worldPoint(SIMD3<Float>(0, 0.01, CoolBowlingScene.pitStart + CoolBowlingScene.pitLength * 0.5)), orientation: layout.orientation
+            position: layout.worldPoint(SIMD3<Float>(0, -0.005, end * 0.5)), orientation: layout.orientation
         ))
         backend.didAddBody(entity: 102, descriptor: PhysicsBodyDescriptor(
             motionType: .static,
-            collider: PhysicsColliderDescriptor(shape: .box(halfExtents: SIMD3<Float>(0.7, 0.4, 0.03)), friction: 0.5, restitution: 0.2),
-            position: layout.worldPoint(SIMD3<Float>(0, 0.4, CoolBowlingScene.laneLength + 0.03)), orientation: layout.orientation
+            collider: PhysicsColliderDescriptor(shape: .box(halfExtents: SIMD3<Float>(1.0, 0.5, 0.03)), friction: 0.5, restitution: 0.2),
+            position: layout.worldPoint(SIMD3<Float>(0, 0.5, layout.pitRearZ + 0.03)), orientation: layout.orientation
         ))
-        // Bumpers along the whole alley, and a floor under everything.
         for (entity, side) in [(103, Float(-1)), (104, Float(1))] {
             backend.didAddBody(entity: EntityID(entity), descriptor: PhysicsBodyDescriptor(
                 motionType: .static,
-                collider: PhysicsColliderDescriptor(shape: .box(halfExtents: SIMD3<Float>(0.04, 0.17, CoolBowlingScene.laneLength * 0.5)), friction: 0.3, restitution: 0.35),
-                position: layout.worldPoint(SIMD3<Float>(side * (CoolBowlingScene.laneWidth * 0.5 + 0.04), 0.17, CoolBowlingScene.laneLength * 0.5)), orientation: layout.orientation
+                collider: PhysicsColliderDescriptor(shape: .box(halfExtents: SIMD3<Float>(0.01, 0.03, end * 0.5)), friction: 0.3, restitution: 0.3),
+                position: layout.worldPoint(SIMD3<Float>(side * CoolBowlingScene.railX, 0.03, end * 0.5)), orientation: layout.orientation
             ))
         }
         backend.setEnvironmentBoxes(CoolBowlingSimulation.environmentBoxes(for: [.infiniteFloor(y: 0)], keepOut: layout.keepOut))
