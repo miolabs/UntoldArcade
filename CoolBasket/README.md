@@ -7,7 +7,7 @@ the first real consumer of the engine's **physics backend plugin seam**
 Look at the floor and pinch to put a hoop in your room. Pinch near a ball to
 pick it up, flick to throw; your hands also dribble, swat and catch. Drop as
 many balls as you like — every one can be grabbed, thrown and scored with. They
-bounce off your **real floor, walls and furniture** (ARKit plane detection),
+bounce off your **real floor, walls and furniture** (ARKit plane detection; the ceiling is left out, so a lob can go up),
 off the backboard, the rim and each other — put one down through the hoop to
 score.
 

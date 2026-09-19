@@ -242,6 +242,19 @@ final class CoolBasketPhysicsBackendTests: XCTestCase {
         return layout.rimCenter
     }
 
+    func testCeilingsAreLeftOutOfPlay() {
+        func plane(_ center: SIMD3<Float>, normal: SIMD3<Float>) -> CoolBasketWorldPlane {
+            CoolBasketWorldPlane(id: UUID(), center: center, normal: normal, tangentU: SIMD3<Float>(1, 0, 0), tangentV: SIMD3<Float>(0, 0, 1), extentU: 2, extentV: 2)
+        }
+        let floor = plane(SIMD3<Float>(0, 0, 0), normal: SIMD3<Float>(0, 1, 0))
+        let wall = plane(SIMD3<Float>(0, 1.3, -3), normal: SIMD3<Float>(0, 0, 1))
+        let table = plane(SIMD3<Float>(1, 0.75, -1), normal: SIMD3<Float>(0, 1, 0))
+        let ceiling = plane(SIMD3<Float>(0, 2.6, 0), normal: SIMD3<Float>(0, -1, 0))
+        let shelfUnderside = plane(SIMD3<Float>(1, 1.8, -2), normal: simd_normalize(SIMD3<Float>(0.2, -1, 0)))
+        let kept = CoolBasketGame.playablePlanes([floor, wall, table, ceiling, shelfUnderside]).map(\.id)
+        XCTAssertEqual(Set(kept), [floor.id, wall.id, table.id], "The floor, the walls and furniture stay; anything facing down is out")
+    }
+
     func testHoopLayoutFacesThePlayerWithThePoleBehind() {
         let facing = SIMD3<Float>(0, 0, 1) // player stands at +z
         let layout = CoolBasketScene.HoopLayout(position: .zero, facing: facing)

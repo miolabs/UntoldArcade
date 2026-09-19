@@ -354,7 +354,9 @@ public final class CoolBasketGame: @unchecked Sendable {
         #if os(visionOS)
         session.onPlanesChanged = { [weak self] planes in
             guard let self else { return }
-            // Real surfaces replace the fallback floor as soon as they exist.
+            // Real surfaces replace the fallback floor as soon as they exist;
+            // the ceiling stays out so a high arc isn't stopped by the room.
+            let planes = Self.playablePlanes(planes)
             self.detectedPlanes.value = planes
             let headY = self.session.headTransform()?.columns.3.y
             self.updateFloorLevel(planes: planes, headY: headY)
@@ -763,6 +765,14 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// Updates the floor estimate: the lowest upward-facing detected plane
     /// in a plausible band below the head — preferring planes ARKit itself
     /// classified as floor, so a low table or a stair landing can't win.
+    /// The room's surfaces the ball plays against: the floor, the walls and
+    /// whatever furniture faces up. Anything facing down — the ceiling, the
+    /// underside of a shelf — is left out: the hoop stands at regulation
+    /// height and a lob has to be free to go up.
+    static func playablePlanes(_ planes: [CoolBasketWorldPlane]) -> [CoolBasketWorldPlane] {
+        planes.filter { $0.normal.y > -0.5 }
+    }
+
     private func updateFloorLevel(planes: [CoolBasketWorldPlane], headY: Float?) {
         let reference = headY ?? 0
         let candidates = planes.filter { plane in
