@@ -99,6 +99,11 @@ public final class CoolBowlingAudio: @unchecked Sendable {
         enqueueOneShot(bank: Bank.strike, volume: 0.85)
     }
 
+    /// The fanfare, quieter: ten down over two balls.
+    public func playSpare() {
+        enqueueOneShot(bank: Bank.strike, volume: 0.45)
+    }
+
     private func enqueueOneShot(bank: Int, volume: Float) {
         stateLock.withLock {
             guard bank < sampleBanks.count, !sampleBanks[bank].isEmpty else { return }

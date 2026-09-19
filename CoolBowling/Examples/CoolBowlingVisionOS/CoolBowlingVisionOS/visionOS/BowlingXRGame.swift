@@ -37,6 +37,8 @@ final class BowlingXRGame: @unchecked Sendable {
 
         holder.setDiagnostics(
             pinsDown: game.currentPinsDown,
+            frame: game.currentFrame,
+            ball: game.currentBallInFrame,
             planes: game.worldPlaneCount,
             impulse: game.lastImpulse,
             placing: game.currentPhase == .placingLane

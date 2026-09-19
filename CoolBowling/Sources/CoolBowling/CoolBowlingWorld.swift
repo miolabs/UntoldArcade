@@ -59,11 +59,87 @@ public struct CoolBowlingWorldPlane: Sendable {
     }
 }
 
+/// An oriented box in world space. Real surfaces that intersect it are
+/// kept out of the simulation: the alley is the game's, not the room's.
+public struct CoolBowlingKeepOutBox: Sendable {
+    public var center: SIMD3<Float>
+    public var right: SIMD3<Float>
+    public var up: SIMD3<Float>
+    public var forward: SIMD3<Float>
+    public var halfExtents: SIMD3<Float>
+    /// The floor the alley was placed on: horizontal surfaces within a
+    /// step of it are the floor, and stay even if a later estimate puts
+    /// them a few centimetres higher.
+    public var floorY: Float
+
+    public init(center: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>, forward: SIMD3<Float>, halfExtents: SIMD3<Float>, floorY: Float) {
+        self.center = center
+        self.right = right
+        self.up = up
+        self.forward = forward
+        self.halfExtents = halfExtents
+        self.floorY = floorY
+    }
+
+    /// Horizontal and no higher than a step above the placement floor.
+    public func isFloor(_ plane: CoolBowlingWorldPlane) -> Bool {
+        plane.normal.y > 0.85 && plane.center.y < floorY + 0.15
+    }
+
+    /// Whether the plane's slab must stay out of the simulation.
+    public func excludes(_ plane: CoolBowlingWorldPlane, slab: JoltEnvironmentBox) -> Bool {
+        !isFloor(plane) && intersects(slab: slab)
+    }
+
+    /// Separating-axis test against another oriented box.
+    public func intersects(center other: SIMD3<Float>, axes otherAxes: [SIMD3<Float>], halfExtents otherHalf: SIMD3<Float>) -> Bool {
+        let axes = [right, up, forward]
+        let half = [halfExtents.x, halfExtents.y, halfExtents.z]
+        let otherHalves = [otherHalf.x, otherHalf.y, otherHalf.z]
+        let offset = other - center
+        var candidates = axes + otherAxes
+        for a in axes {
+            for b in otherAxes {
+                let cross = simd_cross(a, b)
+                if simd_length_squared(cross) > 1e-6 {
+                    candidates.append(simd_normalize(cross))
+                }
+            }
+        }
+        for axis in candidates {
+            var reach: Float = 0
+            for index in 0 ..< 3 {
+                reach += half[index] * abs(simd_dot(axes[index], axis))
+                reach += otherHalves[index] * abs(simd_dot(otherAxes[index], axis))
+            }
+            if abs(simd_dot(offset, axis)) > reach {
+                return false
+            }
+        }
+        return true
+    }
+
+    public func intersects(slab: JoltEnvironmentBox) -> Bool {
+        intersects(
+            center: slab.center,
+            axes: [
+                slab.orientation.act(SIMD3<Float>(1, 0, 0)),
+                slab.orientation.act(SIMD3<Float>(0, 1, 0)),
+                slab.orientation.act(SIMD3<Float>(0, 0, 1)),
+            ],
+            halfExtents: slab.halfExtents
+        )
+    }
+}
+
 /// Jolt behind the game's side channel: detected planes become environment
-/// slabs (thin static boxes whose top face lies on the plane).
+/// slabs (thin static boxes whose top face lies on the plane), except where
+/// the alley stands.
 public final class CoolBowlingSimulation: @unchecked Sendable {
     public let backend: JoltPhysicsBackend
     private let planeCount = CoolBowlingLockedBox<Int>(0)
+    private let droppedCount = CoolBowlingLockedBox<Int>(0)
+    private let keepOut = CoolBowlingLockedBox<CoolBowlingKeepOutBox?>(nil)
 
     /// Half thickness of the slab standing in for a (zero-thickness) plane.
     static let slabHalfThickness: Float = 0.02
@@ -74,13 +150,45 @@ public final class CoolBowlingSimulation: @unchecked Sendable {
         self.backend = backend
     }
 
-    public func setWorldPlanes(_ planes: [CoolBowlingWorldPlane]) {
-        planeCount.value = planes.count
-        backend.setEnvironmentBoxes(planes.map(Self.environmentBox(for:)))
+    /// Real surfaces inside `box` are left out of the world from the next
+    /// `setWorldPlanes` on; nil lets the whole room back in.
+    public func setAlleyKeepOut(_ box: CoolBowlingKeepOutBox?) {
+        keepOut.value = box
     }
 
+    public func setWorldPlanes(_ planes: [CoolBowlingWorldPlane]) {
+        let boxes = Self.environmentBoxes(for: planes, keepOut: keepOut.value)
+        let dropped = planes.count - boxes.count
+        if dropped != droppedCount.value {
+            coolBowlingLog.log("alley keep-out: \(dropped) real surface(s) left out of the simulation")
+        }
+        planeCount.value = boxes.count
+        droppedCount.value = dropped
+        backend.setEnvironmentBoxes(boxes)
+    }
+
+    /// Slabs for `planes`, minus those cutting into the alley's keep-out.
+    static func environmentBoxes(for planes: [CoolBowlingWorldPlane], keepOut: CoolBowlingKeepOutBox?) -> [JoltEnvironmentBox] {
+        planesInSimulation(planes, keepOut: keepOut).map(environmentBox(for:))
+    }
+
+    /// The planes that make it into the world: all of them without a
+    /// keep-out; otherwise the floor and whatever stays clear of the alley.
+    static func planesInSimulation(_ planes: [CoolBowlingWorldPlane], keepOut: CoolBowlingKeepOutBox?) -> [CoolBowlingWorldPlane] {
+        guard let keepOut else { return planes }
+        return planes.filter { plane in
+            !keepOut.excludes(plane, slab: environmentBox(for: plane))
+        }
+    }
+
+    /// Real surfaces currently in the simulation.
     public var worldPlaneCount: Int {
         planeCount.value
+    }
+
+    /// Real surfaces left out because they cut into the alley.
+    public var droppedPlaneCount: Int {
+        droppedCount.value
     }
 
     public func bodyState(for entity: EntityID) -> (position: SIMD3<Float>, velocity: SIMD3<Float>)? {

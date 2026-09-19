@@ -27,6 +27,8 @@ final class BowlingXRHolder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var pinsDownStorage = 0
+    private var frameStorage = 1
+    private var ballStorage = 1
     private var planeStorage = 0
     private var impulseStorage: Float = 0
     private var placingStorage = true
@@ -35,9 +37,11 @@ final class BowlingXRHolder: @unchecked Sendable {
     private var newBallPending = false
     private var resetPinsPending = false
 
-    func setDiagnostics(pinsDown: Int, planes: Int, impulse: Float, placing: Bool) {
+    func setDiagnostics(pinsDown: Int, frame: Int, ball: Int, planes: Int, impulse: Float, placing: Bool) {
         lock.withLock {
             pinsDownStorage = pinsDown
+            frameStorage = frame
+            ballStorage = ball
             planeStorage = planes
             impulseStorage = impulse
             placingStorage = placing
@@ -53,6 +57,8 @@ final class BowlingXRHolder: @unchecked Sendable {
     }
 
     var pinsDown: Int { lock.withLock { pinsDownStorage } }
+    var frame: Int { lock.withLock { frameStorage } }
+    var ballInFrame: Int { lock.withLock { ballStorage } }
     var isPlacingLane: Bool { lock.withLock { placingStorage } }
     var planeCount: Int { lock.withLock { planeStorage } }
     var lastImpulse: Float { lock.withLock { impulseStorage } }
@@ -88,7 +94,7 @@ struct CoolBowlingVisionOSXRApp: App {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Bowling 🎳").font(.extraLargeTitle).fontWeight(.bold)
-                    Text("First, place your lane: look at the floor where the foul line should be — the ghost lane\nruns away from you — and pinch (or press Place lane here). Then pinch near the ball\nto pick it up and roll it down the lane. Ten real pins on Jolt Physics.")
+                    Text("First, place your lane: look at the floor where the foul line should be — the ghost lane\nruns away from you — and pinch (or press Place lane here). Then pinch the ball off the rack\non your right and roll it down the lane: the pit swallows it and the return brings it back.\nTwo balls a frame; ten real pins on Jolt Physics.")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Button {
@@ -123,7 +129,7 @@ struct CoolBowlingVisionOSXRApp: App {
                     TimelineView(.periodic(from: .now, by: 0.25)) { _ in
                         let holder = BowlingXRHolder.shared
                         VStack(spacing: 8) {
-                            Text(holder.isPlacingLane ? "Placing the lane…" : "Pins down: \(holder.pinsDown) / 10")
+                            Text(holder.isPlacingLane ? "Placing the lane…" : "Frame \(holder.frame) · Ball \(holder.ballInFrame) · Pins down: \(holder.pinsDown) / 10")
                                 .font(.title2.monospacedDigit()).fontWeight(.semibold)
                             Text(
                                 "Space \(holder.spaceOpen ? "OPEN" : "closed")"

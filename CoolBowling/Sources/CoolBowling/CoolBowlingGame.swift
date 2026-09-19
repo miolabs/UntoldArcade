@@ -5,8 +5,10 @@
 //  Frame-driven bowling logic on the Jolt Physics plugin. Place the lane on
 //  your real floor with your gaze, pick the ball up with a pinch and roll it
 //  down the lane; the pins are ten real rigid bodies that wobble, topple and
-//  knock each other over. Pins down are counted from their poses; contacts
-//  drive the sounds.
+//  knock each other over. The pit behind the deck swallows the ball and the
+//  return on the right brings it back to the rack; two balls a frame, with
+//  the deadwood cleared in between. Pins down are counted from their poses;
+//  contacts drive the sounds.
 //
 
 import Foundation
@@ -32,6 +34,9 @@ public final class CoolBowlingGame: @unchecked Sendable {
     private var ghostFacing = SIMD3<Float>(0, 0, -1)
     private var autoPlaceDeadline: TimeInterval?
     private var autoRollDeadline: TimeInterval?
+    private var autoRollCount = 0
+    /// `-autoRoll` bowls this many balls, one per resolved frame step.
+    private let autoRollBalls = 4
     private var placementPinchGraceUntil: TimeInterval = 0
     private var pinchWasClosed: [CoolBowlingHandSide: Bool] = [:]
     private var placementGeneration: UInt64 = 0
@@ -41,6 +46,13 @@ public final class CoolBowlingGame: @unchecked Sendable {
     private var contactSubscription: EventSubscription?
     private var lastContactImpulse: Float = 0
     private var pinCountAccumulator: Float = 0
+    /// The two-ball frame (lock-protected): the ball reappears on the return
+    /// 0.7 s after it ends, the pins are judged after 2 s.
+    private var cycle = CoolBowlingFrameCycle()
+    /// Since when the ball has been at rest off the return (game thread).
+    private var ballRestSince: TimeInterval?
+    /// A ball at rest this long anywhere but the return is dead.
+    private let deadBallRest: TimeInterval = 1.5
 
     // Grab state (game thread only).
     private var grabbingSide: CoolBowlingHandSide?
@@ -136,6 +148,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
             phase = .placingLane
             placementGeneration &+= 1
             pinsDown = 0
+            cycle.reset()
             strikeCelebrated = false
             autoRollDeadline = nil
             return true
@@ -149,6 +162,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
         Task { @MainActor in
             withWorldAccessGate {
                 self.scene.clear()
+                self.simulationStore.value?.setAlleyKeepOut(nil)
                 self.scene.createBodyProxies()
                 self.scene.addLighting()
                 self.scene.buildLaneGhost()
@@ -163,10 +177,15 @@ public final class CoolBowlingGame: @unchecked Sendable {
         guard stillWanted else { return }
         scene.removeLaneGhost()
         let grounded = SIMD3<Float>(foul.x, floorLevel.value, foul.z)
-        let layout = CoolBowlingScene.LaneLayout(foul: grounded, facing: facing)
+        let layout = CoolBowlingScene.LaneLayout(foul: grounded, facing: facing, approachLength: approachLength(foul: grounded, facing: facing))
         scene.buildLane(layout)
+        // The alley is the game's: real surfaces cutting into it stay out.
+        simulationStore.value?.setAlleyKeepOut(layout.keepOut)
         ballSpawnPosition = grounded - layout.forward * 0.6 + SIMD3<Float>(0, 1.0, 0)
-        scene.spawnBall(at: dropPoint())
+        // The first ball arrives the way every ball does: down the return.
+        scene.spawnBall(at: layout.returnStart, velocity: layout.returnVelocity)
+        lock.withLock { cycle.reset() }
+        ballRestSince = nil
         pushWorldPlanes()
         coolBowlingLog.log("lane placed at x=\(grounded.x, format: .fixed(precision: 2)) z=\(grounded.z, format: .fixed(precision: 2))")
         if ProcessInfo.processInfo.arguments.contains("-autoRoll") {
@@ -174,52 +193,63 @@ public final class CoolBowlingGame: @unchecked Sendable {
         }
     }
 
-    /// Where the ball appears: chest-high, 0.7 m in front of the player.
-    private func dropPoint() -> SIMD3<Float> {
+    /// The rack of the ball return stops just in front of where the player
+    /// stood when placing the lane (within reason).
+    private func approachLength(foul: SIMD3<Float>, facing: SIMD3<Float>) -> Float {
         #if os(visionOS)
         if let head = session.headTransform() {
             let headPosition = SIMD3<Float>(head.columns.3.x, head.columns.3.y, head.columns.3.z)
-            let forward = -SIMD3<Float>(head.columns.2.x, head.columns.2.y, head.columns.2.z)
-            let horizontal = SIMD3<Float>(forward.x, 0, forward.z)
-            if simd_length(horizontal) > 0.05 {
-                let direction = simd_normalize(horizontal)
-                return SIMD3<Float>(
-                    headPosition.x + direction.x * 0.7,
-                    floorLevel.value + 1.0,
-                    headPosition.z + direction.z * 0.7
-                )
-            }
+            let forward = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
+            let behind = simd_dot(foul - headPosition, forward)
+            return min(max(behind - 0.35, 0.6), 2.2)
         }
         #endif
-        return ballSpawnPosition
+        return CoolBowlingScene.defaultApproachLength
     }
 
-    /// Brings the ball back to the player (control-window button). Game thread.
+    /// Sends the ball down the return to the rack (control-window button).
+    /// During a cycle it stands in for the automatic return; the pins are
+    /// still judged when they have settled. Game thread.
     public func requestNewBall() {
         guard currentPhase == .playing else { return }
-        let wasHeld = holdingBall
+        deliverBall()
+        lock.withLock { cycle.ballReturnedManually() }
+    }
+
+    /// Puts the ball on the pit end of the return, rolling toward the rack.
+    /// Takes it from the hand if it is held.
+    private func deliverBall() {
+        guard let layout = scene.layout else { return }
         cancelGrab()
-        let point = dropPoint()
-        scene.moveBall(to: point)
-        if wasHeld {
-            scene.attachBallBody(velocity: .zero, at: point)
-            simulationStore.value?.resetBody(entity: scene.ballEntity, position: point, velocity: .zero)
-        } else if simulationStore.value?.resetBody(entity: scene.ballEntity, position: point, velocity: .zero) != true {
-            scene.attachBallBody(velocity: .zero, at: point)
+        ballRestSince = nil
+        let start = layout.returnStart
+        let velocity = layout.returnVelocity
+        scene.moveBall(to: start)
+        if simulationStore.value?.resetBody(entity: scene.ballEntity, position: start, velocity: velocity) != true {
+            // No body (the ball was held): give it one.
+            scene.attachBallBody(velocity: velocity, at: start)
         }
     }
 
-    /// Stands the ten pins back up on their spots (control-window button).
-    /// Game thread: the teleport goes through the backend (which also
-    /// resets the orientation), so no entities are recreated.
+    /// A fresh rack and a new ball, a new frame (control-window button).
+    /// Game thread.
     public func requestResetPins() {
-        guard currentPhase == .playing, let layout = scene.layout,
-              let simulation = simulationStore.value else { return }
+        guard currentPhase == .playing else { return }
         // The ball leaves the deck first, or the fresh rack falls over it.
-        requestNewBall()
+        deliverBall()
+        rerackAll()
+        lock.withLock { cycle.rerackedManually() }
+    }
+
+    /// Stands the ten pins on their spots: parked deadwood gets a fresh
+    /// body, pins in play are teleported through the backend (which also
+    /// resets their orientation). No entities are recreated.
+    private func rerackAll() {
+        guard let layout = scene.layout, let simulation = simulationStore.value else { return }
         for (pin, position) in zip(scene.pinEntities, layout.pinPositions) {
-            scene.standPin(pin, at: position, orientation: layout.orientation)
-            simulation.resetBody(entity: pin, position: position, velocity: .zero)
+            if !scene.restorePin(pin, at: position, orientation: layout.orientation) {
+                simulation.resetBody(entity: pin, position: position, velocity: .zero)
+            }
         }
         lock.withLock {
             pinsDown = 0
@@ -227,6 +257,20 @@ public final class CoolBowlingGame: @unchecked Sendable {
         }
     }
 
+    /// Clears the fallen pins off the deck for the second ball.
+    private func sweepDeadwood() {
+        guard let layout = scene.layout else { return }
+        for (pin, spot) in zip(scene.pinEntities, layout.pinPositions) where !scene.isPinParked(pin) {
+            guard let pose = scene.pinPose(pin) else { continue }
+            let displacement = simd_length(SIMD3<Float>(pose.position.x - spot.x, 0, pose.position.z - spot.z))
+            if CoolBowlingScene.isPinDown(up: pose.up, displacement: displacement) {
+                scene.parkPin(pin)
+            }
+        }
+    }
+
+    /// Rebuilds the room's slabs; runs on the ARKit thread too, so it only
+    /// touches locked state (the keep-out is set where the lane is built).
     private func pushWorldPlanes() {
         guard let simulation = simulationStore.value else { return }
         var planes = detectedPlanes.value
@@ -274,6 +318,15 @@ public final class CoolBowlingGame: @unchecked Sendable {
         lock.withLock { pinsDown }
     }
 
+    public var currentFrame: Int {
+        lock.withLock { cycle.frame }
+    }
+
+    /// 1 or 2: which ball of the frame is in play.
+    public var currentBallInFrame: Int {
+        lock.withLock { cycle.ballInFrame }
+    }
+
     public var lastImpulse: Float {
         lock.withLock { lastContactImpulse }
     }
@@ -309,13 +362,14 @@ public final class CoolBowlingGame: @unchecked Sendable {
         updateHands(now: now)
         #endif
         countPins(deltaTime: deltaTime)
+        trackBall(now: now)
         runAutoRoll(now: now)
 
         heartbeatAccumulator += deltaTime
         if heartbeatAccumulator > 1.0 {
             heartbeatAccumulator = 0
             if let state = simulationStore.value?.bodyState(for: scene.ballEntity) {
-                coolBowlingLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) pinsDown=\(self.currentPinsDown)")
+                coolBowlingLog.log("ball y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) pinsDown=\(self.currentPinsDown) frame=\(self.currentFrame) ball=\(self.currentBallInFrame)")
             }
         }
 
@@ -326,30 +380,134 @@ public final class CoolBowlingGame: @unchecked Sendable {
     /// second; a full rack down is a strike.
     private func countPins(deltaTime: Float) {
         pinCountAccumulator += deltaTime
-        guard pinCountAccumulator > 0.25, let layout = scene.layout else { return }
+        guard pinCountAccumulator > 0.25, scene.layout != nil else { return }
         pinCountAccumulator = 0
+        let down = countDownPins()
+        let total = scene.pinEntities.count
+        let fullRack: Bool? = lock.withLock {
+            if pinsDown != down {
+                coolBowlingLog.log("pins down: \(down)/\(total)")
+            }
+            pinsDown = down
+            guard down == total, total > 0, !strikeCelebrated else { return nil }
+            strikeCelebrated = true
+            return cycle.isFirstBall
+        }
+        if let onFirstBall = fullRack {
+            if onFirstBall {
+                audio.playStrike()
+                print("CoolBowling: 🎳 STRIKE!")
+            } else {
+                audio.playSpare()
+                print("CoolBowling: SPARE!")
+            }
+        }
+    }
+
+    /// Pins leaning past ~45°, off their spot, or already swept.
+    private func countDownPins() -> Int {
+        guard let layout = scene.layout else { return 0 }
         var down = 0
         for (pin, spot) in zip(scene.pinEntities, layout.pinPositions) {
+            if scene.isPinParked(pin) {
+                down += 1
+                continue
+            }
             guard let pose = scene.pinPose(pin) else { continue }
             let displacement = simd_length(SIMD3<Float>(pose.position.x - spot.x, 0, pose.position.z - spot.z))
             if CoolBowlingScene.isPinDown(up: pose.up, displacement: displacement) {
                 down += 1
             }
         }
-        let strike: Bool = lock.withLock {
-            if pinsDown != down {
-                coolBowlingLog.log("pins down: \(down)/\(self.scene.pinEntities.count)")
+        return down
+    }
+
+    /// Why a ball is over.
+    private enum BallEnd: String {
+        case pit = "in the pit"
+        case rest = "dead at rest"
+        case lost = "lost off the alley"
+    }
+
+    /// The pit ends a ball, and so does a ball dead at rest on the lane or
+    /// lost off the alley. The ball then comes back down the return, and
+    /// once the pins have settled the frame moves on — a fresh rack after a
+    /// strike or the second ball, otherwise the deadwood is cleared.
+    private func trackBall(now: TimeInterval) {
+        guard let layout = scene.layout else { return }
+        let ending = lock.withLock { cycle.isBallEnded }
+        if !ending {
+            guard let reason = ballEndReason(now: now, layout: layout) else { return }
+            lock.withLock { cycle.endBall(at: now) }
+            ballRestSince = nil
+            if reason == .pit {
+                audio.playThud(intensity: 0.5)
             }
-            pinsDown = down
-            if down == scene.pinEntities.count, scene.pinEntities.count > 0, !strikeCelebrated {
-                strikeCelebrated = true
-                return true
-            }
-            return false
+            coolBowlingLog.log("ball \(reason.rawValue) (frame \(self.currentFrame), ball \(self.currentBallInFrame))")
+            return
         }
-        if strike {
-            audio.playStrike()
-            print("CoolBowling: 🎳 STRIKE!")
+        let actions = lock.withLock { cycle.tick(now: now) }
+        for action in actions {
+            switch action {
+            case .returnBall:
+                deliverBall()
+            case .resolve:
+                resolveFrame()
+            }
+        }
+    }
+
+    /// Game thread: nil while the ball is in play (held, rolling, waiting
+    /// at the rack or travelling down the return).
+    private func ballEndReason(now: TimeInterval, layout: CoolBowlingScene.LaneLayout) -> BallEnd? {
+        guard !holdingBall, let position = scene.ballPosition() else {
+            ballRestSince = nil
+            return nil
+        }
+        if layout.isInPit(position) {
+            return .pit
+        }
+        if layout.isAtRack(position) || layout.isOnReturn(position) {
+            ballRestSince = nil
+            return nil
+        }
+        if layout.isLost(position) {
+            return .lost
+        }
+        // At rest anywhere else: on the deck among fallen pins, at the
+        // player's feet after rolling back down the ramp…
+        guard let simulation = simulationStore.value else { return nil }
+        let speed = simulation.bodyState(for: scene.ballEntity).map { simd_length($0.velocity) } ?? 1
+        let resting = !simulation.isBodyActive(entity: scene.ballEntity) || speed < 0.05
+        guard resting else {
+            ballRestSince = nil
+            return nil
+        }
+        let since = ballRestSince ?? now
+        ballRestSince = since
+        return now - since >= deadBallRest ? .rest : nil
+    }
+
+    private func resolveFrame() {
+        let down = countDownPins()
+        let (resolution, ball) = lock.withLock { () -> (CoolBowlingFrameCycle.Resolution, Int) in
+            let thisBall = cycle.ballInFrame
+            return (cycle.resolve(pinsDown: down, pinCount: scene.pinEntities.count), thisBall)
+        }
+        coolBowlingLog.log("ball \(ball) done: \(down)/10 down — \(resolution == .rerack ? "new rack" : "deadwood cleared")")
+        switch resolution {
+        case .rerack:
+            rerackAll()
+        case .sweep:
+            sweepDeadwood()
+        }
+        // Test hook: keep bowling.
+        if ProcessInfo.processInfo.arguments.contains("-autoRoll") {
+            lock.withLock {
+                if autoRollCount < autoRollBalls {
+                    autoRollDeadline = ProcessInfo.processInfo.systemUptime + 2.5
+                }
+            }
         }
     }
 
@@ -361,6 +519,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
             return true
         }
         guard due, let layout = scene.layout, let simulation = simulationStore.value else { return }
+        lock.withLock { autoRollCount += 1 }
         let start = layout.foul + layout.forward * 0.3
             + SIMD3<Float>(0, layout.surfaceY - layout.foul.y + CoolBowlingScene.ballRadius + 0.01, 0)
         // Slightly off-centre, like a real roll, so the rack scatters.
@@ -424,7 +583,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
             ghostFoul = foul
             ghostFacing = facing
         }
-        scene.moveLaneGhost(foul: foul, facing: facing)
+        scene.moveLaneGhost(foul: foul, facing: facing, approachLength: approachLength(foul: foul, facing: facing))
 
         let scheduled: UInt64? = lock.withLock {
             if let deadline = autoPlaceDeadline, now >= deadline {
@@ -516,20 +675,19 @@ public final class CoolBowlingGame: @unchecked Sendable {
         grabbingSide = nil
         holdingBall = false
         grabSamples.removeAll()
+        ballRestSince = nil
     }
 
-    /// A ball below the floor or far from the lane comes back to the player.
+    /// Safety net under the dead-ball rule: a ball below the world or far
+    /// from the lane comes straight back down the return.
     private func recoverLostBall() {
         guard !holdingBall, let position = scene.ballPosition(), let layout = scene.layout else { return }
         let fellOut = position.y < floorLevel.value - respawnDepth
         let horizontal = SIMD3<Float>(position.x - layout.foul.x, 0, position.z - layout.foul.z)
         guard fellOut || simd_length(horizontal) > respawnRange else { return }
-        let point = dropPoint()
-        scene.moveBall(to: point)
-        if simulationStore.value?.resetBody(entity: scene.ballEntity, position: point, velocity: .zero) != true {
-            scene.attachBallBody(velocity: .zero, at: point)
-        }
-        print("CoolBowling: ball lost \(fellOut ? "below the world" : "far away") — brought back")
+        deliverBall()
+        lock.withLock { cycle.ballReturnedManually() }
+        print("CoolBowling: ball lost \(fellOut ? "below the world" : "far away") — sent down the return")
     }
 
     // MARK: - Diagnostics
