@@ -310,6 +310,26 @@ final class JoltPhysicsBackendTests: XCTestCase {
         XCTAssertNil(readTransforms(backend)[30], "Kinematic bodies are driven by the engine, never read back")
     }
 
+    func testRemovingABodyWakesWhatRestedOnIt() {
+        let backend = makeBackend()
+        // A crate on the floor, a ball asleep on the crate.
+        backend.didAddBody(entity: 7, descriptor: PhysicsBodyDescriptor(
+            motionType: .dynamic,
+            collider: PhysicsColliderDescriptor(shape: .box(halfExtents: simd_float3(0.3, 0.2, 0.3)), friction: 0.5, restitution: 0.0),
+            mass: 5,
+            position: simd_float3(0, 0.2, 0)
+        ))
+        backend.didAddBody(entity: 8, descriptor: ball(position: simd_float3(0, 0.4 + 0.11, 0), restitution: 0.0))
+        advance(backend, seconds: 3.0)
+        XCTAssertFalse(backend.isBodyActive(entity: 8), "The ball fell asleep on the crate")
+        let before = backend.bodyState(for: 8)!.position.y
+
+        backend.didRemoveBody(entity: 7)
+        advance(backend, seconds: 0.5)
+        let after = backend.bodyState(for: 8)!.position.y
+        XCTAssertLessThan(after, before - 0.1, "With the crate gone the ball falls instead of hovering asleep")
+    }
+
     func testRemovedBodyStopsSimulating() {
         let backend = makeBackend()
         backend.didAddBody(entity: 1, descriptor: ball(position: simd_float3(0, 1.0, 0)))

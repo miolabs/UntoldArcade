@@ -30,6 +30,7 @@
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
@@ -509,6 +510,13 @@ void ujolt_world_remove_body(ujolt_world *world, ujolt_body_id body) {
         world->records.erase(it);
     }
     BodyInterface &bi = world->system.GetBodyInterface();
+    if (bi.IsAdded(id)) {
+        // Jolt does not wake bodies resting on a body that goes away: they
+        // would hover asleep. Wake whatever overlaps it first.
+        AABox bounds = bi.GetTransformedShape(id).GetWorldSpaceBounds();
+        bounds.ExpandBy(Vec3::sReplicate(0.05f));
+        bi.ActivateBodiesInAABox(bounds, BroadPhaseLayerFilter(), ObjectLayerFilter());
+    }
     bi.RemoveBody(id);
     bi.DestroyBody(id);
     auto &targets = world->kinematicTargets;
