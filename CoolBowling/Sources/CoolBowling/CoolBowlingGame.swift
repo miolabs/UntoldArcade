@@ -177,7 +177,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
         guard stillWanted else { return }
         scene.removeLaneGhost()
         let grounded = SIMD3<Float>(foul.x, floorLevel.value, foul.z)
-        let layout = CoolBowlingScene.LaneLayout(foul: grounded, facing: facing)
+        let layout = CoolBowlingScene.LaneLayout(foul: grounded, facing: facing, approachLength: approachLength(foul: grounded, facing: facing))
         scene.buildLane(layout)
         // The alley is the game's: real surfaces cutting into it stay out.
         simulationStore.value?.setAlleyKeepOut(layout.keepOut)
@@ -191,6 +191,20 @@ public final class CoolBowlingGame: @unchecked Sendable {
         if ProcessInfo.processInfo.arguments.contains("-autoRoll") {
             lock.withLock { autoRollDeadline = ProcessInfo.processInfo.systemUptime + 1.5 }
         }
+    }
+
+    /// The unit's rubber stop, where the ball waits, sits just in front of
+    /// where the player stood when placing the lane (within reason).
+    private func approachLength(foul: SIMD3<Float>, facing: SIMD3<Float>) -> Float {
+        #if os(visionOS)
+        if let head = session.headTransform() {
+            let headPosition = SIMD3<Float>(head.columns.3.x, head.columns.3.y, head.columns.3.z)
+            let forward = simd_normalize(SIMD3<Float>(facing.x, 0, facing.z))
+            let behind = simd_dot(foul - headPosition, forward)
+            return min(max(behind - 0.35, 0.6), 2.2)
+        }
+        #endif
+        return CoolBowlingScene.defaultApproachLength
     }
 
     /// Sends the ball down the return to the rack (control-window button).
@@ -569,7 +583,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
             ghostFoul = foul
             ghostFacing = facing
         }
-        scene.moveLaneGhost(foul: foul, facing: facing)
+        scene.moveLaneGhost(foul: foul, facing: facing, approachLength: approachLength(foul: foul, facing: facing))
 
         let scheduled: UInt64? = lock.withLock {
             if let deadline = autoPlaceDeadline, now >= deadline {
