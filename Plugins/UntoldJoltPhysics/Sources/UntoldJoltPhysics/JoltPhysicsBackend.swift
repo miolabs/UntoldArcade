@@ -85,6 +85,8 @@ public final class JoltPhysicsBackend: PhysicsBackend, @unchecked Sendable {
     public static let environmentEntity: EntityID = .invalid
 
     private let world: OpaquePointer
+    /// The bridge world, for the module's extensions (soft bodies).
+    var worldHandle: OpaquePointer { world }
     private let settings: JoltWorldSettings
 
     // Frame-thread state (the coordinator contract: every protocol call

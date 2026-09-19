@@ -32,6 +32,9 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
@@ -74,6 +77,7 @@ struct BodyRecord {
     uint64_t userData;
     bool sensor;
     EMotionType motion;
+    bool soft = false;
 };
 
 struct KinematicTarget {
@@ -500,6 +504,79 @@ ujolt_body_id ujolt_world_add_body(ujolt_world *world, const ujolt_body_desc *de
     return id.GetIndexAndSequenceNumber();
 }
 
+ujolt_body_id ujolt_world_add_soft_body(ujolt_world *world, const ujolt_soft_body_desc *desc) {
+    if (desc->vertex_count == 0 || desc->vertices == nullptr) return UJOLT_INVALID_BODY;
+    Ref<SoftBodySharedSettings> shared = new SoftBodySharedSettings;
+    shared->mVertices.reserve(desc->vertex_count);
+    for (uint32_t i = 0; i < desc->vertex_count; ++i) {
+        const float *p = desc->vertices + i * 3;
+        const float invMass = desc->inv_masses ? desc->inv_masses[i] : 1.0f;
+        shared->mVertices.push_back(SoftBodySharedSettings::Vertex(Float3(p[0], p[1], p[2]), Float3(0.0f, 0.0f, 0.0f), invMass));
+    }
+    for (uint32_t i = 0; i < desc->edge_count; ++i) {
+        const uint32_t a = desc->edges[i * 2], b = desc->edges[i * 2 + 1];
+        if (a >= desc->vertex_count || b >= desc->vertex_count || a == b) return UJOLT_INVALID_BODY;
+        const float compliance = desc->edge_compliances ? desc->edge_compliances[i] : desc->compliance;
+        shared->mEdgeConstraints.push_back(SoftBodySharedSettings::Edge(a, b, compliance));
+    }
+    for (uint32_t i = 0; i < desc->face_count; ++i) {
+        const uint32_t *f = desc->faces + i * 3;
+        if (f[0] >= desc->vertex_count || f[1] >= desc->vertex_count || f[2] >= desc->vertex_count) return UJOLT_INVALID_BODY;
+        shared->mFaces.push_back(SoftBodySharedSettings::Face(f[0], f[1], f[2]));
+    }
+    shared->CalculateEdgeLengths();
+    shared->Optimize();
+
+    SoftBodyCreationSettings settings(shared, RVec3(v3(desc->position)), Quat::sIdentity(), objectLayer(desc->layer, true));
+    settings.mUserData = desc->user_data;
+    if (desc->iterations > 0) settings.mNumIterations = desc->iterations;
+    settings.mLinearDamping = desc->linear_damping;
+    settings.mVertexRadius = desc->vertex_radius;
+    settings.mFriction = desc->friction;
+    settings.mRestitution = desc->restitution;
+    settings.mGravityFactor = desc->gravity_factor;
+    // Hangs from its pinned vertices: the body's frame stays where it was made.
+    settings.mUpdatePosition = false;
+    settings.mMakeRotationIdentity = true;
+
+    BodyInterface &bi = world->system.GetBodyInterface();
+    const BodyID id = bi.CreateAndAddSoftBody(settings, EActivation::Activate);
+    if (id.IsInvalid()) return UJOLT_INVALID_BODY;
+    {
+        std::lock_guard<std::mutex> guard(world->recordMutex);
+        BodyRecord record{desc->user_data, false, EMotionType::Dynamic};
+        record.soft = true;
+        world->records[id.GetIndexAndSequenceNumber()] = record;
+    }
+    world->broadPhaseDirty = true;
+    return id.GetIndexAndSequenceNumber();
+}
+
+uint32_t ujolt_world_soft_body_vertex_count(ujolt_world *world, ujolt_body_id body) {
+    BodyLockRead lock(world->system.GetBodyLockInterface(), BodyID(body));
+    if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return 0;
+    const auto *mp = static_cast<const SoftBodyMotionProperties *>(lock.GetBody().GetMotionProperties());
+    return uint32_t(mp->GetVertices().size());
+}
+
+uint32_t ujolt_world_read_soft_body_vertices(ujolt_world *world, ujolt_body_id body, float *positions, uint32_t capacity) {
+    BodyLockRead lock(world->system.GetBodyLockInterface(), BodyID(body));
+    if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return 0;
+    const Body &b = lock.GetBody();
+    const auto *mp = static_cast<const SoftBodyMotionProperties *>(b.GetMotionProperties());
+    // Vertex positions are relative to the body's centre of mass.
+    const RMat44 com = b.GetCenterOfMassTransform();
+    const auto &vertices = mp->GetVertices();
+    const uint32_t count = std::min<uint32_t>(capacity, uint32_t(vertices.size()));
+    for (uint32_t i = 0; i < count; ++i) {
+        const RVec3 w = com * vertices[i].mPosition;
+        positions[i * 3] = float(w.GetX());
+        positions[i * 3 + 1] = float(w.GetY());
+        positions[i * 3 + 2] = float(w.GetZ());
+    }
+    return count;
+}
+
 void ujolt_world_remove_body(ujolt_world *world, ujolt_body_id body) {
     const BodyID id(body);
     {
@@ -642,7 +719,7 @@ uint32_t ujolt_world_changed_bodies(ujolt_world *world, ujolt_body_id *ids, uint
     auto emit = [&](const BodyID &id) {
         if (written >= capacity) return;
         BodyRecord record;
-        if (!world->lookup(id, record) || record.motion != EMotionType::Dynamic) return;
+        if (!world->lookup(id, record) || record.motion != EMotionType::Dynamic || record.soft) return;
         ids[written++] = id.GetIndexAndSequenceNumber();
     };
     // Jolt's active list has no duplicates; only the (small) just-asleep
