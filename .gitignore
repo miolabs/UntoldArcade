@@ -56,3 +56,7 @@ Carthage/Build/
 
 /SceneBuilder/SceneBuilder.xcodeproj/xcuserdata
 /SceneBuilder/SceneBuilder.xcodeproj/xcuserdata
+
+# CoolWeb glove cook previews (Scripts/convert-gloves.sh output, eyeball-only)
+CoolWeb/Sources/CoolWeb/Resources/Models/preview_*.png
+CoolWeb/Sources/CoolWeb/Resources/Models/palm_*.png
