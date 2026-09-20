@@ -15,7 +15,7 @@ Clone it, open a folder, hit `⌘R`, and you're looking at the feature instead o
 
 ## 📺 Demos
 
-Each demo is a **standalone Xcode project** with its own README, tutorial, and bundled assets — no setup beyond opening the `.xcodeproj`. The three Rendering Extensions (CoolSaber, CoolWater, CoolCloth) are reusable plugins — each ships its own shader library, pipelines, and render-graph passes, and can be dropped into any project.
+Each demo is a **standalone Xcode project** with its own README, tutorial, and bundled assets — no setup beyond opening the `.xcodeproj`. The four Rendering Extensions (CoolSaber, CoolWater, CoolCloth, CoolWeb) are reusable plugins — each ships its own shader library, pipelines, and render-graph passes, and can be dropped into any project.
 
 ### ⚔️ CoolSaber — *visionOS · Rendering Extension*
 
@@ -45,6 +45,16 @@ GPU cloth simulation (XPBD, small-steps scheme) hanging in your real room — pi
 
 ```bash
 open CoolCloth/Examples/CoolClothVisionOS/CoolClothVisionOS.xcodeproj
+```
+
+### 🕸️ CoolWeb — *visionOS · Rendering Extension*
+
+![CoolWeb demo](docs/media/CoolWeb/demo.gif)
+
+A Spider-Man web-shooter demo — strike the classic web-shooter pose (thumb, index and pinky extended, middle and ring curled) and a web line fires from your wrist, blooms into a net on the surface it hits, and stays tethered to your hand until you open your palm to release it. **Requires a physical Vision Pro** (hand tracking and scene reconstruction aren't available in the simulator).
+
+```bash
+open CoolWeb/Examples/CoolWebVisionOS/CoolWebVisionOS.xcodeproj
 ```
 
 ### 🏛️ ArchvizViewer — *visionOS*
@@ -119,7 +129,7 @@ open SplatTwin/SplatTwin.xcodeproj
 - **iOS 26.01+** (for iOS demos)
 - **visionOS 26.01+** (for Vision Pro demos)
 - Metal-capable GPU
-- A physical Apple Vision Pro for CoolSaber (simulator can't run the deferred renderer's G-buffer)
+- A physical Apple Vision Pro for CoolSaber (simulator can't run the deferred renderer's G-buffer) and CoolWeb (simulator has no hand tracking or scene reconstruction)
 
 ---
 
@@ -152,6 +162,7 @@ UntoldArcade/
 ├── CoolSaber/           # Rendering Extension — PSVR2 lightsaber duels + SharePlay
 ├── CoolWater/           # Rendering Extension — real-time animated water
 ├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
+├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
 ├── CityStreaming/       # visionOS — tiled city streaming with LOD/HLOD
