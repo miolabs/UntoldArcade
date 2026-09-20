@@ -8,7 +8,6 @@
 import Foundation
 import simd
 import UntoldEngine
-import UntoldGaussianTwins
 
 final class GameScene {
     private enum Constants {
