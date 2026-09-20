@@ -11,13 +11,35 @@ public enum CoolBasketHandSide: CaseIterable, Sendable {
     case right
 }
 
-/// The joints the basketball demo needs: palm for the hand collider, thumb
-/// and index tips for the pinch grab.
+/// What the basketball demo reads off a hand: the palm (hand collider,
+/// palm and two-hand holds), thumb and index tips (the pinch), the palm's
+/// outward normal and how far the fingers are curled (closing on a ball).
 public struct CoolBasketHandPose: Sendable {
     public var isTracked: Bool
     public var palm: SIMD3<Float>
     public var thumbTip: SIMD3<Float>
     public var indexTip: SIMD3<Float>
+    /// Unit vector out of the palm, the side the fingers curl toward.
+    public var palmNormal: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
+    /// 0 open hand, 1 fist (see `CoolBasketHandPose.fingerCurl`).
+    public var fingerCurl: Float = 0
+    /// False when too few fingertips were actually tracked for the curl to
+    /// mean anything (fingers wrapped behind the ball, the back of the hand
+    /// to the cameras): the game then carries the last good reading.
+    public var fingerCurlTracked: Bool = true
+
+    public init(
+        isTracked: Bool, palm: SIMD3<Float>, thumbTip: SIMD3<Float>, indexTip: SIMD3<Float>,
+        palmNormal: SIMD3<Float> = SIMD3<Float>(0, 1, 0), fingerCurl: Float = 0, fingerCurlTracked: Bool = true
+    ) {
+        self.isTracked = isTracked
+        self.palm = palm
+        self.thumbTip = thumbTip
+        self.indexTip = indexTip
+        self.palmNormal = palmNormal
+        self.fingerCurl = fingerCurl
+        self.fingerCurlTracked = fingerCurlTracked
+    }
 
     public var pinchPoint: SIMD3<Float> {
         (thumbTip + indexTip) * 0.5
@@ -185,12 +207,30 @@ public final class CoolBasketSpatialSession: @unchecked Sendable {
         }
 
         let wrist = world(.wrist)
-        let knuckleCenter = (world(.indexFingerKnuckle) + world(.littleFingerKnuckle)) * 0.5
+        let indexKnuckle = world(.indexFingerKnuckle)
+        let littleKnuckle = world(.littleFingerKnuckle)
+        let knuckleCenter = (indexKnuckle + littleKnuckle) * 0.5
+        let side: CoolBasketHandSide = anchor.chirality == .left ? .left : .right
+        // Only fingertips ARKit actually sees count toward the curl: an
+        // extrapolated tip (fingers wrapped behind the ball) reads anywhere.
+        let fingers: [(knuckle: HandSkeleton.JointName, tip: HandSkeleton.JointName)] = [
+            (.indexFingerKnuckle, .indexFingerTip), (.middleFingerKnuckle, .middleFingerTip),
+            (.ringFingerKnuckle, .ringFingerTip), (.littleFingerKnuckle, .littleFingerTip),
+        ]
+        let seen = fingers.filter { skeleton.joint($0.tip).isTracked && skeleton.joint($0.knuckle).isTracked }
         return CoolBasketHandPose(
             isTracked: anchor.isTracked,
             palm: (wrist + knuckleCenter) * 0.5,
             thumbTip: world(.thumbTip),
-            indexTip: world(.indexFingerTip)
+            indexTip: world(.indexFingerTip),
+            palmNormal: CoolBasketHandPose.palmNormal(
+                forward: world(.middleFingerKnuckle) - wrist, across: indexKnuckle - littleKnuckle, side: side
+            ),
+            fingerCurl: CoolBasketHandPose.fingerCurl(
+                tipDistances: seen.map { simd_length(world($0.tip) - wrist) },
+                knuckleDistances: seen.map { simd_length(world($0.knuckle) - wrist) }
+            ),
+            fingerCurlTracked: seen.count >= 2
         )
     }
 

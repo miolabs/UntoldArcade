@@ -2,7 +2,7 @@
 //  CoolBasketVisionOSXRApp.swift  (visionOS)
 //  CoolBasket
 //
-//  Mixed-reality basketball. Pinch near the ball to pick it up, throw it
+//  Mixed-reality basketball. Pinch near the ball, close a hand on it or take it in both to pick it up, throw it
 //  with a flick of the hand; your hands also dribble, swat and catch. The
 //  ball bounces off your real floor, walls and furniture, and off the hoop
 //  standing in your room — put it down through the rim to score.
@@ -31,6 +31,7 @@ final class BasketXRHolder: @unchecked Sendable {
     private var scoreStorage = 0
     private var planeStorage = 0
     private var impulseStorage: Float = 0
+    private var holdStorage: String?
     private var engineStorage = "—"
     private var dropBallPending = false
     private var resetScorePending = false
@@ -41,10 +42,11 @@ final class BasketXRHolder: @unchecked Sendable {
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(score: Int, balls: Int, planes: Int, impulse: Float, placing: Bool, engine: String) {
+    func setDiagnostics(score: Int, balls: Int, planes: Int, impulse: Float, placing: Bool, engine: String, hold: String?) {
         lock.withLock {
             scoreStorage = score
             ballStorage = balls
+            holdStorage = hold
             planeStorage = planes
             impulseStorage = impulse
             placingStorage = placing
@@ -66,6 +68,7 @@ final class BasketXRHolder: @unchecked Sendable {
     var isPlacingHoop: Bool { lock.withLock { placingStorage } }
     var planeCount: Int { lock.withLock { planeStorage } }
     var lastImpulse: Float { lock.withLock { impulseStorage } }
+    var currentHold: String? { lock.withLock { holdStorage } }
     var engineName: String { lock.withLock { engineStorage } }
     var ballCount: Int { lock.withLock { ballStorage } }
 
@@ -132,7 +135,7 @@ struct CoolBasketVisionOSXRApp: App {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Basket 🏀").font(.extraLargeTitle).fontWeight(.bold)
-                    Text("First, place your hoop: look where you want it — the ghost follows your gaze —\nand pinch (or press Place hoop here). Then pinch near a ball to pick it up\nand throw. Put it down through the rim to score!")
+                    Text("First, place your hoop: look where you want it — the ghost follows your gaze —\nand pinch (or press Place hoop here). Then pinch near a ball, close a hand on it or take it\nin both hands to pick it up, and throw. Put it down through the rim to score!")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Button {
@@ -203,6 +206,7 @@ struct CoolBasketVisionOSXRApp: App {
                                     + " · physics \(holder.engineName)"
                                     + " · surfaces \(holder.planeCount)"
                                     + String(format: " · last impact %.2f N·s", holder.lastImpulse)
+                                    + (holder.currentHold.map { " · holding: \($0)" } ?? "")
                             )
                             .font(.footnote.monospaced())
                             .foregroundStyle(.tertiary)

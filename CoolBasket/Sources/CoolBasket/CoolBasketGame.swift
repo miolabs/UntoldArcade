@@ -63,17 +63,26 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// crossing the rim plane downward inside the ring.
     private let basketWindow: TimeInterval = 0.6
 
-    // Grab state (game thread only).
-    private var grabbingSide: CoolBasketHandSide?
+    // Grab state (game thread only). The rules live in CoolBasketGrabRules.
+    private var hold: CoolBasketHoldKind?
     private var heldBall: EntityID?
     private var grabSamples: [(position: SIMD3<Float>, time: TimeInterval)] = []
-    /// The grabbing hand is out of the cameras' view: the ball waits where
-    /// it was (see `updateHands`). The other hand may take it meanwhile.
+    /// A holding hand is out of the cameras' view: the ball waits where it
+    /// was (see `updateHold`). A free hand may take it meanwhile.
     private var holdSuspended = false
-    /// When the grabbing hand came back into view, so the first frames'
-    /// pinch reading — noisy at the edge of view — cannot drop the ball.
+    /// When the holding hands came back into view, so the first frames'
+    /// reading — noisy at the edge of view — cannot drop the ball.
     private var holdRegainedAt: TimeInterval = 0
     private let pinchSettleTime: TimeInterval = 0.08
+    /// Recent finger curl per hand, for telling a hand closing on the ball
+    /// from one that merely is closed (a fist meeting a ball swats it).
+    private var curlHistory: [CoolBasketHandSide: [(curl: Float, time: TimeInterval)]] = [:]
+    /// The tightest the fingers have been during a palm hold; opening from
+    /// it releases.
+    private var graspCurl: Float = 0
+    /// This frame's tracked hands (game thread), for the release to park
+    /// every collider the re-added ball would land in.
+    private var frameHands: [CoolBasketHandSide: CoolBasketHandPose] = [:]
     /// The lowest downward-facing surface ARKit has seen (the ceiling), for
     /// the diagnostics: the rim height was set by feel, this measures the
     /// room it has to fit.
@@ -82,11 +91,6 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// the pinch point, isn't shoved by that hand's own collider.
     private var handParkedUntil: [CoolBasketHandSide: TimeInterval] = [:]
     private let releaseCooldown: TimeInterval = 0.12
-    /// Pinch tighter than this grabs; wider than this releases (hysteresis).
-    private let pinchGrabDistance: Float = 0.025
-    private let pinchReleaseDistance: Float = 0.045
-    /// Palm must be this close to a ball to pick it up.
-    private let grabReach: Float = 0.30
     /// A size-7 ball is never thrown faster indoors; the built-in backend
     /// enforces the same ceiling on every dynamic body.
     private let maxThrowSpeed: Float = 10.0
@@ -547,6 +551,12 @@ public final class CoolBasketGame: @unchecked Sendable {
             if let net {
                 coolBasketLog.log("net peak displacement \(net.takePeakDisplacement(), format: .fixed(precision: 3)) m, driving \(net.boundMeshCount) meshes")
             }
+            #if os(visionOS)
+            if !frameHands.isEmpty || hold != nil {
+                let curls = frameHands.map { "\($0.key == .left ? "L" : "R") \(String(format: "%.2f", $0.value.fingerCurl))\($0.value.fingerCurlTracked ? "" : "?")" }.joined(separator: " ")
+                coolBasketLog.log("hands \(curls, privacy: .public) hold \(self.currentHold ?? "none", privacy: .public)")
+            }
+            #endif
         }
 
         recoverLostBalls()
@@ -646,8 +656,8 @@ public final class CoolBasketGame: @unchecked Sendable {
                     lock.withLock { pinchWasClosed[side] = nil }
                     continue
                 }
-                let closed = pose.pinchDistance < pinchGrabDistance
-                let open = pose.pinchDistance > pinchReleaseDistance
+                let closed = pose.pinchDistance < CoolBasketGrabRules.pinchGrabDistance
+                let open = pose.pinchDistance > CoolBasketGrabRules.pinchReleaseDistance
                 let previouslyClosed = lock.withLock { pinchWasClosed[side] }
                 if closed, previouslyClosed == false, graceOver {
                     lock.withLock { placePending = true }
@@ -688,67 +698,137 @@ public final class CoolBasketGame: @unchecked Sendable {
 
     #if os(visionOS)
     private func updateHands(now: TimeInterval) {
+        var hands: [CoolBasketHandSide: CoolBasketHandPose] = [:]
+        var parked: Set<CoolBasketHandSide> = []
         for side in CoolBasketHandSide.allCases {
             let handEntity = side == .left
                 ? scene.leftHandEntity
                 : scene.rightHandEntity
 
             // ~50 ms prediction keeps the collider on a fast-moving hand.
-            guard let pose = session.predictedHandPose(side, at: now + 0.05),
+            guard var pose = session.predictedHandPose(side, at: now + 0.05),
                   pose.isTracked
             else {
                 scene.moveProxy(handEntity, to: nil)
-                if grabbingSide == side, !holdSuspended {
-                    // The hand left the cameras' view holding the ball.
-                    // Mid-swing, that is the throw: release it with the
-                    // motion it had. Otherwise — looking up at the hoop takes
-                    // a resting hand out of view — the ball waits where it
-                    // was until the hand is seen again: a still-closed pinch
-                    // carries on, an open one releases. Dropping it here made
-                    // a throw impossible.
+                continue
+            }
+            // Fingertips ARKit could not see say nothing: carry the last
+            // good curl rather than read a grab or a drop into a guess.
+            if !pose.fingerCurlTracked, let last = curlHistory[side]?.last?.curl {
+                pose.fingerCurl = last
+            }
+            hands[side] = pose
+            var history = curlHistory[side] ?? []
+            history.append((pose.fingerCurl, now))
+            while let first = history.first, now - first.time > CoolBasketGrabRules.curlCloseWindow {
+                history.removeFirst()
+            }
+            curlHistory[side] = history
+
+            // Just threw: the collider stays parked until the ball is clear
+            // of the hand, and that hand cannot grab it back meanwhile.
+            if let parkedUntil = handParkedUntil[side], now < parkedUntil {
+                scene.moveProxy(handEntity, to: nil)
+                parked.insert(side)
+            } else {
+                scene.moveProxy(handEntity, to: pose.palm)
+            }
+        }
+        frameHands = hands
+        updateHold(hands: hands, parked: parked, now: now)
+    }
+
+    /// What the hands hold right now, for the diagnostics.
+    public var currentHold: String? {
+        guard let hold else { return nil }
+        switch hold {
+        case let .pinch(side): return "pinch (\(side == .left ? "left" : "right"))"
+        case let .palm(side): return "palm (\(side == .left ? "left" : "right"))"
+        case .twoHands: return "two hands"
+        }
+    }
+
+    /// Carries the held ball with its hands, lets it go when they open or
+    /// part, and picks one up when hands close on it — see
+    /// CoolBasketGrabRules for the rules.
+    private func updateHold(hands: [CoolBasketHandSide: CoolBasketHandPose], parked: Set<CoolBasketHandSide>, now: TimeInterval) {
+        let radius = CoolBasketScene.ballRadius
+        let grabbers = hands.filter { !parked.contains($0.key) }
+        if let hold, let held = heldBall {
+            let tracked = hold.sides.allSatisfy { hands[$0] != nil }
+            if !tracked {
+                // A two-hand hold whose other hand is still on the ball goes
+                // on with that hand alone.
+                if hold == .twoHands, hands.count == 1, let remaining = hands.first,
+                   let ballCenter = scene.ballPosition(held),
+                   CoolBasketGrabRules.isOnBall(remaining.value, ballCenter: ballCenter, ballRadius: radius)
+                {
+                    handOver(to: remaining.key, hand: remaining.value, ball: held, now: now)
+                    return
+                }
+                if !holdSuspended {
+                    // A holding hand left the cameras' view. Mid-swing, that
+                    // is the throw: release with the motion it had.
+                    // Otherwise — looking up at the hoop takes a resting
+                    // hand out of view — the ball waits where it is until
+                    // the hand is seen again: hands still closed on it carry
+                    // on, open ones release. Dropping it here made a throw
+                    // impossible.
                     if Self.releasesOnLoss(samples: grabSamples, now: now, maxSpeed: maxThrowSpeed) {
                         releaseBall(at: nil, now: now)
                     } else {
                         holdSuspended = true
                     }
                 }
-                continue
+                // Any tracked hand may take the waiting ball — only that
+                // ball: switching the one hold to another would strand it
+                // without a body.
+                if holdSuspended {
+                    attemptGrab(hands: grabbers, candidates: [held], now: now)
+                }
+                return
             }
-            if grabbingSide == side, holdSuspended {
+            if holdSuspended {
                 holdSuspended = false
                 holdRegainedAt = now
                 grabSamples.removeAll()
             }
-
-            // Just threw: the collider stays parked until the ball is clear
-            // of the hand.
-            if let parkedUntil = handParkedUntil[side], now < parkedUntil {
-                scene.moveProxy(handEntity, to: nil)
-                continue
+            if case let .palm(side) = hold, let hand = hands[side] {
+                graspCurl = max(graspCurl, hand.fingerCurl)
             }
-
-            scene.moveProxy(handEntity, to: pose.palm)
-            updateGrab(side: side, pose: pose, now: now)
-        }
-    }
-
-    private func updateGrab(side: CoolBasketHandSide, pose: CoolBasketHandPose, now: TimeInterval) {
-        if grabbingSide == side, let held = heldBall {
-            if pose.pinchDistance > pinchReleaseDistance {
+            // The other hand joining: a two-hand hold from here on.
+            if hold != .twoHands, let ballCenter = scene.ballPosition(held),
+               CoolBasketGrabRules.rejoinsWithBothHands(hold, hands: hands, ball: held, ballCenter: ballCenter, ballRadius: radius)
+            {
+                self.hold = .twoHands
+                holdRegainedAt = now
+                coolBasketLog.log("ball held with both hands")
+                return
+            }
+            if hold == .twoHands, let ballCenter = scene.ballPosition(held),
+               case let .handover(side) = CoolBasketGrabRules.twoHandOutcome(hands: hands, ballCenter: ballCenter, ballRadius: radius),
+               let hand = hands[side]
+            {
+                handOver(to: side, hand: hand, ball: held, now: now)
+                return
+            }
+            let releases = hold == .twoHands
+                ? (scene.ballPosition(held).map { CoolBasketGrabRules.twoHandOutcome(hands: hands, ballCenter: $0, ballRadius: radius) == .release } ?? false)
+                : CoolBasketGrabRules.releases(hold, hands: hands, ballRadius: radius, graspCurl: graspCurl)
+            if releases {
                 if grabSamples.isEmpty {
-                    // Back in view with the hand already open: the ball was
+                    // Back in view with the hands already open: the ball was
                     // let go out of view. It drops from where it waited —
                     // not snapped to a hand that is itself in motion.
                     releaseBall(at: scene.ballPosition(held), now: now)
                 } else if now - holdRegainedAt >= pinchSettleTime {
-                    releaseBall(at: pose.pinchPoint, now: now)
+                    releaseBall(at: CoolBasketGrabRules.holdPoint(hold, hands: hands, ballRadius: radius), now: now)
                 }
                 // Else: an open reading in the first frames back in view,
                 // after a closed one — noise at the edge of view; hold on.
-            } else {
-                let position = pose.pinchPoint
-                scene.moveBall(held, to: position)
-                grabSamples.append((position, now))
+            } else if let point = CoolBasketGrabRules.holdPoint(hold, hands: hands, ballRadius: radius) {
+                scene.moveBall(held, to: point)
+                grabSamples.append((point, now))
                 // Keep a short motion history for the throw velocity.
                 while let first = grabSamples.first, now - first.time > Self.throwSampleAge {
                     grabSamples.removeFirst()
@@ -756,46 +836,66 @@ public final class CoolBasketGame: @unchecked Sendable {
             }
             return
         }
+        attemptGrab(hands: grabbers, candidates: scene.balls, now: now)
+    }
 
-        // A new grab — or the other hand taking a ball whose hand is out of
-        // view.
-        guard grabbingSide == nil || holdSuspended, pose.pinchDistance < pinchGrabDistance else { return }
-        // The nearest ball within reach of the palm.
-        var nearest: (entity: EntityID, distance: Float)?
-        for ball in scene.balls {
-            guard let position = scene.ballPosition(ball) else { continue }
-            let distance = simd_length(position - pose.palm)
-            if distance < grabReach, distance < (nearest?.distance ?? .greatestFiniteMagnitude) {
-                nearest = (ball, distance)
-            }
+    /// A two-hand hold continues on one palm: the other hand came off the
+    /// ball (or out of view). The ball keeps its motion history.
+    private func handOver(to side: CoolBasketHandSide, hand: CoolBasketHandPose, ball: EntityID, now: TimeInterval) {
+        hold = .palm(side)
+        graspCurl = hand.fingerCurl
+        holdSuspended = false
+        // The first frames of a one-hand hold read like a regain: settle
+        // before an open reading can drop the ball.
+        holdRegainedAt = now
+        let radius = CoolBasketScene.ballRadius
+        if let point = CoolBasketGrabRules.holdPoint(.palm(side), hands: [side: hand], ballRadius: radius) {
+            scene.moveBall(ball, to: point)
+            grabSamples.append((point, now))
         }
-        guard let ball = nearest?.entity else { return }
+        coolBasketLog.log("ball handed to one palm (curl \(hand.fingerCurl, format: .fixed(precision: 2)))")
+    }
 
-        let takingOver = ball == heldBall
-        grabbingSide = side
-        heldBall = ball
+    /// A new grab by the given hands over `candidates` — or a hand taking
+    /// a waiting ball whose hand is out of view.
+    private func attemptGrab(hands: [CoolBasketHandSide: CoolBasketHandPose], candidates: [EntityID], now: TimeInterval) {
+        guard !hands.isEmpty else { return }
+        let balls = candidates.compactMap { ball -> (entity: EntityID, center: SIMD3<Float>)? in
+            guard let center = scene.ballPosition(ball) else { return nil }
+            return (ball, center)
+        }
+        let radius = CoolBasketScene.ballRadius
+        let closing = Set(hands.keys.filter { CoolBasketGrabRules.isClosing(curls: curlHistory[$0] ?? [], now: now) })
+        guard let grab = CoolBasketGrabRules.grab(hands: hands, closing: closing, balls: balls, ballRadius: radius),
+              let point = CoolBasketGrabRules.holdPoint(grab.kind, hands: hands, ballRadius: radius)
+        else { return }
+
+        let takingOver = grab.ball == heldBall
+        hold = grab.kind
+        heldBall = grab.ball
         holdSuspended = false
         holdRegainedAt = 0
-        grabSamples = [(pose.pinchPoint, now)]
+        grabSamples = [(point, now)]
+        if case let .palm(side) = grab.kind {
+            graspCurl = hands[side]?.fingerCurl ?? 0
+        }
         lock.withLock {
-            throughRingAt.removeValue(forKey: ball)
-            previousCenters.removeValue(forKey: ball)
+            throughRingAt.removeValue(forKey: grab.ball)
+            previousCenters.removeValue(forKey: grab.ball)
         }
-        // A suspended ball has no body already.
+        // A waiting ball has no body already.
         if !takingOver {
-            scene.detachBallBody(entity: ball)
+            scene.detachBallBody(entity: grab.ball)
         }
-        scene.moveBall(ball, to: pose.pinchPoint)
-        print("CoolBasket: ball grabbed (\(side == .left ? "left" : "right"))")
+        scene.moveBall(grab.ball, to: point)
+        // A catch makes no contact (the held ball has no collider): a soft
+        // tick says it happened.
+        audio.playBounce(intensity: 0.25)
+        let curls = hands.map { "\($0.key == .left ? "L" : "R") \(String(format: "%.2f", $0.value.fingerCurl))" }.joined(separator: " ")
+        coolBasketLog.log("ball grabbed: \(String(describing: grab.kind), privacy: .public) curl \(curls, privacy: .public)")
     }
 
     private func releaseBall(at position: SIMD3<Float>?, now: TimeInterval) {
-        if let side = grabbingSide {
-            handParkedUntil[side] = now + releaseCooldown
-            // Off the hand right away: the body comes back next substep,
-            // where a collider still on the palm would swat it.
-            scene.moveProxy(side == .left ? scene.leftHandEntity : scene.rightHandEntity, to: nil)
-        }
         defer { cancelGrab() }
         guard let ball = heldBall else { return }
         let releasePoint = position
@@ -803,11 +903,24 @@ public final class CoolBasketGame: @unchecked Sendable {
             ?? scene.ballPosition(ball)
             ?? ballSpawnPosition
 
+        // Off the hands right away: the body comes back next substep, and a
+        // collider still on a palm it lands in — the holding hand's, or a
+        // guide hand's — would swat it.
+        var parking = hold?.sides ?? []
+        for (side, hand) in frameHands
+            where simd_distance(hand.palm, releasePoint) < CoolBasketScene.ballRadius + CoolBasketScene.handRadius + 0.02
+        {
+            parking.insert(side)
+        }
+        for side in parking {
+            handParkedUntil[side] = now + releaseCooldown
+            scene.moveProxy(side == .left ? scene.leftHandEntity : scene.rightHandEntity, to: nil)
+        }
+
         let velocity = Self.throwVelocity(samples: grabSamples, now: now, maxSpeed: maxThrowSpeed)
         scene.attachBallBody(entity: ball, velocity: velocity, at: releasePoint)
-        print(String(
-            format: "CoolBasket: thrown at %.1f m/s", simd_length(velocity)
-        ))
+        let curls = frameHands.map { "\($0.key == .left ? "L" : "R") \(String(format: "%.2f", $0.value.fingerCurl))" }.joined(separator: " ")
+        coolBasketLog.log("thrown at \(simd_length(velocity), format: .fixed(precision: 1)) m/s from \(String(describing: self.hold), privacy: .public) curl \(curls, privacy: .public)")
     }
     #endif
 
@@ -852,10 +965,11 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// Drops any grab in progress without a throw (Move hoop, shutdown).
     /// Game thread only, like the grab logic itself.
     private func cancelGrab() {
-        grabbingSide = nil
+        hold = nil
         heldBall = nil
         holdSuspended = false
         holdRegainedAt = 0
+        graspCurl = 0
         grabSamples.removeAll()
     }
 

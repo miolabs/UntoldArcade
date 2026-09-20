@@ -53,7 +53,8 @@ final class BasketXRGame: @unchecked Sendable {
             planes: game.worldPlaneCount,
             impulse: game.lastImpulse,
             placing: game.currentPhase == .placingHoop,
-            engine: game.activeEngine?.displayName ?? "none"
+            engine: game.activeEngine?.displayName ?? "none",
+            hold: game.currentHold
         )
     }
 

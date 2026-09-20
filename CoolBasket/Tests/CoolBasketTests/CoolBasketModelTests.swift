@@ -60,6 +60,18 @@ final class CoolBasketModelTests: XCTestCase {
         XCTAssertEqual((knots.min.z + knots.max.z) * 0.5, Lattice.axis.y, accuracy: 0.01, "on the rim's axis")
     }
 
+    func testTheBallModelIsCentredAndBallSized() throws {
+        // The palm seat and the two-hand midpoint place the ball by its
+        // origin and CoolBasketScene.ballRadius.
+        let url = try XCTUnwrap(Bundle.module.resourceURL?.appendingPathComponent("Models/basketball/basketball.untold"))
+        let asset = try NativeFormatLoader().loadAssetSync(from: url)
+        let bounds = asset.worldBounds
+        for axis in 0 ..< 3 {
+            XCTAssertEqual(bounds.min[axis], -CoolBasketScene.ballRadius, accuracy: 0.01, "axis \(axis) min")
+            XCTAssertEqual(bounds.max[axis], CoolBasketScene.ballRadius, accuracy: 0.01, "axis \(axis) max")
+        }
+    }
+
     func testTheLoweredPostPaddingKeptItsSeamsAndStraps() throws {
         // The export shortens the post padding with the rim; its stitched
         // seams (separate parts) must come with it and the straps must not
