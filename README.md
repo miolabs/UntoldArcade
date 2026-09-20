@@ -85,7 +85,7 @@ open CoolBowling/Examples/CoolBowlingVisionOS/CoolBowlingVisionOS.xcodeproj
 
 ### 🧲 UntoldJoltPhysics — *plugin · Physics Backend*
 
-[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, packaged for every demo to use (`Plugins/UntoldJoltPhysics`). Jolt is vendored as source and compiled by SwiftPM — no binaries — for macOS, iOS and visionOS. CoolBasket can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, packaged for every demo to use (`Plugins/UntoldJoltPhysics`). Jolt comes as source from the [miolabs/JoltPhysics](https://github.com/miolabs/JoltPhysics) fork (the upstream tree plus a `Package.swift`) and SwiftPM compiles it — no binaries — for macOS, iOS and visionOS. CoolBasket can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
 
 ```bash
 open Plugins/UntoldJoltPhysics/Package.swift

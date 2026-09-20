@@ -3,12 +3,10 @@
 import PackageDescription
 
 // Jolt verifies at RegisterTypes() that every translation unit including its
-// headers was built with the same feature defines (JPH_VERSION_ID). Keep this
-// list the single source of truth for BOTH C++ targets.
-//
-// SwiftPM never defines NDEBUG for C/C++ targets; without it Jolt turns on
-// JPH_DEBUG and therefore JPH_ENABLE_ASSERTS (a version-ID bit) in every
-// configuration. Release builds get the real thing here; debug keeps asserts.
+// headers was built with the same feature defines (JPH_VERSION_ID). The
+// JoltPhysics package defines NDEBUG in release builds (SwiftPM never does
+// for C/C++ targets; without it Jolt turns on JPH_DEBUG and therefore
+// JPH_ENABLE_ASSERTS, a version-ID bit); the bridge must match it.
 let joltDefines: [CXXSetting] = [
     .define("NDEBUG", .when(configuration: .release)),
 ]
@@ -24,44 +22,21 @@ let package = Package(
         .library(name: "UntoldJoltPhysics", targets: ["UntoldJoltPhysics"]),
     ],
     dependencies: [
+        // Jolt Physics itself (MIT), compiled from source by SwiftPM: the
+        // upstream tree with a Package.swift added, on a tag of the fork.
+        // To update Jolt, tag the fork's next spm/<version> branch and bump
+        // this pin.
+        .package(url: "https://github.com/miolabs/JoltPhysics.git", exact: "5.6.0-spm.1"),
         .package(url: "https://github.com/untoldengine/UntoldEngine.git", branch: "develop"),
     ],
     targets: [
-        // Vendored Jolt Physics (MIT), compiled straight from source — no
-        // CMake, no binaries. Scripts/update-jolt.sh refreshes the copy and
-        // prints the exclude list below.
-        .target(
-            name: "JoltPhysics",
-            path: "Native/JoltPhysics",
-            exclude: [
-                "LICENSE",
-                "JOLT_VERSION.md",
-                "Jolt/Shaders/HairApplyDeltaTransform.hlsl",
-                "Jolt/Shaders/HairApplyGlobalPose.hlsl",
-                "Jolt/Shaders/HairCalculateCollisionPlanes.hlsl",
-                "Jolt/Shaders/HairCalculateRenderPositions.hlsl",
-                "Jolt/Shaders/HairGridAccumulate.hlsl",
-                "Jolt/Shaders/HairGridClear.hlsl",
-                "Jolt/Shaders/HairGridNormalize.hlsl",
-                "Jolt/Shaders/HairIntegrate.hlsl",
-                "Jolt/Shaders/HairSkinRoots.hlsl",
-                "Jolt/Shaders/HairSkinVertices.hlsl",
-                "Jolt/Shaders/HairTeleport.hlsl",
-                "Jolt/Shaders/HairUpdateRoots.hlsl",
-                "Jolt/Shaders/HairUpdateStrands.hlsl",
-                "Jolt/Shaders/HairUpdateVelocity.hlsl",
-                "Jolt/Shaders/HairUpdateVelocityIntegrate.hlsl",
-                "Jolt/Shaders/TestCompute.hlsl",
-                "Jolt/Shaders/TestCompute2.hlsl",
-            ],
-            publicHeadersPath: ".",
-            cxxSettings: joltDefines
-        ),
         // C ABI shim over the Jolt C++ API: opaque handles and plain structs,
         // only what the engine's PhysicsBackend protocol needs.
         .target(
             name: "CJoltBridge",
-            dependencies: ["JoltPhysics"],
+            dependencies: [
+                .product(name: "JoltPhysics", package: "JoltPhysics"),
+            ],
             path: "Sources/CJoltBridge",
             cxxSettings: joltDefines
         ),
