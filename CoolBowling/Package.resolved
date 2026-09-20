@@ -1,6 +1,15 @@
 {
-  "originHash" : "c581517357bbd3ab29ae361f1ef5b6f83762a3f4499950fc5e7ff5275fa80fd4",
+  "originHash" : "0e480442b364d52ae9bf1af89d9135ec7c4eccfc6b15a184ad808e6c6909e67d",
   "pins" : [
+    {
+      "identity" : "joltphysics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/miolabs/JoltPhysics.git",
+      "state" : {
+        "revision" : "d022139333fea10ae43c9faaa34108c72c9bee7b",
+        "version" : "5.6.0-spm.1"
+      }
+    },
     {
       "identity" : "untoldengine",
       "kind" : "remoteSourceControl",
