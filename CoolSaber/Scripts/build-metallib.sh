@@ -10,13 +10,20 @@ source_file="$shader_dir/CoolSaber.metal"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/CoolSaber.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT
 
+# The target OS must match the oldest OS Package.swift supports (macOS 14,
+# iOS 17, visionOS 2). Without -mtargetos the compiler targets the SDK's own
+# OS and emits that OS's AIR version (air64_v29 for OS 27), which an older OS
+# rejects at makeLibrary time ("This library is using a deployment target
+# ... that is not supported on this ...").
 build_library() {
     sdk=$1
-    output_name=$2
+    target_os=$2
+    output_name=$3
     sdk_work_dir="$work_dir/$sdk"
     mkdir -p "$sdk_work_dir"
 
     xcrun -sdk "$sdk" metal \
+        -mtargetos="$target_os" \
         -c "$source_file" \
         -I "$shader_dir" \
         -fmodules-cache-path="$sdk_work_dir/ModuleCache" \
@@ -29,8 +36,8 @@ build_library() {
 
 mkdir -p "$resource_dir"
 
-build_library macosx CoolSaber-macos.metallib
-build_library iphoneos CoolSaber-ios.metallib
-build_library iphonesimulator CoolSaber-iossim.metallib
-build_library xros CoolSaber-xros.metallib
-build_library xrsimulator CoolSaber-xrossim.metallib
+build_library macosx macosx14.0 CoolSaber-macos.metallib
+build_library iphoneos ios17.0 CoolSaber-ios.metallib
+build_library iphonesimulator ios17.0-simulator CoolSaber-iossim.metallib
+build_library xros xros2.0 CoolSaber-xros.metallib
+build_library xrsimulator xros2.0-simulator CoolSaber-xrossim.metallib
