@@ -94,8 +94,9 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// later as "another ball". Set from the drop, read on the game thread.
     private let spawnGraceUntil = CoolBasketLockedBox<TimeInterval>(0)
     private let spawnGrace: TimeInterval = 0.5
-    /// How many balls the lost-ball recovery has brought back (diagnostics).
-    private let recoveredBalls = CoolBasketLockedBox<Int>(0)
+    /// How many balls have been lost — through the floor or far away — and
+    /// removed (diagnostics).
+    private let lostBalls = CoolBasketLockedBox<Int>(0)
     /// The lowest downward-facing surface ARKit has seen (the ceiling), for
     /// the diagnostics: the rim height was set by feel, this measures the
     /// room it has to fit.
@@ -123,9 +124,9 @@ public final class CoolBasketGame: @unchecked Sendable {
         0.0, CoolBasketGame.floorY + 1.1, -1.6
     )
     /// A ball this far below the floor, or this far from the court, is lost
-    /// and comes back at the drop point.
-    private let respawnDepth: Float = 3.0
-    private let respawnRange: Float = 15.0
+    /// and removed.
+    private let lostDepth: Float = 3.0
+    private let lostRange: Float = 15.0
     /// Balls in play at once; dropping one more retires the oldest.
     private let maxBalls = 24
 
@@ -562,7 +563,7 @@ public final class CoolBasketGame: @unchecked Sendable {
             heartbeatAccumulator = 0
             for ball in scene.balls.suffix(2) {
                 guard let state = backendStore.value?.bodyState(for: ball) else { continue }
-                coolBasketLog.log("ball \(ball) y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) balls=\(self.scene.ballCount) recovered=\(self.recoveredBalls.value)")
+                coolBasketLog.log("ball \(ball) y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) balls=\(self.scene.ballCount) lost=\(self.lostBalls.value)")
             }
             if let net {
                 coolBasketLog.log("net peak displacement \(net.takePeakDisplacement(), format: .fixed(precision: 3)) m, driving \(net.boundMeshCount) meshes")
@@ -575,7 +576,7 @@ public final class CoolBasketGame: @unchecked Sendable {
             #endif
         }
 
-        recoverLostBalls()
+        removeLostBalls()
     }
 
     /// Keeps the simulated net in step with the hoop: built (as a Jolt soft
@@ -1001,29 +1002,23 @@ public final class CoolBasketGame: @unchecked Sendable {
         grabSamples.removeAll()
     }
 
-    /// A ball below the floor or far from the court comes back at the drop
-    /// point, at rest. The teleport goes through the backend: removing and
-    /// re-adding the body's components within one frame never reaches it
-    /// (the coordinator diffs the component set per substep).
-    private func recoverLostBalls() {
+    /// A ball below the floor or far from the court is gone: it is removed
+    /// rather than brought back — a ball reappearing at the drop point read
+    /// as a second ball. The Drop button makes a new one.
+    private func removeLostBalls() {
         let floor = floorLevel.value
         for ball in scene.balls where ball != heldBall {
             guard let position = scene.ballPosition(ball) else { continue }
-            let fellOut = position.y < floor - respawnDepth
+            let fellOut = position.y < floor - lostDepth
             let horizontal = SIMD3<Float>(position.x - ballSpawnPosition.x, 0, position.z - ballSpawnPosition.z)
-            guard fellOut || simd_length(horizontal) > respawnRange else { continue }
-            let point = dropPoint()
+            guard fellOut || simd_length(horizontal) > lostRange else { continue }
+            scene.removeBall(ball)
             lock.withLock {
                 throughRingAt.removeValue(forKey: ball)
                 previousCenters.removeValue(forKey: ball)
             }
-            scene.moveBall(ball, to: point)
-            if backendStore.value?.resetBody(entity: ball, position: point, velocity: .zero) != true {
-                scene.attachBallBody(entity: ball, velocity: .zero, at: point)
-            }
-            recoveredBalls.value += 1
-            spawnGraceUntil.value = ProcessInfo.processInfo.systemUptime + spawnGrace
-            coolBasketLog.log("ball \(ball) lost \(fellOut ? "below the world" : "far away", privacy: .public) at y=\(position.y, format: .fixed(precision: 2)) — brought back to the drop point (\(self.recoveredBalls.value) so far)")
+            lostBalls.value += 1
+            coolBasketLog.log("ball \(ball) lost \(fellOut ? "below the world" : "far away", privacy: .public) at y=\(position.y, format: .fixed(precision: 2)) — removed (\(self.lostBalls.value) so far)")
         }
     }
 

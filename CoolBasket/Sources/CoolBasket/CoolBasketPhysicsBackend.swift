@@ -195,7 +195,7 @@ public final class CoolBasketPhysicsBackend: PhysicsBackend, @unchecked Sendable
     }
 
     /// Current simulated state of a dynamic body (read-back for game logic,
-    /// e.g. the ring-crossing test and lost-ball recovery).
+    /// e.g. the ring-crossing test and lost-ball removal).
     public func bodyState(
         for entity: EntityID
     ) -> (position: SIMD3<Float>, velocity: SIMD3<Float>)? {
