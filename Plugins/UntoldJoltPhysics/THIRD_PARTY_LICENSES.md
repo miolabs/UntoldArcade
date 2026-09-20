@@ -5,7 +5,7 @@
 - Version: v5.6.0 (commit e77f175595e64cb44218cc9d9d56fc365ad0e36a)
 - License: MIT
 - Source: https://github.com/jrouwe/JoltPhysics
-- Local path: `Native/JoltPhysics/Jolt` (verbatim copy of the upstream `Jolt/` tree; see `Native/JoltPhysics/JOLT_VERSION.md`)
+- Obtained as a SwiftPM dependency from https://github.com/miolabs/JoltPhysics (the upstream tree with a `Package.swift` added; tag `5.6.0-spm.1`)
 
 MIT License text:
 

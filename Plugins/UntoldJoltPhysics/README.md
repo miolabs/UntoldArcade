@@ -9,8 +9,10 @@ and `PhysicsQuery`). This package installs Jolt behind that seam: rigid bodies
 described with the engine-owned `RigidBodyComponent`/`ColliderComponent` are
 simulated by Jolt, transforms flow back into the ECS every fixed substep, and
 Jolt's contacts, sensors and sleep state arrive as engine physics events. No
-engine changes and no binaries: Jolt is vendored as source and compiled by
-SwiftPM as a C++17 target for macOS, iOS and visionOS (device and simulator).
+engine changes and no binaries: Jolt comes as source from the
+[miolabs/JoltPhysics](https://github.com/miolabs/JoltPhysics) fork — the
+upstream tree plus a `Package.swift` — and SwiftPM compiles it as a C++17
+target for macOS, iOS and visionOS (device and simulator).
 
 ## Layout
 
@@ -18,7 +20,7 @@ Follows the engine's [plugin authoring guidelines](https://github.com/untoldengi
 
 | Path | What it is |
 |---|---|
-| `Native/JoltPhysics/` | Vendored Jolt Physics (MIT), compiled straight from source. `JOLT_VERSION.md` records the exact release and revision; `Scripts/update-jolt.sh <tag>` refreshes it. |
+| `Package.swift` | Depends on `JoltPhysics` from the fork at an exact tag (`5.6.0-spm.1` = Jolt v5.6.0). To update Jolt: branch the fork from the new upstream tag, keep its `Package.swift`, tag `<version>-spm.1`, bump the pin here. |
 | `Sources/CJoltBridge/` | C ABI shim over Jolt (`CJoltBridge.h`): opaque world handle, plain structs, explicit create/destroy — world, bodies, kinematic targets, step, transform read-back, buffered contact/activation events, ray cast. |
 | `Sources/UntoldJoltPhysics/` | The plugin: `JoltPhysicsBackend` (conforms to `PhysicsBackend`), `JoltPhysicsPlugin` (the manifest) and `registerJoltPhysics()`. |
 | `Tests/` | Backend tests driven through the engine protocol, plus manifest/registration tests. |
