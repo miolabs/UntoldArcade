@@ -87,6 +87,15 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// tips were seen: a pinched ball rides there while ARKit guesses at
     /// the fingertips (the hand at the edge of view).
     private var pinchOffset: SIMD3<Float> = .zero
+    /// Until when the hands leave a freshly dropped ball alone: it appears
+    /// at chest height in front of the player, right where the hand that
+    /// just pinched the window button is — pinched straight into that hand,
+    /// or shoved by its collider, it went flying and came back moments
+    /// later as "another ball". Set from the drop, read on the game thread.
+    private let spawnGraceUntil = CoolBasketLockedBox<TimeInterval>(0)
+    private let spawnGrace: TimeInterval = 0.5
+    /// How many balls the lost-ball recovery has brought back (diagnostics).
+    private let recoveredBalls = CoolBasketLockedBox<Int>(0)
     /// The lowest downward-facing surface ARKit has seen (the ceiling), for
     /// the diagnostics: the rim height was set by feel, this measures the
     /// room it has to fit.
@@ -296,6 +305,7 @@ public final class CoolBasketGame: @unchecked Sendable {
             + simd_normalize(SIMD3<Float>(facing.x, 0, facing.z)) * 1.5
             + SIMD3<Float>(0, 1.1, 0)
         scene.spawnBall(at: dropPoint())
+        spawnGraceUntil.value = ProcessInfo.processInfo.systemUptime + spawnGrace
         pushWorldPlanes()
         coolBasketLog.log("hoop placed at x=\(position.x, format: .fixed(precision: 2)) z=\(position.z, format: .fixed(precision: 2))")
 
@@ -361,6 +371,8 @@ public final class CoolBasketGame: @unchecked Sendable {
                 guard stillPlaying else { return }
                 self.retireOldestBallIfNeeded()
                 self.scene.spawnBall(at: point)
+                self.spawnGraceUntil.value = ProcessInfo.processInfo.systemUptime + self.spawnGrace
+                coolBasketLog.log("ball dropped at y=\(point.y, format: .fixed(precision: 2)); balls=\(self.scene.ballCount)")
             }
         }
     }
@@ -550,7 +562,7 @@ public final class CoolBasketGame: @unchecked Sendable {
             heartbeatAccumulator = 0
             for ball in scene.balls.suffix(2) {
                 guard let state = backendStore.value?.bodyState(for: ball) else { continue }
-                coolBasketLog.log("ball \(ball) y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) balls=\(self.scene.ballCount)")
+                coolBasketLog.log("ball \(ball) y=\(state.position.y, format: .fixed(precision: 3)) z=\(state.position.z, format: .fixed(precision: 3)) v=\(simd_length(state.velocity), format: .fixed(precision: 3)) balls=\(self.scene.ballCount) recovered=\(self.recoveredBalls.value)")
             }
             if let net {
                 coolBasketLog.log("net peak displacement \(net.takePeakDisplacement(), format: .fixed(precision: 3)) m, driving \(net.boundMeshCount) meshes")
@@ -730,8 +742,10 @@ public final class CoolBasketGame: @unchecked Sendable {
             curlHistory[side] = history
 
             // Just threw: the collider stays parked until the ball is clear
-            // of the hand, and that hand cannot grab it back meanwhile.
-            if let parkedUntil = handParkedUntil[side], now < parkedUntil {
+            // of the hand, and that hand cannot grab it back meanwhile. The
+            // same for a moment after a ball is dropped in front of the
+            // player.
+            if (handParkedUntil[side].map { now < $0 } ?? false) || now < spawnGraceUntil.value {
                 scene.moveProxy(handEntity, to: nil)
                 parked.insert(side)
             } else {
@@ -1007,7 +1021,9 @@ public final class CoolBasketGame: @unchecked Sendable {
             if backendStore.value?.resetBody(entity: ball, position: point, velocity: .zero) != true {
                 scene.attachBallBody(entity: ball, velocity: .zero, at: point)
             }
-            print("CoolBasket: ball lost \(fellOut ? "below the world" : "far away") — brought back")
+            recoveredBalls.value += 1
+            spawnGraceUntil.value = ProcessInfo.processInfo.systemUptime + spawnGrace
+            coolBasketLog.log("ball \(ball) lost \(fellOut ? "below the world" : "far away", privacy: .public) at y=\(position.y, format: .fixed(precision: 2)) — brought back to the drop point (\(self.recoveredBalls.value) so far)")
         }
     }
 
