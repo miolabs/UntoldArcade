@@ -83,6 +83,10 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// This frame's tracked hands (game thread), for the release to park
     /// every collider the re-added ball would land in.
     private var frameHands: [CoolBasketHandSide: CoolBasketHandPose] = [:]
+    /// Where the pinch point sat relative to the palm the last time both
+    /// tips were seen: a pinched ball rides there while ARKit guesses at
+    /// the fingertips (the hand at the edge of view).
+    private var pinchOffset: SIMD3<Float> = .zero
     /// The lowest downward-facing surface ARKit has seen (the ceiling), for
     /// the diagnostics: the rim height was set by feel, this measures the
     /// room it has to fit.
@@ -656,8 +660,8 @@ public final class CoolBasketGame: @unchecked Sendable {
                     lock.withLock { pinchWasClosed[side] = nil }
                     continue
                 }
-                let closed = pose.pinchDistance < CoolBasketGrabRules.pinchGrabDistance
-                let open = pose.pinchDistance > CoolBasketGrabRules.pinchReleaseDistance
+                let closed = pose.pinchTracked && pose.pinchDistance < CoolBasketGrabRules.pinchGrabDistance
+                let open = pose.pinchTracked && pose.pinchDistance > CoolBasketGrabRules.pinchReleaseDistance
                 let previouslyClosed = lock.withLock { pinchWasClosed[side] }
                 if closed, previouslyClosed == false, graceOver {
                     lock.withLock { placePending = true }
@@ -826,7 +830,14 @@ public final class CoolBasketGame: @unchecked Sendable {
                 }
                 // Else: an open reading in the first frames back in view,
                 // after a closed one — noise at the edge of view; hold on.
-            } else if let point = CoolBasketGrabRules.holdPoint(hold, hands: hands, ballRadius: radius) {
+            } else if var point = CoolBasketGrabRules.holdPoint(hold, hands: hands, ballRadius: radius) {
+                if case let .pinch(side) = hold, let hand = hands[side] {
+                    if hand.pinchTracked {
+                        pinchOffset = hand.pinchPoint - hand.palm
+                    } else {
+                        point = hand.palm + pinchOffset
+                    }
+                }
                 scene.moveBall(held, to: point)
                 grabSamples.append((point, now))
                 // Keep a short motion history for the throw velocity.
@@ -878,6 +889,9 @@ public final class CoolBasketGame: @unchecked Sendable {
         grabSamples = [(point, now)]
         if case let .palm(side) = grab.kind {
             graspCurl = hands[side]?.fingerCurl ?? 0
+        }
+        if case let .pinch(side) = grab.kind, let hand = hands[side] {
+            pinchOffset = hand.pinchPoint - hand.palm
         }
         lock.withLock {
             throughRingAt.removeValue(forKey: grab.ball)

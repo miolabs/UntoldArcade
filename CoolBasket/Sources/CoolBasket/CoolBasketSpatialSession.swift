@@ -27,10 +27,15 @@ public struct CoolBasketHandPose: Sendable {
     /// mean anything (fingers wrapped behind the ball, the back of the hand
     /// to the cameras): the game then carries the last good reading.
     public var fingerCurlTracked: Bool = true
+    /// False when the thumb or index tip is extrapolated rather than seen —
+    /// at the edge of view the pinch then reads anything, so a held ball is
+    /// kept and no new pinch is taken from it.
+    public var pinchTracked: Bool = true
 
     public init(
         isTracked: Bool, palm: SIMD3<Float>, thumbTip: SIMD3<Float>, indexTip: SIMD3<Float>,
-        palmNormal: SIMD3<Float> = SIMD3<Float>(0, 1, 0), fingerCurl: Float = 0, fingerCurlTracked: Bool = true
+        palmNormal: SIMD3<Float> = SIMD3<Float>(0, 1, 0), fingerCurl: Float = 0, fingerCurlTracked: Bool = true,
+        pinchTracked: Bool = true
     ) {
         self.isTracked = isTracked
         self.palm = palm
@@ -39,6 +44,7 @@ public struct CoolBasketHandPose: Sendable {
         self.palmNormal = palmNormal
         self.fingerCurl = fingerCurl
         self.fingerCurlTracked = fingerCurlTracked
+        self.pinchTracked = pinchTracked
     }
 
     public var pinchPoint: SIMD3<Float> {
@@ -230,7 +236,8 @@ public final class CoolBasketSpatialSession: @unchecked Sendable {
                 tipDistances: seen.map { simd_length(world($0.tip) - wrist) },
                 knuckleDistances: seen.map { simd_length(world($0.knuckle) - wrist) }
             ),
-            fingerCurlTracked: seen.count >= 2
+            fingerCurlTracked: seen.count >= 2,
+            pinchTracked: skeleton.joint(.thumbTip).isTracked && skeleton.joint(.indexFingerTip).isTracked
         )
     }
 

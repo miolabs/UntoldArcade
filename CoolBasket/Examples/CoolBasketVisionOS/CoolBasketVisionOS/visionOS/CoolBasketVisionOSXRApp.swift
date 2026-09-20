@@ -128,7 +128,9 @@ struct CoolBasketVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var immersionStyle: ImmersionStyle = .mixed
-    @AppStorage(physicsEngineDefaultsKey) private var physicsEngineRaw = CoolBasketPhysicsEngine.coolBasket.rawValue
+    // Jolt by default: the net only swings on it. The demo's own backend
+    // stays a pick away.
+    @AppStorage(physicsEngineDefaultsKey) private var physicsEngineRaw = CoolBasketPhysicsEngine.jolt.rawValue
 
     var body: some SwiftUI.Scene {
         WindowGroup(id: "Controls") {
@@ -203,6 +205,7 @@ struct CoolBasketVisionOSXRApp: App {
                             Text(
                                 "Space \(holder.spaceOpen ? "OPEN" : "closed")"
                                     + " (last open: \(holder.lastOpenResult))"
+                                    + String(format: " · rim %.2f m", CoolBasketScene.rimHeight)
                                     + " · physics \(holder.engineName)"
                                     + " · surfaces \(holder.planeCount)"
                                     + String(format: " · last impact %.2f N·s", holder.lastImpulse)
@@ -246,8 +249,8 @@ struct CoolBasketVisionOSXRApp: App {
                 let game = BasketXRGame()
                 // Physics backend must install before the renderer exists.
                 let chosen = CoolBasketPhysicsEngine(
-                    rawValue: UserDefaults.standard.string(forKey: physicsEngineDefaultsKey) ?? ""
-                ) ?? .coolBasket
+                    rawValue: UserDefaults.standard.string(forKey: physicsEngineDefaultsKey) ?? CoolBasketPhysicsEngine.jolt.rawValue
+                ) ?? .jolt
                 guard game.game.installPhysics(engine: chosen) else { return }
                 print("CoolBasket: physics backend \(game.game.activeEngine?.displayName ?? "none")")
 

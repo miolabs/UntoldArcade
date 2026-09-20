@@ -106,7 +106,7 @@ public enum CoolBasketGrabRules {
             if let best { return (.twoHands, best.entity) }
         }
         for side in CoolBasketHandSide.allCases {
-            guard let hand = hands[side], hand.pinchDistance < pinchGrabDistance else { continue }
+            guard let hand = hands[side], hand.pinchTracked, hand.pinchDistance < pinchGrabDistance else { continue }
             if let ball = nearest(balls, to: hand.palm, within: pinchReach) {
                 return (.pinch(side), ball)
             }
@@ -193,7 +193,8 @@ public enum CoolBasketGrabRules {
     ) -> Bool {
         switch kind {
         case let .pinch(side):
-            guard let hand = hands[side] else { return false }
+            // Tips ARKit is guessing at say nothing: the pinch holds.
+            guard let hand = hands[side], hand.pinchTracked else { return false }
             return hand.pinchDistance > pinchReleaseDistance
         case let .palm(side):
             guard let hand = hands[side] else { return false }

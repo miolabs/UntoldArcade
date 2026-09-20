@@ -50,6 +50,19 @@ final class CoolBasketGrabTests: XCTestCase {
         XCTAssertTrue(Rules.releases(.pinch(.left), hands: [.left: hand(palm: .zero, pinch: 0.06)], ballRadius: radius))
     }
 
+    func testGuessedFingertipsNeitherPinchNorLetGo() {
+        // At the edge of view ARKit extrapolates the tips: the pinch reads
+        // anything. No new pinch from that, and a held pinch keeps the ball.
+        var guessed = hand(palm: .zero, pinch: 0.01)
+        guessed.pinchTracked = false
+        let balls: [(entity: EntityID, center: SIMD3<Float>)] = [(ball, SIMD3<Float>(0.1, 0.1, 0))]
+        XCTAssertNil(Rules.grab(hands: [.right: guessed], closing: [], balls: balls, ballRadius: radius))
+        var openGuess = hand(palm: .zero, pinch: 0.09)
+        openGuess.pinchTracked = false
+        XCTAssertFalse(Rules.releases(.pinch(.right), hands: [.right: openGuess], ballRadius: radius))
+        XCTAssertTrue(Rules.releases(.pinch(.right), hands: [.right: hand(palm: .zero, pinch: 0.09)], ballRadius: radius))
+    }
+
     // MARK: Closing hand
 
     func testAHandClosingOnTheBallCatchesIt() {

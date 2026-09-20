@@ -37,11 +37,12 @@ surfaces there, but the fallback floor keeps the ball in play). Press
 place the hoop, and shoot.
 
 The control window's **Physics** picker chooses the backend before the Court
-opens: the demo's own pure-Swift backend, or the shared
-[UntoldJoltPhysics](../Plugins/UntoldJoltPhysics) plugin (Jolt Physics). The
-choice persists; the engine's registry locks on the first physics step, so
-switching afterwards needs an app restart. `-physicsEngine jolt` selects it
-from the command line.
+opens: the shared [UntoldJoltPhysics](../Plugins/UntoldJoltPhysics) plugin
+(Jolt Physics, the default — the net only swings on it), or the demo's own
+pure-Swift backend. The choice persists; the engine's registry locks on the
+first physics step, so switching afterwards needs an app restart.
+`-physicsEngine jolt` / `-physicsEngine coolBasket` select it from the command
+line. The window also shows the rim height and what the hands are holding.
 
 The backend itself is platform-independent:
 
