@@ -31,7 +31,7 @@ stays clear of the alley, remains solid.
 | `CoolBowlingAudio` | Synthesized thud, pin clack and strike fanfare in an AVAudioSourceNode mixer. |
 
 The pins, the ball, the pinsetter cover and the ball-return unit are cooked
-`.untold` models under `Sources/CoolBowling/Resources/Models` (the ball
+`.untold` models under `Sources/CoolBowling/Resources/Models`, cut from the studio's Blender scene with the scripts in `Tools/blender` (see `CoolBowling/Tools/blender/README.md`) (the ball
 carries its own baked textures); `Scripts/make_bowling_textures.swift` paints
 the lane texture, which is the one thing still generated.
 
