@@ -23,7 +23,10 @@ public enum CoolMirrorCharacter: String, CaseIterable, Sendable {
         case .redplayer:
             [("idle", "idle", "untold"), ("running", "running", "untold")]
         case .spiderman:
-            [("flex", "spiderman_flex", "untoldanim")]
+            // Two curl signs while we pin down which way the Mixamo rig
+            // plays back on device — pick the anatomically correct one.
+            [("flex", "spiderman_flex", "untoldanim"),
+             ("flex-alt", "spiderman_flex_alt", "untoldanim")]
         case .batman:
             [("flex", "batman_flex", "untoldanim")]
         }
