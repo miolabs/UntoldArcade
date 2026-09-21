@@ -21,7 +21,7 @@ score.
 | `CoolBasketGame` | Gaze-driven hoop placement with a ghost preview. Any number of equal balls: grab the nearest via pinch, throw with the tracked hand velocity (grabbing removes the body, releasing re-adds it through the component seam), lost balls come back. Score via `PhysicsEvents.onTrigger`, counting only a downward pass through the rim. |
 | `CoolBasketSpatialSession` | visionOS ARKit adapter: hand tracking (predicted poses), plane detection feeding the backend's world planes, and head tracking for placement. The real floor height is measured from the detected planes; the simulator falls back to a flat floor. |
 
-The heavyweight backend (Jolt) will live in its own package later; this demo
+The heavyweight backend (Jolt) lives in its own package; this demo
 proves every seam the engine exposes — body lifecycle both ways, kinematic
 writes, transform read-back, contact events, triggers — with the whole
 simulation in a few hundred lines of Swift.
@@ -36,7 +36,7 @@ place the hoop, and shoot.
 
 The control window's **Physics** picker chooses the backend before the Court
 opens: the demo's own pure-Swift backend, or the shared
-[UntoldJoltPhysics](../Plugins/UntoldJoltPhysics) plugin (Jolt Physics). The
+[UntoldJoltPhysics](https://github.com/untoldengine/UntoldJoltPhysics) plugin (Jolt Physics). The
 choice persists; the engine's registry locks on the first physics step, so
 switching afterwards needs an app restart. `-physicsEngine jolt` selects it
 from the command line.
