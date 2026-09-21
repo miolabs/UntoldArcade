@@ -198,12 +198,7 @@ UntoldArcade/
 ├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
 ├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam, on either backend
-<<<<<<< HEAD
 ├── CoolBowling/         # visionOS — bowling on the Jolt Physics plugin
-├── Plugins/             # Engine plugins shared by the demos
-│   └── UntoldJoltPhysics/   # Physics Backend plugin — Jolt Physics from source
-=======
->>>>>>> feature/jolt
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
 ├── CityStreaming/       # visionOS — tiled city streaming with LOD/HLOD
