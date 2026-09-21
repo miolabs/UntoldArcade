@@ -155,7 +155,10 @@ struct CoolMirrorVisionOSXRApp: App {
 
         ImmersiveSpace(id: "Mirror") {
             CompositorLayer(configuration: MirrorLayerConfiguration()) { layerRenderer in
-                guard XRHolder.shared.xr == nil else { return }
+                guard XRHolder.shared.xr == nil else {
+                    print("CoolMirror: immersive space reopened before teardown finished")
+                    return
+                }
 
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 XRHolder.shared.xr = xr
@@ -176,6 +179,18 @@ struct CoolMirrorVisionOSXRApp: App {
                 let t = Thread {
                     xr.start()
                     xr.runLoop()
+                    // The run loop returns when the space is dismissed. Tear the
+                    // engine down on the main actor so nothing keeps submitting
+                    // GPU work from the background, and allow a clean reopen.
+                    Task { @MainActor in
+                        XRHolder.shared.game?.prepareForShutdown()
+                        shutdownUntoldEngineXR(xr) {
+                            XRHolder.shared.xr = nil
+                            XRHolder.shared.game = nil
+                            XRHolder.shared.renderThread = nil
+                            print("CoolMirror: immersive space torn down, ready to reopen")
+                        }
+                    }
                 }
                 t.name = "XR Render Thread"
                 t.qualityOfService = .userInteractive

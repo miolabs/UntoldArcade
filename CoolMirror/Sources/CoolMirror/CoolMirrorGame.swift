@@ -73,6 +73,14 @@ public final class CoolMirrorGame {
 
     // MARK: - Controls (called from the SwiftUI control window)
 
+    /// Called during immersive-space teardown, before the engine resets the
+    /// world: drops entity references so late async loads touch nothing.
+    public func prepareForShutdown() {
+        generation += 1
+        characterId = nil
+        onCharacterReady = nil
+    }
+
     public func setCharacter(_ newCharacter: CoolMirrorCharacter) {
         if let characterId {
             destroyEntity(entityId: characterId)
