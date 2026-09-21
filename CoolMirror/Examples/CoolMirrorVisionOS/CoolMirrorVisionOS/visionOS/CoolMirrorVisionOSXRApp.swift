@@ -36,17 +36,38 @@ struct MirrorLayerConfiguration: CompositorLayerConfiguration {
 @Observable
 @MainActor
 final class MirrorControls {
+    var character: CoolMirrorCharacter = .spiderman {
+        didSet {
+            morphNames = []
+            morphWeights = [:]
+            clips = []
+            clip = ""
+            XRHolder.shared.game?.setCharacter(character)
+        }
+    }
     var skinningPath: CoolMirrorSkinningPath = .vertexShader {
         didSet { XRHolder.shared.game?.setSkinningPath(skinningPath) }
     }
-    var clip: CoolMirrorClip = .idle {
-        didSet { XRHolder.shared.game?.setClip(clip) }
+    var clip: String = "" {
+        didSet {
+            guard !clip.isEmpty else { return }
+            XRHolder.shared.game?.setClip(clip)
+        }
     }
-    var bellyWeight: Double = 0 {
-        didSet { XRHolder.shared.game?.setMorphWeight(name: "belly", weight: Float(bellyWeight)) }
+    var clips: [String] = []
+    var morphNames: [String] = []
+    var morphWeights: [String: Double] = [:]
+
+    func setMorphWeight(_ name: String, _ weight: Double) {
+        morphWeights[name] = weight
+        XRHolder.shared.game?.setMorphWeight(name: name, weight: Float(weight))
     }
-    var bigheadWeight: Double = 0 {
-        didSet { XRHolder.shared.game?.setMorphWeight(name: "bighead", weight: Float(bigheadWeight)) }
+
+    func characterReady() {
+        guard let game = XRHolder.shared.game else { return }
+        morphNames = game.morphTargetNames()
+        clips = game.clipNames()
+        clip = clips.first ?? ""
     }
 }
 
@@ -78,6 +99,15 @@ struct CoolMirrorVisionOSXRApp: App {
 
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 14) {
                     GridRow {
+                        Text("Character")
+                        Picker("Character", selection: $controls.character) {
+                            Text("Spider-Man").tag(CoolMirrorCharacter.spiderman)
+                            Text("Batman").tag(CoolMirrorCharacter.batman)
+                            Text("Player").tag(CoolMirrorCharacter.redplayer)
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                    }
+                    GridRow {
                         Text("Skinning")
                         Picker("Skinning", selection: $controls.skinningPath) {
                             Text("Vertex").tag(CoolMirrorSkinningPath.vertexShader)
@@ -87,23 +117,29 @@ struct CoolMirrorVisionOSXRApp: App {
                         }
                         .pickerStyle(.segmented).labelsHidden()
                     }
-                    GridRow {
-                        Text("Clip")
-                        Picker("Clip", selection: $controls.clip) {
-                            Text("Idle").tag(CoolMirrorClip.idle)
-                            Text("Running").tag(CoolMirrorClip.running)
+                    if controls.clips.count > 1 {
+                        GridRow {
+                            Text("Clip")
+                            Picker("Clip", selection: $controls.clip) {
+                                ForEach(controls.clips, id: \.self) { name in
+                                    Text(name.capitalized).tag(name)
+                                }
+                            }
+                            .pickerStyle(.segmented).labelsHidden()
                         }
-                        .pickerStyle(.segmented).labelsHidden()
                     }
-                    GridRow {
-                        Text("Belly")
-                        Slider(value: $controls.bellyWeight, in: 0 ... 1)
+                    ForEach(controls.morphNames, id: \.self) { name in
+                        GridRow {
+                            Text(name)
+                            Slider(
+                                value: Binding(
+                                    get: { controls.morphWeights[name] ?? 0 },
+                                    set: { controls.setMorphWeight(name, $0) }
+                                ),
+                                in: 0 ... 1
+                            )
                             .disabled(controls.skinningPath == .vertexShader)
-                    }
-                    GridRow {
-                        Text("Big head")
-                        Slider(value: $controls.bigheadWeight, in: 0 ... 1)
-                            .disabled(controls.skinningPath == .vertexShader)
+                        }
                     }
                 }
 
@@ -130,6 +166,7 @@ struct CoolMirrorVisionOSXRApp: App {
                 // on its own plain Thread — NOT the main actor.
                 let game = CoolMirrorGame()
                 XRHolder.shared.game = game
+                game.onCharacterReady = { controls.characterReady() }
                 game.start()
                 xr.setupCallbacks(
                     gameUpdate: { dt in game.update(deltaTime: dt) },
