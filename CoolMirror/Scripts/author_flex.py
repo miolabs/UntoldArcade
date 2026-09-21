@@ -62,7 +62,7 @@ for label, bone in targets.items():
 
 scene = bpy.context.scene
 scene.frame_start = 1
-scene.frame_end = 96
+scene.frame_end = 120
 scene.render.fps = 24
 
 if armature.animation_data is None:
@@ -73,30 +73,41 @@ action = bpy.data.actions.new("flex")
 armature.animation_data.action = action
 
 
-def key_rotation(bone, frame, angle_degrees, axis=axis_index, bone_sign=1.0):
+def key_pose(bone, frame, angles_by_axis):
+    """angles_by_axis: {axis_index: degrees}; unset axes are keyed at zero."""
     bone.rotation_mode = "XYZ"
     euler = [0.0, 0.0, 0.0]
-    euler[axis] = math.radians(angle_degrees) * sign * bone_sign
+    for axis, degrees in angles_by_axis.items():
+        euler[axis] = math.radians(degrees)
     bone.rotation_euler = euler
     bone.keyframe_insert(data_path="rotation_euler", frame=frame)
 
 
-# Two curl cycles over 96 frames: rest(1) -> curl(24) -> rest(48) -> curl(72) -> rest(96)
-for frame, amount in ((1, 0.0), (24, 1.0), (48, 0.0), (72, 1.0), (96, 0.0)):
-    for side_key, bone_sign in (("forearmL", 1.0), ("forearmR", 1.0)):
+# Timeline (120 frames @ 24 fps, loops):
+#   1: rest | 24: curl | 48: rest | 72: curl | 96: rest
+#   104: forearm TWIST with slightly bent elbows (the candy-wrapper test —
+#        LBS pinches the forearm, DQS keeps its volume) | 120: rest
+TWIST_AXIS = 1  # a pose bone's own long axis is local Y in every rig
+for frame, curl, twist in (
+    (1, 0.0, 0.0), (24, 1.0, 0.0), (48, 0.0, 0.0), (72, 1.0, 0.0), (96, 0.0, 0.0),
+    (104, 0.25, 1.0), (112, 0.25, -1.0), (120, 0.0, 0.0),
+):
+    curl_angle = 110.0 * curl * sign
+    twist_angle = 85.0 * twist
+    for side_key in ("forearmL", "forearmR"):
         bone = targets[side_key]
         if bone:
-            key_rotation(bone, frame, 110.0 * amount, bone_sign=bone_sign)
+            key_pose(bone, frame, {axis_index: curl_angle, TWIST_AXIS: twist_angle})
     for side_key in ("upperarmL", "upperarmR"):
         bone = targets[side_key]
         if bone:
-            key_rotation(bone, frame, 25.0 * amount)
+            key_pose(bone, frame, {axis_index: 25.0 * curl * sign})
     if targets["spine"]:
-        key_rotation(targets["spine"], frame, 12.0 * amount)
+        key_pose(targets["spine"], frame, {axis_index: 12.0 * curl * sign})
     for side_key in ("calfL", "calfR"):
         bone = targets[side_key]
         if bone:
-            key_rotation(bone, frame, 20.0 * amount)
+            key_pose(bone, frame, {axis_index: 20.0 * curl * sign})
 
 # ── verification renders at rest and mid-curl ─────────────────────────────
 meshes = [o for o in bpy.data.objects if o.type == "MESH"]

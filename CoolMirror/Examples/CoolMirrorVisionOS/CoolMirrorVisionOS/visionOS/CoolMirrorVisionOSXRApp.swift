@@ -54,6 +54,9 @@ final class MirrorControls {
             XRHolder.shared.game?.setClip(clip)
         }
     }
+    var paused = false {
+        didSet { XRHolder.shared.game?.setPaused(paused) }
+    }
     var clips: [String] = []
     var morphNames: [String] = []
     var morphWeights: [String: Double] = [:]
@@ -68,6 +71,7 @@ final class MirrorControls {
         morphNames = game.morphTargetNames()
         clips = game.clipNames()
         clip = clips.first ?? ""
+        paused = false
     }
 }
 
@@ -106,6 +110,11 @@ struct CoolMirrorVisionOSXRApp: App {
                             Text("Player").tag(CoolMirrorCharacter.redplayer)
                         }
                         .pickerStyle(.segmented).labelsHidden()
+                    }
+                    GridRow {
+                        Text("Playback")
+                        Toggle(controls.paused ? "Paused — compare skinning now" : "Playing", isOn: $controls.paused)
+                            .toggleStyle(.button)
                     }
                     GridRow {
                         Text("Skinning")

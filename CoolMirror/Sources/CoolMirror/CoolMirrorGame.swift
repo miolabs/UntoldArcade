@@ -123,6 +123,13 @@ public final class CoolMirrorGame {
         applyClip()
     }
 
+    /// Freeze playback on the current frame so skinning paths can be
+    /// compared on the exact same pose.
+    public func setPaused(_ paused: Bool) {
+        guard let characterId else { return }
+        pauseAnimationComponent(entityId: characterId, isPaused: paused)
+    }
+
     /// Morph target weight passthrough. Applied by the deformation pass, so a
     /// compute skinning path must be active for the weight to show.
     public func setMorphWeight(name: String, weight: Float) {
