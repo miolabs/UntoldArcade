@@ -23,7 +23,7 @@ score.
 | `CoolBasketGame` | Gaze-driven hoop placement with a ghost preview. Any number of equal balls: three holds from the tracked hands — a pinch near a ball, a hand closing on it (fingers curling, read off the skeleton), or the ball between two palms — carried at the pinch point, on the palm or between the palms, and thrown with the hands' velocity when they open or part (`CoolBasketGrabRules`, pure and tested; grabbing removes the body, releasing re-adds it through the component seam); a ball that falls out of the world or rolls far away is removed (the Drop button makes a new one). A hand that leaves the cameras' view — looking up at the hoop takes it there — keeps the ball: mid-swing that is the throw, otherwise the ball waits until the hand is seen again (the other hand may take it). Score via `PhysicsEvents.onTrigger`, counting only a downward pass through the rim. |
 | `CoolBasketSpatialSession` | visionOS ARKit adapter: hand tracking (predicted poses), plane detection feeding the backend's world planes, and head tracking for placement. The real floor height is measured from the detected planes; the simulator falls back to a flat floor. |
 
-The heavyweight backend (Jolt) will live in its own package later; this demo
+The heavyweight backend (Jolt) lives in its own package; this demo
 proves every seam the engine exposes — body lifecycle both ways, kinematic
 writes, transform read-back, contact events, triggers — with the whole
 simulation in a few hundred lines of Swift.
@@ -37,12 +37,20 @@ surfaces there, but the fallback floor keeps the ball in play). Press
 place the hoop, and shoot.
 
 The control window's **Physics** picker chooses the backend before the Court
+<<<<<<< HEAD
 opens: the shared [UntoldJoltPhysics](../Plugins/UntoldJoltPhysics) plugin
 (Jolt Physics, the default — the net only swings on it), or the demo's own
 pure-Swift backend. The choice persists; the engine's registry locks on the
 first physics step, so switching afterwards needs an app restart.
 `-physicsEngine jolt` / `-physicsEngine coolBasket` select it from the command
 line. The window also shows the rim height and what the hands are holding.
+=======
+opens: the demo's own pure-Swift backend, or the shared
+[UntoldJoltPhysics](https://github.com/untoldengine/UntoldJoltPhysics) plugin (Jolt Physics). The
+choice persists; the engine's registry locks on the first physics step, so
+switching afterwards needs an app restart. `-physicsEngine jolt` selects it
+from the command line.
+>>>>>>> feature/bowling_demo
 
 The backend itself is platform-independent:
 

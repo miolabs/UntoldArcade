@@ -16,7 +16,7 @@ let package = Package(
         .package(url: "https://github.com/untoldengine/UntoldEngine.git", branch: "develop"),
         // Ten pins that stack, wobble and topple need a real rigid-body
         // solver: this demo runs on the shared Jolt Physics plugin.
-        .package(path: "../Plugins/UntoldJoltPhysics"),
+        .package(url: "https://github.com/untoldengine/UntoldJoltPhysics.git", branch: "develop"),
     ],
     targets: [
         .target(

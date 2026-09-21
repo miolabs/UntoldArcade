@@ -14,10 +14,9 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/untoldengine/UntoldEngine.git", branch: "develop"),
-        // The Jolt backend plugin, selectable at launch as an alternative to
-        // the demo's own pure-Swift backend. Shared by the demos under
-        // Plugins/ until it has a repository of its own.
-        .package(path: "../Plugins/UntoldJoltPhysics"),
+        // The Jolt Physics backend plugin, selectable at launch as an
+        // alternative to the demo's own pure-Swift backend.
+        .package(url: "https://github.com/untoldengine/UntoldJoltPhysics.git", branch: "develop"),
     ],
     targets: [
         .target(
