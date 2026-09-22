@@ -17,6 +17,17 @@ public enum CoolMirrorCharacter: String, CaseIterable, Sendable {
     case batman
     case redplayer
 
+    /// The source models are authored oversized (Spider-Man 2.05 m,
+    /// Batman 2.22 m in the files); scale them to believable human heights
+    /// for the mirror. Uniform scale composes after skinning and morphs.
+    var displayScale: Float {
+        switch self {
+        case .redplayer: 1.0
+        case .spiderman: 1.75 / 2.05
+        case .batman: 1.90 / 2.22
+        }
+    }
+
     /// (clip name shown in UI, animation file name, file extension)
     public var clips: [(name: String, file: String, ext: String)] {
         switch self {
@@ -110,6 +121,7 @@ public final class CoolMirrorGame {
             }
             translateTo(entityId: characterId, position: self.characterPosition)
             rotateTo(entityId: characterId, angle: .pi, axis: simd_float3(0, 1, 0))
+            scaleTo(entityId: characterId, scale: simd_float3(repeating: newCharacter.displayScale))
             self.applyClip()
             self.applySkinningPath()
             self.onCharacterReady?()
