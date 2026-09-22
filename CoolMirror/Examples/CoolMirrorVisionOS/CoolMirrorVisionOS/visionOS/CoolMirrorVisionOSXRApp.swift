@@ -57,6 +57,9 @@ final class MirrorControls {
     var paused = false {
         didSet { XRHolder.shared.game?.setPaused(paused) }
     }
+    var poseDrivers = true {
+        didSet { XRHolder.shared.game?.setPoseDrivers(enabled: poseDrivers) }
+    }
     var clips: [String] = []
     var morphNames: [String] = []
     var morphWeights: [String: Double] = [:]
@@ -110,6 +113,12 @@ struct CoolMirrorVisionOSXRApp: App {
                             Text("Player").tag(CoolMirrorCharacter.redplayer)
                         }
                         .pickerStyle(.segmented).labelsHidden()
+                    }
+                    GridRow {
+                        Text("Muscles")
+                        Toggle(controls.poseDrivers ? "Auto (pose drivers)" : "Manual sliders", isOn: $controls.poseDrivers)
+                            .toggleStyle(.button)
+                            .disabled(controls.skinningPath == .vertexShader)
                     }
                     GridRow {
                         Text("Playback")

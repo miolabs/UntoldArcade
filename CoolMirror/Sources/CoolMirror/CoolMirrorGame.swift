@@ -133,6 +133,13 @@ public final class CoolMirrorGame {
         pauseAnimationComponent(entityId: characterId, isPaused: paused)
     }
 
+    /// Pose-space deformation: authored drivers fire morphs from the pose
+    /// automatically (the biceps bulge as the elbows curl).
+    public func setPoseDrivers(enabled: Bool) {
+        guard let characterId else { return }
+        setEntityPoseDrivers(entityId: characterId, enabled: enabled)
+    }
+
     /// Morph target weight passthrough. Applied by the deformation pass, so a
     /// compute skinning path must be active for the weight to show.
     public func setMorphWeight(name: String, weight: Float) {

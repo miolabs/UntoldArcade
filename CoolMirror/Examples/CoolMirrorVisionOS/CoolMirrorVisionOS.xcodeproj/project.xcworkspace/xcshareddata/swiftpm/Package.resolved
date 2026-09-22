@@ -6,8 +6,8 @@
       "kind": "remoteSourceControl",
       "location": "https://github.com/miolabs/UntoldEngine",
       "state": {
-        "branch": "feature/morph_format",
-        "revision": "7e2d6e4d6a43f8a29e3187fadd03d9e04a556fc4"
+        "branch": "feature/psd_runtime",
+        "revision": "3c917a601d832668489130f47e54bad02bb2ef8c"
       }
     }
   ],
