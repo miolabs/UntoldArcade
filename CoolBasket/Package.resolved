@@ -1,5 +1,5 @@
 {
-  "originHash" : "bc8e14e737e335da4a0503337d3b416ac93cb13eb2756c90f884e3c625057aa4",
+  "originHash" : "85eb88e7250dc32741566a107f27767c21e0e812eb32aa98d536789ab0841bd9",
   "pins" : [
     {
       "identity" : "untoldengine",
@@ -7,7 +7,7 @@
       "location" : "https://github.com/untoldengine/UntoldEngine.git",
       "state" : {
         "branch" : "develop",
-        "revision" : "0af348ed4384853d57ff628ce0b5c4d8ac8133d4"
+        "revision" : "906042be962296a0a25e6f02514ee38ede7e9f71"
       }
     }
   ],
