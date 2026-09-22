@@ -57,6 +57,21 @@ A Spider-Man web-shooter demo — strike the classic web-shooter pose (thumb, in
 open CoolWeb/Examples/CoolWebVisionOS/CoolWebVisionOS.xcodeproj
 ```
 
+### 🏀 CoolBasket — *visionOS · Physics Backend*
+
+<!-- MEDIA: docs/media/CoolBasket/demo.gif -->
+<!-- ![CoolBasket demo](docs/media/CoolBasket/demo.gif) -->
+
+Mixed-reality basketball, and the first consumer of the engine's physics backend plugin seam: a pure-Swift `PhysicsBackend` simulates the ball against your real floor, walls and furniture (ARKit plane detection), the hoop you place in your room, and your hands. Look at the floor and pinch to place the hoop, pinch near the ball to pick it up, flick to throw — a shot only counts when it comes down through the rim.
+
+- `PhysicsBackendPlugin` installed before renderer creation, driven by the engine's `PhysicsCoordinator` — zero engine changes
+- Rigid bodies, static colliders and trigger volumes expressed with the engine-owned `RigidBodyComponent`/`ColliderComponent`
+- Contact and trigger events delivered through `PhysicsEvents`
+
+```bash
+open CoolBasket/Examples/CoolBasketVisionOS/CoolBasketVisionOS.xcodeproj
+```
+
 ### 🏛️ ArchvizViewer — *visionOS*
 
 ![ArchvizViewer demo](docs/media/ArchvizViewer/demo.gif)
@@ -163,6 +178,7 @@ UntoldArcade/
 ├── CoolWater/           # Rendering Extension — real-time animated water
 ├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
+├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
 ├── CityStreaming/       # visionOS — tiled city streaming with LOD/HLOD
