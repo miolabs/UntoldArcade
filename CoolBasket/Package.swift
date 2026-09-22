@@ -14,12 +14,16 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/untoldengine/UntoldEngine.git", branch: "develop"),
+        // The Jolt Physics backend plugin, selectable at launch as an
+        // alternative to the demo's own pure-Swift backend.
+        .package(url: "https://github.com/untoldengine/UntoldJoltPhysics.git", branch: "develop"),
     ],
     targets: [
         .target(
             name: "CoolBasket",
             dependencies: [
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
+                .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
             resources: [
                 .copy("Resources/basketball_baseColor.png"),

@@ -38,8 +38,8 @@ final class BasketXRGame: @unchecked Sendable {
         if holder.takeMoveHoopRequest() {
             game.requestHoopMove()
         }
-        if holder.takeResetBallRequest() {
-            game.resetBall()
+        if holder.takeDropBallRequest() {
+            game.requestDropBall()
         }
         if holder.takeResetScoreRequest() {
             game.resetScore()
@@ -49,9 +49,11 @@ final class BasketXRGame: @unchecked Sendable {
 
         holder.setDiagnostics(
             score: game.currentScore,
+            balls: game.ballCount,
             planes: game.worldPlaneCount,
             impulse: game.lastImpulse,
-            placing: game.currentPhase == .placingHoop
+            placing: game.currentPhase == .placingHoop,
+            engine: game.activeEngine?.displayName ?? "none"
         )
     }
 

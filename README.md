@@ -72,6 +72,14 @@ Mixed-reality basketball, and the first consumer of the engine's physics backend
 open CoolBasket/Examples/CoolBasketVisionOS/CoolBasketVisionOS.xcodeproj
 ```
 
+### 🧲 UntoldJoltPhysics — *plugin · Physics Backend*
+
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, as a Swift package every demo can depend on: [untoldengine/UntoldJoltPhysics](https://github.com/untoldengine/UntoldJoltPhysics). Jolt comes as source from the [untoldengine/JoltPhysics](https://github.com/untoldengine/JoltPhysics) fork (the upstream tree plus a `Package.swift`) and SwiftPM compiles it — no binaries — for macOS, iOS and visionOS. CoolBasket can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
+
+```swift
+.package(url: "https://github.com/untoldengine/UntoldJoltPhysics.git", branch: "develop")
+```
+
 ### 🏛️ ArchvizViewer — *visionOS*
 
 ![ArchvizViewer demo](docs/media/ArchvizViewer/demo.gif)
@@ -178,7 +186,7 @@ UntoldArcade/
 ├── CoolWater/           # Rendering Extension — real-time animated water
 ├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
-├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam
+├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam, on either backend
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
 ├── CityStreaming/       # visionOS — tiled city streaming with LOD/HLOD

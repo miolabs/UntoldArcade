@@ -1,6 +1,15 @@
 {
-  "originHash" : "85eb88e7250dc32741566a107f27767c21e0e812eb32aa98d536789ab0841bd9",
+  "originHash" : "05830b7bbcf27b4205e2f319cd14280a82bffe39eac5a2a1d59c17210945722d",
   "pins" : [
+    {
+      "identity" : "joltphysics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/JoltPhysics.git",
+      "state" : {
+        "revision" : "31563d34c249147beadee0eb61994dc3b65b57bf",
+        "version" : "5.6.0-spm.1"
+      }
+    },
     {
       "identity" : "untoldengine",
       "kind" : "remoteSourceControl",
@@ -8,6 +17,15 @@
       "state" : {
         "branch" : "develop",
         "revision" : "906042be962296a0a25e6f02514ee38ede7e9f71"
+      }
+    },
+    {
+      "identity" : "untoldjoltphysics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/UntoldJoltPhysics.git",
+      "state" : {
+        "branch" : "develop",
+        "revision" : "628b025a5f1cffb8d615769193349cdf527d3256"
       }
     }
   ],

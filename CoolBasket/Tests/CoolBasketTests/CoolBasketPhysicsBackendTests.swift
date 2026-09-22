@@ -274,7 +274,7 @@ final class CoolBasketPhysicsBackendTests: XCTestCase {
         backend.drainEvents(into: sink)
 
         XCTAssertFalse(
-            sink.contacts.contains { $0.entityB >= 100 },
+            sink.contacts.contains { (100 ..< 200).contains($0.entityB) },
             "A dead-center drop must not clip the rim"
         )
         let phases = sink.triggers
@@ -296,7 +296,7 @@ final class CoolBasketPhysicsBackendTests: XCTestCase {
         let sink = RecordingSink()
         backend.drainEvents(into: sink)
         XCTAssertTrue(
-            sink.contacts.contains { $0.entityB >= 100 },
+            sink.contacts.contains { (100 ..< 200).contains($0.entityB) },
             "A ball dropped on the ring must clang off a rim sphere"
         )
     }

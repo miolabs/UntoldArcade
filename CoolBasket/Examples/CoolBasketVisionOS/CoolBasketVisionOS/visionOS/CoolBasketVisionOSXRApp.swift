@@ -31,20 +31,24 @@ final class BasketXRHolder: @unchecked Sendable {
     private var scoreStorage = 0
     private var planeStorage = 0
     private var impulseStorage: Float = 0
-    private var resetBallPending = false
+    private var engineStorage = "—"
+    private var dropBallPending = false
     private var resetScorePending = false
+    private var ballStorage = 0
     private var placeHoopPending = false
     private var moveHoopPending = false
     private var placingStorage = true
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(score: Int, planes: Int, impulse: Float, placing: Bool) {
+    func setDiagnostics(score: Int, balls: Int, planes: Int, impulse: Float, placing: Bool, engine: String) {
         lock.withLock {
             scoreStorage = score
+            ballStorage = balls
             planeStorage = planes
             impulseStorage = impulse
             placingStorage = placing
+            engineStorage = engine
         }
     }
 
@@ -62,8 +66,18 @@ final class BasketXRHolder: @unchecked Sendable {
     var isPlacingHoop: Bool { lock.withLock { placingStorage } }
     var planeCount: Int { lock.withLock { planeStorage } }
     var lastImpulse: Float { lock.withLock { impulseStorage } }
+    var engineName: String { lock.withLock { engineStorage } }
+    var ballCount: Int { lock.withLock { ballStorage } }
 
-    func requestResetBall() { lock.withLock { resetBallPending = true } }
+    func requestDropBall() { lock.withLock { dropBallPending = true } }
+
+    func takeDropBallRequest() -> Bool {
+        lock.withLock {
+            let pending = dropBallPending
+            dropBallPending = false
+            return pending
+        }
+    }
     func requestResetScore() { lock.withLock { resetScorePending = true } }
     func requestPlaceHoop() { lock.withLock { placeHoopPending = true } }
     func requestMoveHoop() { lock.withLock { moveHoopPending = true } }
@@ -80,14 +94,6 @@ final class BasketXRHolder: @unchecked Sendable {
         lock.withLock {
             let pending = moveHoopPending
             moveHoopPending = false
-            return pending
-        }
-    }
-
-    func takeResetBallRequest() -> Bool {
-        lock.withLock {
-            let pending = resetBallPending
-            resetBallPending = false
             return pending
         }
     }
@@ -110,17 +116,22 @@ struct BasketLayerConfiguration: CompositorLayerConfiguration {
     }
 }
 
+/// UserDefaults key for the backend choice. Also settable as a launch
+/// argument (`-physicsEngine jolt`) for automated simulator runs.
+let physicsEngineDefaultsKey = "physicsEngine"
+
 @main
 struct CoolBasketVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @State private var immersionStyle: ImmersionStyle = .mixed
+    @AppStorage(physicsEngineDefaultsKey) private var physicsEngineRaw = CoolBasketPhysicsEngine.coolBasket.rawValue
 
     var body: some SwiftUI.Scene {
         WindowGroup {
             ScrollView {
                 VStack(spacing: 20) {
                     Text("Cool Basket 🏀").font(.extraLargeTitle).fontWeight(.bold)
-                    Text("First, place your hoop: look where you want it — the ghost follows your gaze —\nand pinch (or press Place hoop here). Then pinch near the ball to pick it up\nand throw. Put it down through the rim to score!")
+                    Text("First, place your hoop: look where you want it — the ghost follows your gaze —\nand pinch (or press Place hoop here). Then pinch near a ball to pick it up\nand throw. Put it down through the rim to score!")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                     Button {
@@ -137,6 +148,20 @@ struct CoolBasketVisionOSXRApp: App {
 
                     Divider()
 
+                    VStack(spacing: 6) {
+                        Picker("Physics", selection: $physicsEngineRaw) {
+                            ForEach(CoolBasketPhysicsEngine.allCases, id: \.rawValue) { engine in
+                                Text(engine.displayName).tag(engine.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        Text("Applies when the Court opens; restart the app to switch afterwards.")
+                            .font(.footnote).foregroundStyle(.tertiary)
+                    }
+
+                    Divider()
+
                     HStack(spacing: 16) {
                         Button("Place hoop here") {
                             BasketXRHolder.shared.requestPlaceHoop()
@@ -150,27 +175,31 @@ struct CoolBasketVisionOSXRApp: App {
                     }
 
                     HStack(spacing: 16) {
-                        Button("Reset ball") {
-                            BasketXRHolder.shared.requestResetBall()
+                        Button("Drop ball") {
+                            BasketXRHolder.shared.requestDropBall()
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderedProminent)
 
                         Button("Reset score") {
                             BasketXRHolder.shared.requestResetScore()
                         }
                         .buttonStyle(.bordered)
                     }
+                    Text("Drop as many as you like — every ball can be grabbed, thrown and scored with. Balls show the backends apart: the built-in one has no ball-vs-ball contact, Jolt piles them up.")
+                        .font(.footnote).foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
 
                     Divider()
 
                     TimelineView(.periodic(from: .now, by: 0.25)) { _ in
                         let holder = BasketXRHolder.shared
                         VStack(spacing: 8) {
-                            Text(holder.isPlacingHoop ? "Placing the hoop…" : "Baskets: \(holder.score)")
+                            Text(holder.isPlacingHoop ? "Placing the hoop…" : "Baskets: \(holder.score) · balls: \(holder.ballCount)")
                                 .font(.title2.monospacedDigit()).fontWeight(.semibold)
                             Text(
                                 "Space \(holder.spaceOpen ? "OPEN" : "closed")"
                                     + " (last open: \(holder.lastOpenResult))"
+                                    + " · physics \(holder.engineName)"
                                     + " · surfaces \(holder.planeCount)"
                                     + String(format: " · last impact %.2f N·s", holder.lastImpulse)
                             )
@@ -206,7 +235,11 @@ struct CoolBasketVisionOSXRApp: App {
 
                 let game = BasketXRGame()
                 // Physics backend must install before the renderer exists.
-                guard game.game.installPhysics() else { return }
+                let chosen = CoolBasketPhysicsEngine(
+                    rawValue: UserDefaults.standard.string(forKey: physicsEngineDefaultsKey) ?? ""
+                ) ?? .coolBasket
+                guard game.game.installPhysics(engine: chosen) else { return }
+                print("CoolBasket: physics backend \(game.game.activeEngine?.displayName ?? "none")")
 
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 BasketXRHolder.shared.xr = xr

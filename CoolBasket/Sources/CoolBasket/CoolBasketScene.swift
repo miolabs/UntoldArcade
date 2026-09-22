@@ -2,7 +2,7 @@
 //  CoolBasketScene.swift
 //  CoolBasket
 //
-//  Entity construction for the basketball demo: the ball (dynamic body), the
+//  Entity construction for the basketball demo: the balls (dynamic bodies), the
 //  hoop (static pole + backboard boxes, a rim made of a ring of static sphere
 //  colliders, and an invisible trigger volume under the rim), and two
 //  invisible kinematic hand bodies. Visuals use the engine's primitive nodes;
@@ -17,7 +17,6 @@ import UntoldEngine
 /// Node creation is main-actor (the DSL requirement); runtime mutation uses
 /// the engine's lock-backed nonisolated API, callable from the XR game thread.
 public final class CoolBasketScene: @unchecked Sendable {
-    public private(set) var ballEntity: EntityID = .invalid
     public private(set) var basketTriggerEntity: EntityID = .invalid
     public private(set) var leftHandEntity: EntityID = .invalid
     public private(set) var rightHandEntity: EntityID = .invalid
@@ -28,6 +27,8 @@ public final class CoolBasketScene: @unchecked Sendable {
     /// World-space rim center while a hoop stands (nil during placement) —
     /// the game's ring-crossing test reads it every frame.
     public private(set) var rimCenter: SIMD3<Float>?
+    /// Horizontal direction from the hoop toward the player while it stands.
+    public private(set) var hoopForward: SIMD3<Float>?
 
     /// Size-7 basketball: radius ~0.12 m, mass ~0.62 kg — and bouncy.
     public static let ballRadius: Float = 0.121
@@ -109,22 +110,31 @@ public final class CoolBasketScene: @unchecked Sendable {
         }
     }
 
-    // MARK: - Ball
+    // MARK: - Balls
 
-    /// Creates the ball at `position` as a dynamic body, at rest.
-    @MainActor public func spawnBall(at position: SIMD3<Float>) {
-        if ballEntity != .invalid {
-            destroyEntity(entityId: ballEntity)
-        }
+    /// Every ball in play, oldest first. All balls are equal: any can be
+    /// grabbed, thrown and scored with.
+    public private(set) var balls: [EntityID] = []
+    private var ballSet: Set<EntityID> = []
+
+    public var ballCount: Int { balls.count }
+
+    public func isBall(_ entity: EntityID) -> Bool {
+        ballSet.contains(entity)
+    }
+
+    /// Creates a ball at `position` as a dynamic body, at rest.
+    @MainActor @discardableResult
+    public func spawnBall(at position: SIMD3<Float>) -> EntityID {
         let node = SphereNode(
             radius: Self.ballRadius,
             segments: [32, 24],
-            name: "CoolBasket.ball"
+            name: "CoolBasket.ball\(balls.count)"
         )
         .baseColor(1.0, 1.0, 1.0)
         .roughness(0.7)
         .metallic(0.0)
-        ballEntity = node.entityID
+        let entity = node.entityID
 
         // Classic orange-with-black-channels artwork, equirectangular to
         // match the sphere primitive's UVs. The engine resolves texture paths
@@ -138,53 +148,72 @@ public final class CoolBasketScene: @unchecked Sendable {
             forResource: "basketball_baseColor", withExtension: "png"
         ) {
             updateMaterialTexture(
-                entityId: ballEntity, textureType: .baseColor, path: textureURL
+                entityId: entity, textureType: .baseColor, path: textureURL
             )
         } else {
             print("CoolBasket: ball texture missing from bundle — plain white ball")
         }
 
-        translateTo(entityId: ballEntity, position: position)
-        attachBallBody(velocity: .zero, at: position)
+        translateTo(entityId: entity, position: position)
+        balls.append(entity)
+        ballSet.insert(entity)
+        attachBallBody(entity: entity, velocity: .zero, at: position)
+        return entity
     }
 
-    /// Makes the ball a simulated body again (used on spawn and on throw
-    /// release). Position is the current transform; `velocity` is imparted.
-    public func attachBallBody(velocity: SIMD3<Float>, at position: SIMD3<Float>) {
-        guard ballEntity != .invalid else { return }
-        translateTo(entityId: ballEntity, position: position)
+    /// Destroys one ball (callable from the game thread).
+    public func removeBall(_ entity: EntityID) {
+        guard ballSet.remove(entity) != nil else { return }
+        balls.removeAll { $0 == entity }
+        destroyEntity(entityId: entity)
+    }
 
-        registerComponent(entityId: ballEntity, componentType: ColliderComponent.self)
-        registerComponent(entityId: ballEntity, componentType: RigidBodyComponent.self)
-        if let collider = scene.get(component: ColliderComponent.self, for: ballEntity) {
+    public func removeAllBalls() {
+        for entity in balls {
+            destroyEntity(entityId: entity)
+        }
+        balls.removeAll()
+        ballSet.removeAll()
+    }
+
+    /// Makes a ball a simulated body again (used on spawn and on throw
+    /// release). Position is the current transform; `velocity` is imparted.
+    public func attachBallBody(entity: EntityID, velocity: SIMD3<Float>, at position: SIMD3<Float>) {
+        guard isBall(entity) else { return }
+        translateTo(entityId: entity, position: position)
+
+        registerComponent(entityId: entity, componentType: ColliderComponent.self)
+        registerComponent(entityId: entity, componentType: RigidBodyComponent.self)
+        if let collider = scene.get(component: ColliderComponent.self, for: entity) {
             collider.shape = .sphere(radius: Self.ballRadius)
             collider.restitution = Self.ballRestitution
             collider.friction = 0.4
         }
-        if let body = scene.get(component: RigidBodyComponent.self, for: ballEntity) {
+        if let body = scene.get(component: RigidBodyComponent.self, for: entity) {
             body.motionType = .dynamic
             body.mass = Self.ballMass
             body.initialLinearVelocity = velocity
         }
     }
 
-    /// Takes the ball out of simulation (while held in the hand). The next
+    /// Takes a ball out of simulation (while held in the hand). The next
     /// coordinator substep removes the body from the backend via the query
     /// diff — no backend-specific call needed.
-    public func detachBallBody() {
-        guard ballEntity != .invalid else { return }
-        scene.remove(component: RigidBodyComponent.self, from: ballEntity)
-        scene.remove(component: ColliderComponent.self, from: ballEntity)
+    public func detachBallBody(entity: EntityID) {
+        guard isBall(entity) else { return }
+        scene.remove(component: RigidBodyComponent.self, from: entity)
+        scene.remove(component: ColliderComponent.self, from: entity)
     }
 
-    /// Directly places the ball (held state — not simulated).
-    public func moveBall(to position: SIMD3<Float>) {
-        guard ballEntity != .invalid else { return }
-        translateTo(entityId: ballEntity, position: position)
+    /// Directly places a ball (held state — not simulated).
+    public func moveBall(_ entity: EntityID, to position: SIMD3<Float>) {
+        guard isBall(entity) else { return }
+        translateTo(entityId: entity, position: position)
     }
 
-    public func ballPosition() -> SIMD3<Float>? {
-        scene.get(component: LocalTransformComponent.self, for: ballEntity)?.position
+    public func ballPosition(_ entity: EntityID) -> SIMD3<Float>? {
+        guard isBall(entity) else { return nil }
+        return scene.get(component: LocalTransformComponent.self, for: entity)?.position
     }
 
     // MARK: - Lighting
@@ -260,6 +289,7 @@ public final class CoolBasketScene: @unchecked Sendable {
         clearHoop()
         let layout = HoopLayout(position: position, facing: facing)
         rimCenter = layout.rimCenter
+        hoopForward = layout.forward
 
         func staticBox(
             node: PrimitiveNode,
@@ -376,6 +406,7 @@ public final class CoolBasketScene: @unchecked Sendable {
         hoopPartEntities.removeAll()
         basketTriggerEntity = .invalid
         rimCenter = nil
+        hoopForward = nil
     }
 
     // MARK: - Body proxies
@@ -415,11 +446,10 @@ public final class CoolBasketScene: @unchecked Sendable {
     // MARK: - Teardown
 
     public func clear() {
-        if ballEntity != .invalid { destroyEntity(entityId: ballEntity) }
+        removeAllBalls()
         if leftHandEntity != .invalid { destroyEntity(entityId: leftHandEntity) }
         if rightHandEntity != .invalid { destroyEntity(entityId: rightHandEntity) }
         if sunEntity != .invalid { destroyEntity(entityId: sunEntity) }
-        ballEntity = .invalid
         leftHandEntity = .invalid
         rightHandEntity = .invalid
         sunEntity = .invalid
