@@ -1,2 +1,6 @@
 *.untoldscene filter=lfs diff=lfs merge=lfs -text
 *.untold filter=lfs diff=lfs merge=lfs -text
+CoolWeb/**/*.usdz filter=lfs diff=lfs merge=lfs -text
+CoolWeb/**/*.blend filter=lfs diff=lfs merge=lfs -text
+CoolWeb/Sources/CoolWeb/Resources/Models/textures/*.png filter=lfs diff=lfs merge=lfs -text
+CoolWeb/**/GloveTextures/* filter=lfs diff=lfs merge=lfs -text
