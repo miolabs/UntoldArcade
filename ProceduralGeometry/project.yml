@@ -1,0 +1,51 @@
+name: ProceduralGeometry
+
+packages:
+  # LOCAL TESTING ONLY: pinned to the local UntoldEngine checkout on branch
+  # feature/procedural_geom_helper, which has the Mesh.makeMesh/boundingBox/
+  # markEntityPickingDirty APIs ProceduralGeometryExtension needs. Switch back to
+  # the url/branch: develop form once that branch is merged and this has been
+  # verified end to end.
+  UntoldEngine:
+    path: /Users/haroldserrano/Desktop/UntoldEngineStudio/UntoldEngine
+  # LOCAL TESTING ONLY: no remote yet — this package only exists on this machine.
+  ProceduralGeometryExtension:
+    path: /Users/haroldserrano/Desktop/UntoldEngineStudio/Extensions/ProceduralGeometryExtension
+
+targets:
+  ProceduralGeometry:
+    type: application
+    platform: visionOS
+    deploymentTarget: 26.0
+    sources:
+      - path: Sources
+        excludes:
+          - "ProceduralGeometry/GameData"
+      - path: Sources/ProceduralGeometry/GameData
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: UntoldEngine
+        product: UntoldEngineXR
+      - package: UntoldEngine
+        product: UntoldEngineAR
+      - package: ProceduralGeometryExtension
+        product: ProceduralGeometryExtension
+    settings:
+      base:
+                PRODUCT_BUNDLE_IDENTIFIER: com.untoldengine.proceduralgeometry
+                SWIFT_VERSION: 5.0
+                MARKETING_VERSION: "1.0"
+                CURRENT_PROJECT_VERSION: "1"
+                INFOPLIST_FILE: Sources/ProceduralGeometry/Info.plist
+                UNTOLD_ENGINE_PACKAGE_ROOT: "$(BUILD_DIR)/../../SourcePackages/checkouts/UntoldEngine"
+                MTL_HEADER_SEARCH_PATHS: "$(inherited) $(UNTOLD_ENGINE_PACKAGE_ROOT)/Sources/UntoldEngineShaderSupport/include"
+                CODE_SIGN_STYLE: Automatic
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: -Onone
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+        Release:
+                  SWIFT_COMPILATION_MODE: wholemodule
+                  SWIFT_OPTIMIZATION_LEVEL: -Onone
+                  DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
