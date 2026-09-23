@@ -164,10 +164,15 @@ class GameScene {
             // ...then feed the proxy's current position into TubeEndpointDrag (the
             // axis-locked/90-degree-only constraint logic itself lives in
             // ProceduralGeometryExtension now) and move the proxy to wherever that reports back.
-            updateEndpointDrag(&current.drag, proxyId: current.proxyId)
+            // On the gesture's final frame this calls TubeEndpointDrag.end instead of .update —
+            // pinch release is commonly accompanied by a small involuntary hand movement, which
+            // .update's turn detection would otherwise be free to read as a deliberate redirect
+            // and insert an unwanted bend right at the moment of release.
+            let isGestureEnding = state.currentPhase == .ended || state.currentPhase == .cancelled
+            updateEndpointDrag(&current.drag, proxyId: current.proxyId, isGestureEnding: isGestureEnding)
             activeDrag = current
 
-            if state.currentPhase == .ended || state.currentPhase == .cancelled {
+            if isGestureEnding {
                 activeDrag = nil
             }
         } else {

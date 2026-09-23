@@ -76,9 +76,15 @@ extension GameScene {
     /// the proxy for this frame. Feeds the proxy's current position into `TubeEndpointDrag` and
     /// moves the proxy to wherever that reports back — the proxy is purely this demo's own
     /// visual/pickable stand-in for the tip; `TubeEndpointDrag` has no idea it exists.
-    func updateEndpointDrag(_ drag: inout TubeEndpointDrag, proxyId: EntityID) {
+    ///
+    /// `isGestureEnding` must be true on (and only on) the gesture's final `.ended`/`.cancelled`
+    /// frame — see `TubeEndpointDrag.end(rawPosition:)` for why that frame needs different
+    /// handling than every other frame of the drag.
+    func updateEndpointDrag(_ drag: inout TubeEndpointDrag, proxyId: EntityID, isGestureEnding: Bool) {
         let rawPosition = getPosition(entityId: proxyId)
-        let constrainedPosition = drag.update(rawPosition: rawPosition)
+        let constrainedPosition = isGestureEnding
+            ? drag.end(rawPosition: rawPosition)
+            : drag.update(rawPosition: rawPosition)
         translateTo(entityId: proxyId, position: constrainedPosition)
     }
 
