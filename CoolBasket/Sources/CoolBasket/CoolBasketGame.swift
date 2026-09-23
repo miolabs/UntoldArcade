@@ -258,15 +258,15 @@ public final class CoolBasketGame: @unchecked Sendable {
     /// Tears the hoop down and returns to placement (control-window button).
     /// Game thread, like the per-frame update: it drops any grab in progress.
     public func requestHoopMove() {
-        let shouldReset = lock.withLock { () -> Bool in
-            guard phase == .playing else { return false }
+        let generation = lock.withLock { () -> UInt64? in
+            guard phase == .playing else { return nil }
             phase = .placingHoop
             placementGeneration &+= 1
             throughRingAt.removeAll()
             previousCenters.removeAll()
-            return true
+            return placementGeneration
         }
-        guard shouldReset else { return }
+        guard let generation else { return }
         cancelGrab()
         lock.withLock {
             placementPinchGraceUntil = ProcessInfo.processInfo.systemUptime + 1.0
@@ -276,6 +276,9 @@ public final class CoolBasketGame: @unchecked Sendable {
             // Atomic with respect to the frame loop, which holds the same
             // gate: the physics coordinator never sees a half-built scene.
             withWorldAccessGate {
+                // A shutdown or a later move since this was queued bumped the
+                // generation: nothing to rebuild.
+                guard self.lock.withLock({ self.placementGeneration == generation }) else { return }
                 self.scene.clear()
                 self.scene.createBodyProxies()
                 self.scene.addLighting()
@@ -443,7 +446,10 @@ public final class CoolBasketGame: @unchecked Sendable {
         contactSubscription?.cancel()
         basketSubscription = nil
         contactSubscription = nil
-        scene.clear()
+        // The court builds on the main actor under the engine's world gate,
+        // and the render loop that held it during frames has returned: take
+        // it so a build still in flight finishes before it is torn down.
+        withWorldAccessGate { scene.clear() }
     }
 
     // MARK: - Score

@@ -108,6 +108,26 @@ final class BasketXRHolder: @unchecked Sendable {
             return pending
         }
     }
+
+    /// Releases a session the system closed (the Digital Crown). Once
+    /// `runLoop()` has returned no frame runs again, and the engine's
+    /// deferred teardown (`shutdownUntoldEngineXR`, whose completion fires
+    /// from a frame's finalize pass) would never complete — the holder would
+    /// keep the old session and refuse to reopen. So it is released here and
+    /// now, the engine's own stale-session pattern: the entities are marked
+    /// and finalized by the next session's first frames. Main actor.
+    func releaseSession() {
+        if let xr {
+            setRendering(.extensions(.removeAll))
+            xr.clearSpatialInput()
+            xr.stop()
+        }
+        destroyAllEntities()
+        xr = nil
+        game = nil
+        renderThread = nil
+        spaceOpen = false
+    }
 }
 
 struct BasketLayerConfiguration: CompositorLayerConfiguration {
@@ -241,9 +261,10 @@ struct CoolBasketVisionOSXRApp: App {
 
         ImmersiveSpace(id: "Court") {
             CompositorLayer(configuration: BasketLayerConfiguration()) { layerRenderer in
-                guard BasketXRHolder.shared.xr == nil else {
-                    print("CoolBasket: immersive space reopened before teardown finished")
-                    return
+                if BasketXRHolder.shared.xr != nil {
+                    // Reopened before the last session's release ran.
+                    print("CoolBasket: releasing the previous session first")
+                    BasketXRHolder.shared.releaseSession()
                 }
 
                 let game = BasketXRGame()
@@ -277,13 +298,8 @@ struct CoolBasketVisionOSXRApp: App {
                     // cleanly instead of hitting a dead renderer.
                     game.shutdown()
                     Task { @MainActor in
-                        BasketXRHolder.shared.spaceOpen = false
-                        shutdownUntoldEngineXR(xr) {
-                            BasketXRHolder.shared.xr = nil
-                            BasketXRHolder.shared.game = nil
-                            BasketXRHolder.shared.renderThread = nil
-                            print("CoolBasket: immersive space torn down, ready to reopen")
-                        }
+                        BasketXRHolder.shared.releaseSession()
+                        print("CoolBasket: immersive space torn down, ready to reopen")
                     }
                 }
                 thread.name = "XR Render Thread"
