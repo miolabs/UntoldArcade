@@ -18,13 +18,12 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		4D41B5F1912AAC25A27C270F /* ProceduralGeometryExtension */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ProceduralGeometryExtension; path = ../../../Extensions/ProceduralGeometryExtension; sourceTree = SOURCE_ROOT; };
 		5B23C35540ACF8A5456BD118 /* GameScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameScene.swift; sourceTree = "<group>"; };
 		6C24F2F0858397CCE39286D0 /* GameScene+TubeEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameScene+TubeEditing.swift"; sourceTree = "<group>"; };
 		7299FC0EF1D70FC370C57A65 /* GameSceneUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSceneUtils.swift; sourceTree = "<group>"; };
 		882063F37EC8FF14545F5A12 /* UntoldEngine */ = {isa = PBXFileReference; lastKnownFileType = folder; name = UntoldEngine; path = ../../../UntoldEngine; sourceTree = SOURCE_ROOT; };
 		AB9346C47285CA66B0F8A4FB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		C845717D4944D2FAC8C2BE99 /* ProceduralGeometry.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ProceduralGeometry.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C845717D4944D2FAC8C2BE99 /* ProceduralGeometry.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ProceduralGeometry.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5AE5CB1BAED0ADFE0F97A0F /* GameData */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GameData; path = Sources/ProceduralGeometry/GameData; sourceTree = SOURCE_ROOT; };
 		F78B5EC773ADB972382EF878 /* ProceduralGeometryApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProceduralGeometryApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -84,7 +83,6 @@
 		C11B401E8F1A3182D6F0FB35 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				4D41B5F1912AAC25A27C270F /* ProceduralGeometryExtension */,
 				882063F37EC8FF14545F5A12 /* UntoldEngine */,
 			);
 			name = Packages;
@@ -139,7 +137,7 @@
 			mainGroup = 926E81EB615ADB4597C27721;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				6DA0BEAEE80F4E0CE1D383A3 /* XCLocalSwiftPackageReference "/Users/haroldserrano/Desktop/UntoldEngineStudio/Extensions/ProceduralGeometryExtension" */,
+				1D71BBDD023A6ABC8CE4E691 /* XCRemoteSwiftPackageReference "ProceduralGeometryExtension" */,
 				60BDD8261946F8FCBAF62329 /* XCLocalSwiftPackageReference "/Users/haroldserrano/Desktop/UntoldEngineStudio/UntoldEngine" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -240,7 +238,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = PXXZLXYJ26;
 				INFOPLIST_FILE = Sources/ProceduralGeometry/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -265,7 +262,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = PXXZLXYJ26;
 				INFOPLIST_FILE = Sources/ProceduralGeometry/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -374,11 +370,18 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = /Users/haroldserrano/Desktop/UntoldEngineStudio/UntoldEngine;
 		};
-		6DA0BEAEE80F4E0CE1D383A3 /* XCLocalSwiftPackageReference "/Users/haroldserrano/Desktop/UntoldEngineStudio/Extensions/ProceduralGeometryExtension" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = /Users/haroldserrano/Desktop/UntoldEngineStudio/Extensions/ProceduralGeometryExtension;
-		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1D71BBDD023A6ABC8CE4E691 /* XCRemoteSwiftPackageReference "ProceduralGeometryExtension" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/untoldengine/ProceduralGeometryExtension.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		47DBA45C900438936E590603 /* UntoldEngineAR */ = {
@@ -391,6 +394,7 @@
 		};
 		F2F12E1450F1675EB5C42FA1 /* ProceduralGeometryExtension */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = 1D71BBDD023A6ABC8CE4E691 /* XCRemoteSwiftPackageReference "ProceduralGeometryExtension" */;
 			productName = ProceduralGeometryExtension;
 		};
 /* End XCSwiftPackageProductDependency section */

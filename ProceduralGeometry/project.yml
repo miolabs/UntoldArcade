@@ -8,9 +8,9 @@ packages:
   # verified end to end.
   UntoldEngine:
     path: /Users/haroldserrano/Desktop/UntoldEngineStudio/UntoldEngine
-  # LOCAL TESTING ONLY: no remote yet — this package only exists on this machine.
   ProceduralGeometryExtension:
-    path: /Users/haroldserrano/Desktop/UntoldEngineStudio/Extensions/ProceduralGeometryExtension
+    url: https://github.com/untoldengine/ProceduralGeometryExtension.git
+    branch: main
 
 targets:
   ProceduralGeometry:
