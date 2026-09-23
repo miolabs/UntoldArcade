@@ -14,22 +14,35 @@ import ProceduralGeometryExtension
 // GameScene: Initialize your game and write game-specific logic
 class GameScene {
 
-    /// Maps a control-point handle entity to the tube it belongs to and which control-point
-    /// index it represents. Populated in `createDemoTube()` and grown by
-    /// `createControlPointHandle` whenever an endpoint drag inserts a new bend
-    /// (`GameScene+TubeEditing.swift`).
-    var tubeControlPointHandles: [EntityID: (tubeId: EntityID, index: Int)] = [:]
+    /// Maps each tube's two (otherwise invisible) endpoint proxy entities to the tube they
+    /// belong to and whether each is the start or end. Exactly two entries per tube, for its
+    /// whole lifetime — populated once in `createDemoTube()` via `createTubeEndpointHandles`.
+    /// Unlike the old per-control-point handle scheme, nothing here ever needs reindexing:
+    /// inserted bends are pure data in `TubePathComponent.controlPoints`, with no entity of
+    /// their own.
+    var tubeEndpointHandles: [EntityID: (tubeId: EntityID, isStart: Bool)] = [:]
 
-    /// The drag currently in progress, if any — either extending an endpoint (possibly adding
-    /// bends along the way) or reshaping an existing one. See `GameScene+TubeEditing.swift`.
+    /// The reverse of `tubeEndpointHandles`: each tube's own two proxy entities, for toggling
+    /// their visibility when a tube becomes (in)active.
+    var tubeEndpoints: [EntityID: (startHandleId: EntityID, endHandleId: EntityID)] = [:]
+
+    /// Which tube, if any, is currently armed for editing — set by tapping the tube's own mesh
+    /// (or one of its endpoint proxies), cleared by tapping anything else. Only an active tube's
+    /// endpoints can be dragged; see `beginTubeDrag`.
+    var activeTubeId: EntityID?
+
+    /// The endpoint drag currently in progress, if any, paired with the proxy entity driving it
+    /// — `TubeEndpointDrag` (from `ProceduralGeometryExtension`) has no idea proxy entities
+    /// exist, so this demo tracks that pairing itself. See `GameScene+TubeEditing.swift`.
     ///
     /// Captured once when a gesture starts (the first frame `pickedEntityId` identifies one of
-    /// our handles) and held until that gesture ends — `pickedEntityId` isn't guaranteed to keep
-    /// pointing at the same entity, or to stay non-nil, all the way through to the gesture's
-    /// final `.ended`/`.cancelled` frame, and `SpatialManipulationSystem`'s own session only gets
-    /// cleanly closed out if its lifecycle function is called on that final frame too — skipping
-    /// it leaves the session stuck mid-drag, still targeting whatever it was last acting on.
-    private var activeDrag: TubeDrag?
+    /// the active tube's endpoint proxies) and held until that gesture ends — `pickedEntityId`
+    /// isn't guaranteed to keep pointing at the same entity, or to stay non-nil, all the way
+    /// through to the gesture's final `.ended`/`.cancelled` frame, and
+    /// `SpatialManipulationSystem`'s own session only gets cleanly closed out if its lifecycle
+    /// function is called on that final frame too — skipping it leaves the session stuck
+    /// mid-drag, still targeting whatever it was last acting on.
+    private var activeDrag: (drag: TubeEndpointDrag, proxyId: EntityID)?
 
     init() {
         Logger.log(message: "🎮 GameScene initializing...")
@@ -64,10 +77,9 @@ class GameScene {
         InputSystem.shared.setXRTwoHandRotateAxisMode(.dynamicSnapped)
     }
 
-    /// Creates one procedural tube roughly at chest height, a short reach in front of where
-    /// the immersive space starts, plus a small pickable handle sphere at each control point.
-    /// Dragging a handle (see `handleInput`) feeds its new position back into the tube via
-    /// `ProceduralGeometryExtension.setControlPoints` — see `updateTubeControlPoint`.
+    /// Creates one procedural tube roughly at chest height, a short reach in front of where the
+    /// immersive space starts, plus its two (invisible until tapped active) endpoint proxies.
+    /// Tap the tube to arm it, then drag either endpoint — see `GameScene+TubeEditing.swift`.
     ///
     /// Two interior corners (at points 1 and 2) with `bendRadius` set, so both should render as
     /// smooth rounded bends rather than sharp miter joints — the thing to actually look at when
@@ -93,9 +105,11 @@ class GameScene {
             return
         }
 
-        for (index, point) in controlPoints.enumerated() {
-            createControlPointHandle(tubeId: tubeId, index: index, position: point)
-        }
+        createTubeEndpointHandles(
+            tubeId: tubeId,
+            startPosition: controlPoints[0],
+            endPosition: controlPoints[controlPoints.count - 1]
+        )
     }
 
     // MARK: - Game Loop
@@ -116,30 +130,42 @@ class GameScene {
 
         let state = InputSystem.shared.xrSpatialInputState
 
-        // Latch onto a handle only at the start of a gesture — once a drag is under way, keep
-        // driving the same handle regardless of what pickedEntityId reports frame to frame.
+        // A tap (not a drag) on a tube, or on one of its endpoint proxies, arms it for editing;
+        // a tap on anything else disarms whichever tube was previously active. This is checked
+        // independently of the drag state below — a tap is a distinct, already-resolved gesture
+        // (see SpatialInputTutorial.md), never concurrent with an active drag.
+        if state.spatialTapActive {
+            handleTubeTap(pickedEntityId: state.pickedEntityId)
+        }
+
+        // Latch onto an endpoint proxy only at the start of a gesture — once a drag is under
+        // way, keep driving the same proxy regardless of what pickedEntityId reports frame to
+        // frame. `beginTubeDrag` itself refuses to start unless the proxy's tube is the active
+        // one, so a stray drag over an unarmed tube's (invisible) endpoint falls through to the
+        // scene-manipulation branch below instead of doing anything tube-specific.
         //
         // Deliberately NOT gated on state.spatialTapActive: that flag means "this gesture
         // turned out to be a tap, not a drag" and is false for the entire duration of an
         // actual drag (see SpatialInputTutorial.md) — gating on it here meant a real drag
-        // could never latch onto a handle at all, so every attempt fell through to the
+        // could never latch onto a proxy at all, so every attempt fell through to the
         // scene-root-drag branch below instead.
-        if activeDrag == nil, let entityId = state.pickedEntityId {
-            activeDrag = beginTubeDrag(handleId: entityId)
+        if activeDrag == nil, let entityId = state.pickedEntityId, let drag = beginTubeDrag(proxyId: entityId) {
+            activeDrag = (drag: drag, proxyId: entityId)
         }
 
-        // Mutually exclusive: dragging a control-point handle must not also drag the scene
-        // root under the same gesture, or everything in view appears to move together (the
-        // handle moves by its own delta *and* the whole scene shifts by that same delta).
-        if let drag = activeDrag {
+        // Mutually exclusive: dragging an endpoint proxy must not also drag the scene root
+        // under the same gesture, or everything in view appears to move together (the proxy
+        // moves by its own delta *and* the whole scene shifts by that same delta).
+        if var current = activeDrag {
             // Call every frame for as long as our gesture is live — including its last frame —
             // so SpatialManipulationSystem's own begin/update/end lifecycle actually reaches
             // `end` instead of getting stuck mid-drag on this entity.
             SpatialManipulationSystem.shared.processPinchTransformLifecycle(from: state)
-            // ...then apply this system's own axis-locked/90-degree-only constraint on top of
-            // wherever SpatialManipulationSystem just moved the handle, and push the result into
-            // the tube it belongs to (see GameScene+TubeEditing.swift).
-            activeDrag = updateTubeDrag(drag)
+            // ...then feed the proxy's current position into TubeEndpointDrag (the
+            // axis-locked/90-degree-only constraint logic itself lives in
+            // ProceduralGeometryExtension now) and move the proxy to wherever that reports back.
+            updateEndpointDrag(&current.drag, proxyId: current.proxyId)
+            activeDrag = current
 
             if state.currentPhase == .ended || state.currentPhase == .cancelled {
                 activeDrag = nil
