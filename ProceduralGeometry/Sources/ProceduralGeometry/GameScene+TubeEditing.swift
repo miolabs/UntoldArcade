@@ -210,14 +210,18 @@ extension GameScene {
         tubeInteriorProxies[tubeId] = nil
     }
 
+    /// Bigger than the tube's own radius so it pokes out on every side and stays pickable even
+    /// when invisible — sized generously (well beyond the minimum needed to poke out) since a
+    /// missed pinch here used to silently fall through to dragging the whole scene; a more
+    /// forgiving hit target directly reduces how often that happens.
+    private static let proxyExtent: Float = 0.12
+
     private func createProxy(tubeId: EntityID, name: String, position: SIMD3<Float>) -> EntityID {
         let handleId = createEntity()
         setEntityName(entityId: handleId, name: name)
-        // Bigger than the tube's own radius so it pokes out on every side and stays pickable,
-        // even when invisible.
         setEntityMeshDirect(
             entityId: handleId,
-            meshes: BasicPrimitives.createSphere(extent: 0.08),
+            meshes: BasicPrimitives.createSphere(extent: Self.proxyExtent),
             assetName: "TubeProxy"
         )
         translateTo(entityId: handleId, position: position)

@@ -205,9 +205,15 @@ class GameScene {
                     regenerateInteriorBendProxies(tubeId: activeTubeId)
                 }
             }
-        } else {
-            // Nothing (or nothing of ours) picked — Pinch + Drag moves the scene root,
-            // two-hands rotate rotates it.
+        } else if activeTubeId == nil {
+            // Nothing armed for editing and nothing of ours was picked — Pinch + Drag moves the
+            // scene root, two-hands rotate rotates it.
+            //
+            // Gated on activeTubeId, not just "no active drag": without this, a pinch that
+            // merely missed a proxy's small hit target (rather than landing on empty space)
+            // would fall straight through to dragging the *entire scene* — surprising and
+            // disruptive mid-edit, since arming a tube is already a deliberate signal of intent
+            // to edit it. To look around again, tap away to disarm first.
             SpatialManipulationSystem.shared.processAnchoredSceneManipulationLifecycle(
                 from: state,
                 dragSensitivity: 10.0,
