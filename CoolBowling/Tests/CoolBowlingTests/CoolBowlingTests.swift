@@ -86,8 +86,9 @@ final class CoolBowlingTests: XCTestCase {
 
     func testBallInPlayRegions() {
         let layout = CoolBowlingScene.LaneLayout(foul: .zero, facing: SIMD3<Float>(0, 0, -1), approachLength: 1.2)
-        // At the rack, and half way down the return: in play.
-        XCTAssertTrue(layout.isAtRack(layout.rackPoint))
+        // At the rack (within the tolerance, not past it), and half way down the return: in play.
+        XCTAssertTrue(layout.isAtRack(layout.rackPoint + layout.forward * (CoolBowlingScene.ballRadius * 2)))
+        XCTAssertFalse(layout.isAtRack(layout.rackPoint + layout.forward * (CoolBowlingScene.ballRadius * 3)))
         XCTAssertTrue(layout.isOnReturn(layout.rackPoint))
         XCTAssertTrue(layout.isOnReturn(layout.returnStart))
         let midZ: Float = 1.5

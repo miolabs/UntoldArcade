@@ -305,11 +305,18 @@ public final class CoolBowlingScene: @unchecked Sendable {
         attachBallBody(velocity: velocity, at: position)
     }
 
+    /// Gives the ball its physics components (back) at `position`, moving
+    /// at `velocity`. Safe to call when it still has them: the fields are
+    /// refreshed, nothing is registered twice.
     public func attachBallBody(velocity: SIMD3<Float>, at position: SIMD3<Float>) {
         guard ballEntity != .invalid else { return }
         translateTo(entityId: ballEntity, position: position)
-        registerComponent(entityId: ballEntity, componentType: ColliderComponent.self)
-        registerComponent(entityId: ballEntity, componentType: RigidBodyComponent.self)
+        if scene.get(component: ColliderComponent.self, for: ballEntity) == nil {
+            registerComponent(entityId: ballEntity, componentType: ColliderComponent.self)
+        }
+        if scene.get(component: RigidBodyComponent.self, for: ballEntity) == nil {
+            registerComponent(entityId: ballEntity, componentType: RigidBodyComponent.self)
+        }
         if let collider = scene.get(component: ColliderComponent.self, for: ballEntity) {
             collider.shape = .sphere(radius: Self.ballRadius)
             collider.restitution = Self.ballRestitution
