@@ -1,13 +1,9 @@
 name: ProceduralGeometry
 
 packages:
-  # LOCAL TESTING ONLY: pinned to the local UntoldEngine checkout on branch
-  # feature/procedural_geom_helper, which has the Mesh.makeMesh/boundingBox/
-  # markEntityPickingDirty APIs ProceduralGeometryExtension needs. Switch back to
-  # the url/branch: develop form once that branch is merged and this has been
-  # verified end to end.
   UntoldEngine:
-    path: /Users/haroldserrano/Desktop/UntoldEngineStudio/UntoldEngine
+    url: https://github.com/untoldengine/UntoldEngine.git
+    branch: develop
   ProceduralGeometryExtension:
     url: https://github.com/untoldengine/ProceduralGeometryExtension.git
     branch: main

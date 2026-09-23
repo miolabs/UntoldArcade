@@ -1,5 +1,5 @@
 {
-  "originHash" : "fe489bfa83d82b3e47c53a25fa75478b96a3799e895b03db6969a4f39e4883f5",
+  "originHash" : "39cc400398b2b6b82f21e3c3fa16055b36698ed9b65405167de3d4a143ec8d20",
   "pins" : [
     {
       "identity" : "proceduralgeometryextension",
@@ -8,6 +8,15 @@
       "state" : {
         "branch" : "main",
         "revision" : "60ea15a45467a2ae59989c2004286fc3cc4e06f2"
+      }
+    },
+    {
+      "identity" : "untoldengine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/UntoldEngine.git",
+      "state" : {
+        "branch" : "develop",
+        "revision" : "ccd8eceb32984198e23c9d3f22ea921c9560f983"
       }
     }
   ],
