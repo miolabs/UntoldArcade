@@ -66,6 +66,8 @@ public final class CoolMirrorGame {
     private let characterPosition = simd_float3(0.0, 0.0, -1.6)
     private var skinningPath: CoolMirrorSkinningPath = .vertexShader
     private var currentClip: String?
+    private var muscleSimulation = false
+    private var muscleFlex: Float = 0
     private var generation = 0
 
     public init() {}
@@ -122,6 +124,7 @@ public final class CoolMirrorGame {
             translateTo(entityId: characterId, position: self.characterPosition)
             rotateTo(entityId: characterId, angle: .pi, axis: simd_float3(0, 1, 0))
             scaleTo(entityId: characterId, scale: simd_float3(repeating: newCharacter.displayScale))
+            setEntityMuscleRig(entityId: characterId, rig: CoolMirrorMuscles.rig(for: newCharacter))
             self.applyClip()
             self.applySkinningPath()
             self.onCharacterReady?()
@@ -164,6 +167,25 @@ public final class CoolMirrorGame {
         return entityMorphTargetNames(entityId: characterId)
     }
 
+    /// Volumetric muscles: XPBD tet cages built from the character's muscle
+    /// rig, simulated on the GPU and wrapped onto the skin after skinning.
+    /// Needs a compute skinning path.
+    public func setMuscleSimulation(enabled: Bool) {
+        muscleSimulation = enabled
+        applyMuscles()
+    }
+
+    /// Flexes every muscle at once (0 = let the pose drivers decide).
+    public func setMuscleFlex(_ value: Float) {
+        muscleFlex = value
+        applyMuscles()
+    }
+
+    public func muscleNames() -> [String] {
+        guard let characterId else { return [] }
+        return entityMuscleNames(entityId: characterId)
+    }
+
     public func clipNames() -> [String] {
         character.clips.map(\.name)
     }
@@ -180,6 +202,15 @@ public final class CoolMirrorGame {
         case .computeDDM:
             setEntityDeformation(entityId: characterId, skinningMode: .ddm)
         }
+        // The deformation component is recreated with the path; re-apply the
+        // muscle settings on top of it.
+        applyMuscles()
+    }
+
+    private func applyMuscles() {
+        guard let characterId, skinningPath != .vertexShader else { return }
+        setEntityMuscleSimulation(entityId: characterId, enabled: muscleSimulation)
+        setEntityMuscleActivationOverride(entityId: characterId, activation: muscleFlex > 0.01 ? muscleFlex : nil)
     }
 
     private func applyClip() {

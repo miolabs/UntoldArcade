@@ -60,6 +60,12 @@ final class MirrorControls {
     var poseDrivers = true {
         didSet { XRHolder.shared.game?.setPoseDrivers(enabled: poseDrivers) }
     }
+    var muscleSim = false {
+        didSet { XRHolder.shared.game?.setMuscleSimulation(enabled: muscleSim) }
+    }
+    var flex: Double = 0 {
+        didSet { XRHolder.shared.game?.setMuscleFlex(Float(flex)) }
+    }
     var clips: [String] = []
     var morphNames: [String] = []
     var morphWeights: [String: Double] = [:]
@@ -115,10 +121,22 @@ struct CoolMirrorVisionOSXRApp: App {
                         .pickerStyle(.segmented).labelsHidden()
                     }
                     GridRow {
-                        Text("Muscles")
+                        Text("PSD morphs")
                         Toggle(controls.poseDrivers ? "Auto (pose drivers)" : "Manual sliders", isOn: $controls.poseDrivers)
                             .toggleStyle(.button)
                             .disabled(controls.skinningPath == .vertexShader)
+                    }
+                    GridRow {
+                        Text("Muscle sim")
+                        Toggle(controls.muscleSim ? "XPBD volumetric muscles on" : "Off", isOn: $controls.muscleSim)
+                            .toggleStyle(.button)
+                            .disabled(controls.skinningPath == .vertexShader || controls.character == .redplayer)
+                    }
+                    if controls.muscleSim {
+                        GridRow {
+                            Text("Flex all")
+                            Slider(value: $controls.flex, in: 0 ... 1)
+                        }
                     }
                     GridRow {
                         Text("Playback")
