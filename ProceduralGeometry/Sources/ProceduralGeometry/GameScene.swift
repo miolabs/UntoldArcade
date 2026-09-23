@@ -26,23 +26,39 @@ class GameScene {
     /// their visibility when a tube becomes (in)active.
     var tubeEndpoints: [EntityID: (startHandleId: EntityID, endHandleId: EntityID)] = [:]
 
+    /// Maps each interior-bend proxy entity to the tube it belongs to and its control-point
+    /// index. Unlike `tubeEndpointHandles`, these only exist while their tube is active, and are
+    /// always wholesale-regenerated (never incrementally reindexed) whenever a drag concludes —
+    /// see `regenerateInteriorBendProxies`.
+    var tubeInteriorBendHandles: [EntityID: (tubeId: EntityID, index: Int)] = [:]
+
+    /// Each active tube's current set of interior-bend proxy entities, for destroying them
+    /// wholesale before regenerating (or when the tube deactivates).
+    var tubeInteriorProxies: [EntityID: [EntityID]] = [:]
+
     /// Which tube, if any, is currently armed for editing — set by tapping the tube's own mesh
-    /// (or one of its endpoint proxies), cleared by tapping anything else. Only an active tube's
-    /// endpoints can be dragged; see `beginTubeDrag`.
+    /// (or one of its proxies), cleared by tapping anything else. Only an active tube's endpoints
+    /// and bends can be dragged; see `beginTubeDrag`.
     var activeTubeId: EntityID?
 
-    /// The endpoint drag currently in progress, if any, paired with the proxy entity driving it
-    /// — `TubeEndpointDrag` (from `ProceduralGeometryExtension`) has no idea proxy entities
-    /// exist, so this demo tracks that pairing itself. See `GameScene+TubeEditing.swift`.
+    /// The drag currently in progress, if any, paired with the proxy entity driving it — neither
+    /// `TubeEndpointDrag` nor `TubeInteriorBendDrag` (from `ProceduralGeometryExtension`) has any
+    /// idea proxy entities exist, so this demo tracks that pairing itself. See
+    /// `GameScene+TubeEditing.swift`.
     ///
     /// Captured once when a gesture starts (the first frame `pickedEntityId` identifies one of
-    /// the active tube's endpoint proxies) and held until that gesture ends — `pickedEntityId`
-    /// isn't guaranteed to keep pointing at the same entity, or to stay non-nil, all the way
-    /// through to the gesture's final `.ended`/`.cancelled` frame, and
-    /// `SpatialManipulationSystem`'s own session only gets cleanly closed out if its lifecycle
-    /// function is called on that final frame too — skipping it leaves the session stuck
-    /// mid-drag, still targeting whatever it was last acting on.
-    private var activeDrag: (drag: TubeEndpointDrag, proxyId: EntityID)?
+    /// the active tube's proxies) and held until that gesture ends — `pickedEntityId` isn't
+    /// guaranteed to keep pointing at the same entity, or to stay non-nil, all the way through to
+    /// the gesture's final `.ended`/`.cancelled` frame, and `SpatialManipulationSystem`'s own
+    /// session only gets cleanly closed out if its lifecycle function is called on that final
+    /// frame too — skipping it leaves the session stuck mid-drag, still targeting whatever it was
+    /// last acting on.
+    private var activeDrag: ActiveTubeDrag?
+    /// True once an interior-bend drag has removed its own bend, but the underlying gesture
+    /// hasn't reached `.ended`/`.cancelled` yet — `SpatialManipulationSystem`'s lifecycle still
+    /// needs pumping through to the real end (see the doc comment above), but `updateActiveDrag`
+    /// must not be called again once its `TubeInteriorBendDrag` has already removed its point.
+    private var isActiveDragFinished = false
 
     init() {
         Logger.log(message: "🎮 GameScene initializing...")
@@ -149,31 +165,45 @@ class GameScene {
         // actual drag (see SpatialInputTutorial.md) — gating on it here meant a real drag
         // could never latch onto a proxy at all, so every attempt fell through to the
         // scene-root-drag branch below instead.
-        if activeDrag == nil, let entityId = state.pickedEntityId, let drag = beginTubeDrag(proxyId: entityId) {
-            activeDrag = (drag: drag, proxyId: entityId)
+        if activeDrag == nil, let entityId = state.pickedEntityId {
+            activeDrag = beginTubeDrag(proxyId: entityId)
         }
 
-        // Mutually exclusive: dragging an endpoint proxy must not also drag the scene root
-        // under the same gesture, or everything in view appears to move together (the proxy
-        // moves by its own delta *and* the whole scene shifts by that same delta).
+        // Mutually exclusive: dragging a proxy must not also drag the scene root under the same
+        // gesture, or everything in view appears to move together (the proxy moves by its own
+        // delta *and* the whole scene shifts by that same delta).
         if var current = activeDrag {
             // Call every frame for as long as our gesture is live — including its last frame —
             // so SpatialManipulationSystem's own begin/update/end lifecycle actually reaches
             // `end` instead of getting stuck mid-drag on this entity.
             SpatialManipulationSystem.shared.processPinchTransformLifecycle(from: state)
-            // ...then feed the proxy's current position into TubeEndpointDrag (the
-            // axis-locked/90-degree-only constraint logic itself lives in
-            // ProceduralGeometryExtension now) and move the proxy to wherever that reports back.
-            // On the gesture's final frame this calls TubeEndpointDrag.end instead of .update —
-            // pinch release is commonly accompanied by a small involuntary hand movement, which
-            // .update's turn detection would otherwise be free to read as a deliberate redirect
-            // and insert an unwanted bend right at the moment of release.
+
             let isGestureEnding = state.currentPhase == .ended || state.currentPhase == .cancelled
-            updateEndpointDrag(&current.drag, proxyId: current.proxyId, isGestureEnding: isGestureEnding)
-            activeDrag = current
+            // ...then feed the proxy's current position into whichever drag type is active (the
+            // axis-locked/90-degree-only editing logic itself lives in
+            // ProceduralGeometryExtension now) and move the proxy to wherever that reports back.
+            // On the gesture's final frame this calls .end instead of .update — pinch release is
+            // commonly accompanied by a small involuntary hand movement, which .update's
+            // turn/collapse detection would otherwise be free to read as deliberate and insert
+            // (or remove) a bend right at the moment of release.
+            if !isActiveDragFinished {
+                let stillGoing = updateActiveDrag(&current, isGestureEnding: isGestureEnding)
+                activeDrag = current
+                if !stillGoing {
+                    isActiveDragFinished = true
+                }
+            }
+            // An interior-bend drag can rigidly shift an endpoint's position within the tube
+            // without ever touching that endpoint's own proxy entity — keep them in sync every
+            // frame so the two never visibly drift apart mid-drag.
+            syncEndpointProxies(tubeId: current.tubeId)
 
             if isGestureEnding {
                 activeDrag = nil
+                isActiveDragFinished = false
+                if let activeTubeId {
+                    regenerateInteriorBendProxies(tubeId: activeTubeId)
+                }
             }
         } else {
             // Nothing (or nothing of ours) picked — Pinch + Drag moves the scene root,
