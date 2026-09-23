@@ -68,6 +68,9 @@ public final class CoolMirrorGame {
     private var currentClip: String?
     private var muscleSimulation = false
     private var muscleFlex: Float = 0
+    private var muscleCagesVisible = false
+    private var disabledMuscles: Set<String> = []
+    private var muscleActivations: [String: Float] = [:]
     private var generation = 0
 
     public init() {}
@@ -186,6 +189,27 @@ public final class CoolMirrorGame {
         return entityMuscleNames(entityId: characterId)
     }
 
+    /// Draws every muscle cage as wireframe lines over the character
+    /// (coloured by activation, bone capsules in cyan) to tune placement.
+    public func setMuscleCagesVisible(_ visible: Bool) {
+        muscleCagesVisible = visible
+        setMuscleDebugOverlay(enabled: visible)
+    }
+
+    /// Hides one muscle (it keeps simulating but no longer moves the skin).
+    public func setMuscleEnabled(name: String, enabled: Bool) {
+        if enabled { disabledMuscles.remove(name) } else { disabledMuscles.insert(name) }
+        guard let characterId else { return }
+        setEntityMuscleEnabled(entityId: characterId, name: name, enabled: enabled)
+    }
+
+    /// Manual activation of one muscle (0 = back to its pose driver).
+    public func setMuscleActivation(name: String, value: Float) {
+        muscleActivations[name] = value
+        guard let characterId else { return }
+        setEntityMuscleActivation(entityId: characterId, name: name, activation: value)
+    }
+
     public func clipNames() -> [String] {
         character.clips.map(\.name)
     }
@@ -211,6 +235,13 @@ public final class CoolMirrorGame {
         guard let characterId, skinningPath != .vertexShader else { return }
         setEntityMuscleSimulation(entityId: characterId, enabled: muscleSimulation)
         setEntityMuscleActivationOverride(entityId: characterId, activation: muscleFlex > 0.01 ? muscleFlex : nil)
+        for name in disabledMuscles {
+            setEntityMuscleEnabled(entityId: characterId, name: name, enabled: false)
+        }
+        for (name, value) in muscleActivations {
+            setEntityMuscleActivation(entityId: characterId, name: name, activation: value)
+        }
+        setMuscleDebugOverlay(enabled: muscleCagesVisible && muscleSimulation)
     }
 
     private func applyClip() {
