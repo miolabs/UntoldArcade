@@ -53,6 +53,10 @@ public final class CoolBowlingGame: @unchecked Sendable {
     private var ballRestSince: TimeInterval?
     /// A ball at rest this long anywhere but the return is dead.
     private let deadBallRest: TimeInterval = 1.5
+    /// The ball has been over the lane past the foul line since it was last
+    /// delivered (game thread). One that never got there — fumbled beside
+    /// the rack, set down on the approach — is no ball of the frame.
+    private var ballDelivered = false
 
     // Grab state (game thread only).
     private var grabbingSide: CoolBowlingHandSide?
@@ -143,17 +147,17 @@ public final class CoolBowlingGame: @unchecked Sendable {
 
     /// Tears the lane down and returns to placement. Game thread.
     public func requestLaneMove() {
-        let shouldReset = lock.withLock { () -> Bool in
-            guard phase == .playing else { return false }
+        let generation = lock.withLock { () -> UInt64? in
+            guard phase == .playing else { return nil }
             phase = .placingLane
             placementGeneration &+= 1
             pinsDown = 0
             cycle.reset()
             strikeCelebrated = false
             autoRollDeadline = nil
-            return true
+            return placementGeneration
         }
-        guard shouldReset else { return }
+        guard let generation else { return }
         cancelGrab()
         lock.withLock {
             placementPinchGraceUntil = ProcessInfo.processInfo.systemUptime + 1.0
@@ -161,6 +165,9 @@ public final class CoolBowlingGame: @unchecked Sendable {
         }
         Task { @MainActor in
             withWorldAccessGate {
+                // A shutdown or a later move since this was queued bumped the
+                // generation: nothing to rebuild.
+                guard self.lock.withLock({ self.placementGeneration == generation }) else { return }
                 self.scene.clear()
                 self.simulationStore.value?.setAlleyKeepOut(nil)
                 self.scene.createBodyProxies()
@@ -186,6 +193,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
         scene.spawnBall(at: layout.returnStart, velocity: layout.returnVelocity)
         lock.withLock { cycle.reset() }
         ballRestSince = nil
+        ballDelivered = false
         pushWorldPlanes()
         coolBowlingLog.log("lane placed at x=\(grounded.x, format: .fixed(precision: 2)) z=\(grounded.z, format: .fixed(precision: 2))")
         if ProcessInfo.processInfo.arguments.contains("-autoRoll") {
@@ -208,13 +216,20 @@ public final class CoolBowlingGame: @unchecked Sendable {
         guard let layout = scene.layout else { return }
         cancelGrab()
         ballRestSince = nil
-        let start = layout.returnStart
-        let velocity = layout.returnVelocity
-        scene.moveBall(to: start)
-        if simulationStore.value?.resetBody(entity: scene.ballEntity, position: start, velocity: velocity) != true {
-            // No body (the ball was held): give it one.
-            scene.attachBallBody(velocity: velocity, at: start)
-        }
+        ballDelivered = false
+        placeBall(at: layout.returnStart, velocity: layout.returnVelocity)
+    }
+
+    /// Puts the ball in play at `position` moving at `velocity`, whether it
+    /// was rolling, held, or grabbed this very frame. A grab removes the
+    /// ball's components at once, but the backend's body outlives them until
+    /// the coordinator's next substep diff, so the backend cannot tell "held"
+    /// from "in play": the components go back whenever they are missing (the
+    /// diff then adds a body with this velocity), and whatever body still
+    /// exists is teleported.
+    private func placeBall(at position: SIMD3<Float>, velocity: SIMD3<Float>) {
+        scene.attachBallBody(velocity: velocity, at: position)
+        _ = simulationStore.value?.resetBody(entity: scene.ballEntity, position: position, velocity: velocity)
     }
 
     /// A fresh rack and a new ball, a new frame (control-window button).
@@ -294,7 +309,10 @@ public final class CoolBowlingGame: @unchecked Sendable {
         #endif
         contactSubscription?.cancel()
         contactSubscription = nil
-        scene.clear()
+        // The lane builds on the main actor under the engine's world gate,
+        // and the render loop that held it during frames has returned: take
+        // it so a build still in flight finishes before it is torn down.
+        withWorldAccessGate { scene.clear() }
     }
 
     // MARK: - Score
@@ -363,7 +381,9 @@ public final class CoolBowlingGame: @unchecked Sendable {
     }
 
     /// Counts pins that lean past ~45° or left their spot, a few times a
-    /// second; a full rack down is a strike.
+    /// second; a full rack down while a ball is being judged is a strike (or
+    /// a spare). A pin that topples later — after the sweep took its
+    /// deadwood prop away — rings nothing.
     private func countPins(deltaTime: Float) {
         pinCountAccumulator += deltaTime
         guard pinCountAccumulator > 0.25, scene.layout != nil else { return }
@@ -375,7 +395,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
                 coolBowlingLog.log("pins down: \(down)/\(total)")
             }
             pinsDown = down
-            guard down == total, total > 0, !strikeCelebrated else { return nil }
+            guard down == total, total > 0, !strikeCelebrated, cycle.isBallEnded else { return nil }
             strikeCelebrated = true
             return cycle.isFirstBall
         }
@@ -423,7 +443,17 @@ public final class CoolBowlingGame: @unchecked Sendable {
         guard let layout = scene.layout else { return }
         let ending = lock.withLock { cycle.isBallEnded }
         if !ending {
+            if !holdingBall, let position = scene.ballPosition(),
+               layout.isOverAlley(position), layout.localPoint(position).z > 0 {
+                ballDelivered = true
+            }
             guard let reason = ballEndReason(now: now, layout: layout) else { return }
+            guard ballDelivered else {
+                // Never rolled: back to the rack without spending a ball.
+                coolBowlingLog.log("ball \(reason.rawValue) behind the foul line — back to the rack")
+                deliverBall()
+                return
+            }
             lock.withLock { cycle.endBall(at: now) }
             ballRestSince = nil
             if reason == .pit {
@@ -504,17 +534,14 @@ public final class CoolBowlingGame: @unchecked Sendable {
             autoRollDeadline = nil
             return true
         }
-        guard due, let layout = scene.layout, let simulation = simulationStore.value else { return }
+        guard due, let layout = scene.layout else { return }
         lock.withLock { autoRollCount += 1 }
         let start = layout.foul + layout.forward * 0.3
             + SIMD3<Float>(0, layout.surfaceY - layout.foul.y + CoolBowlingScene.ballRadius + 0.01, 0)
         // Slightly off-centre, like a real roll, so the rack scatters.
         let velocity = layout.forward * 7.0 + layout.right * 0.15
         cancelGrab()
-        scene.moveBall(to: start)
-        if !simulation.resetBody(entity: scene.ballEntity, position: start, velocity: velocity) {
-            scene.attachBallBody(velocity: velocity, at: start)
-        }
+        placeBall(at: start, velocity: velocity)
         coolBowlingLog.log("auto roll from the foul line")
     }
 
@@ -652,7 +679,7 @@ public final class CoolBowlingGame: @unchecked Sendable {
                 }
             }
         }
-        scene.attachBallBody(velocity: velocity, at: releasePoint)
+        placeBall(at: releasePoint, velocity: velocity)
         print(String(format: "CoolBowling: rolled at %.1f m/s", simd_length(velocity)))
     }
     #endif

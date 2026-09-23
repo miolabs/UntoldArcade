@@ -46,8 +46,9 @@ place the lane, and roll.
 Launch arguments for unattended simulator runs: `-autoOpenSpace` (opens the
 immersive space), `-autoPlaceLane` (confirms placement after a short beat) and
 `-autoRoll` (bowls four balls from the foul line, one per frame step) and
-`-hideWindow` (closes the control window so a screenshot sees the alley).
+`-hideWindow` (with `-autoOpenSpace`: closes the control window once the
+space has opened, so a screenshot sees the alley).
 
 ```bash
-swift test   # alley geometry, pit and return, frame rule, keep-out filter, a rolled ball knocking pins off the lane into the pit on Jolt
+swift test   # alley geometry, pit and return, frame rule, keep-out filter, a rolled ball knocking pins over and ending in the pit on Jolt
 ```

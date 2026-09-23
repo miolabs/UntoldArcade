@@ -72,6 +72,26 @@ final class BowlingXRHolder: @unchecked Sendable {
     func takeMoveLaneRequest() -> Bool { lock.withLock { defer { moveLanePending = false }; return moveLanePending } }
     func takeNewBallRequest() -> Bool { lock.withLock { defer { newBallPending = false }; return newBallPending } }
     func takeResetPinsRequest() -> Bool { lock.withLock { defer { resetPinsPending = false }; return resetPinsPending } }
+
+    /// Releases a session the system closed (the Digital Crown). Once
+    /// `runLoop()` has returned no frame runs again, and the engine's
+    /// deferred teardown (`shutdownUntoldEngineXR`, whose completion fires
+    /// from a frame's finalize pass) would never complete — the holder would
+    /// keep the old session and refuse to reopen. So it is released here and
+    /// now, the engine's own stale-session pattern: the entities are marked
+    /// and finalized by the next session's first frames. Main actor.
+    func releaseSession() {
+        if let xr {
+            setRendering(.extensions(.removeAll))
+            xr.clearSpatialInput()
+            xr.stop()
+        }
+        destroyAllEntities()
+        xr = nil
+        game = nil
+        renderThread = nil
+        spaceOpen = false
+    }
 }
 
 struct BowlingLayerConfiguration: CompositorLayerConfiguration {
@@ -168,9 +188,10 @@ struct CoolBowlingVisionOSXRApp: App {
 
         ImmersiveSpace(id: "Lane") {
             CompositorLayer(configuration: BowlingLayerConfiguration()) { layerRenderer in
-                guard BowlingXRHolder.shared.xr == nil else {
-                    print("CoolBowling: immersive space reopened before teardown finished")
-                    return
+                if BowlingXRHolder.shared.xr != nil {
+                    // Reopened before the last session's release ran.
+                    print("CoolBowling: releasing the previous session first")
+                    BowlingXRHolder.shared.releaseSession()
                 }
                 let game = BowlingXRGame()
                 // The physics backend must install before the renderer exists.
@@ -193,13 +214,8 @@ struct CoolBowlingVisionOSXRApp: App {
                     xr.runLoop()
                     game.shutdown()
                     Task { @MainActor in
-                        BowlingXRHolder.shared.spaceOpen = false
-                        shutdownUntoldEngineXR(xr) {
-                            BowlingXRHolder.shared.xr = nil
-                            BowlingXRHolder.shared.game = nil
-                            BowlingXRHolder.shared.renderThread = nil
-                            print("CoolBowling: immersive space torn down, ready to reopen")
-                        }
+                        BowlingXRHolder.shared.releaseSession()
+                        print("CoolBowling: immersive space torn down, ready to reopen")
                     }
                 }
                 thread.name = "XR Render Thread"
