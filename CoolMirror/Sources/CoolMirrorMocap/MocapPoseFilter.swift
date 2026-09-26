@@ -32,6 +32,17 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var maxJointStep: Float = 0.25
     public var maxArmStep: Float = 0.4
     public var glitchHold: TimeInterval = 0.4
+    /// Body-yaw guard: the torso heading may turn at most `maxYawRate`
+    /// (rad/s); a larger jump is held as a tracker error (the skeleton is
+    /// turned back about the hips) until the tracked heading returns
+    /// within `yawReturnTolerance` or the jump has lasted `yawHold`
+    /// seconds, when it is taken as real and followed at the rate limit.
+    public var steadyYaw = true
+    public var maxYawRate: Float = 7.0 // ~400°/s
+    public var yawJumpThreshold: Float = 0.4 // ~23°
+    public var yawReturnTolerance: Float = 0.17 // ~10°
+    public var yawHold: TimeInterval = 3.0
+
     /// Foot planting: a foot slower than `plantSpeed` (m/s) for
     /// `plantDelay` seconds is pinned near where it is (the pin creeps
     /// after slow drift with time constant `plantCreep`), the knee
@@ -141,6 +152,10 @@ public struct MocapPoseFilter: Sendable {
         plantedFeet.removeAll()
         rejectedFrames = 0
         swappedFrames = 0
+        trustedYaw = nil
+        yawHoldStart = nil
+        yawLastTime = nil
+        isYawHeld = false
     }
 
     /// A side of the body ARKit can relabel on its own: the arms (with the
@@ -235,6 +250,87 @@ public struct MocapPoseFilter: Sendable {
         rejectedFrames = 0
         lastAccepted = candidate
         return candidate
+    }
+
+    // MARK: - Body-yaw guard
+
+    private var trustedYaw: Float?
+    private var yawHoldStart: TimeInterval?
+    private var yawLastTime: TimeInterval?
+    /// Whether the heading is currently held against a tracker jump.
+    public private(set) var isYawHeld = false
+
+    /// Heading of the torso in world space (hip and shoulder axes), or nil
+    /// without both hips.
+    static func bodyYaw(of frame: MocapFrame) -> Float? {
+        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        func axis(_ left: MocapJoint, _ right: MocapJoint) -> simd_float3? {
+            guard let l = frame.positions[left], let r = frame.positions[right] else { return nil }
+            var d = anchor.act(r - l)
+            d.y = 0
+            return simd_length_squared(d) > 1e-6 ? simd_normalize(d) : nil
+        }
+        guard let hips = axis(.leftUpLeg, .rightUpLeg) else { return nil }
+        let combined = axis(.leftShoulder, .rightShoulder).map { simd_normalize(hips + $0) } ?? hips
+        return atan2(combined.z, combined.x)
+    }
+
+    private static func wrap(_ angle: Float) -> Float {
+        var a = angle.truncatingRemainder(dividingBy: 2 * .pi)
+        if a > .pi { a -= 2 * .pi }
+        if a < -.pi { a += 2 * .pi }
+        return a
+    }
+
+    /// Keeps the torso heading within what a body can do and turns the
+    /// whole skeleton back about the hips by the rejected part.
+    private mutating func steadyYaw(_ frame: inout MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) {
+        guard let raw = Self.bodyYaw(of: frame) else { return }
+        let dt = Float(min(max(time - (yawLastTime ?? time), 0), 0.25))
+        yawLastTime = time
+        guard let trusted = trustedYaw else {
+            trustedYaw = raw
+            return
+        }
+        let delta = Self.wrap(raw - trusted)
+        let maxStep = options.maxYawRate * max(dt, 1 / 120)
+        var next = trusted
+        if abs(delta) <= maxStep {
+            next = raw
+            yawHoldStart = nil
+        } else if abs(delta) < options.yawJumpThreshold {
+            // Fast but plausible: follow at the rate limit.
+            next = trusted + (delta > 0 ? maxStep : -maxStep)
+            yawHoldStart = nil
+        } else {
+            // A jump no body makes: hold the heading until the tracker
+            // comes back, or long enough that it must be real.
+            if yawHoldStart == nil {
+                yawHoldStart = time
+            }
+            if let start = yawHoldStart, time - start > options.yawHold {
+                next = trusted + (delta > 0 ? maxStep : -maxStep)
+            }
+        }
+        if abs(Self.wrap(raw - next)) <= options.yawReturnTolerance {
+            next = raw
+            yawHoldStart = nil
+        }
+        trustedYaw = Self.wrap(next)
+        let correction = Self.wrap(next - raw)
+        isYawHeld = abs(correction) > 1e-3
+        guard isYawHeld, let hips = frame.positions[.hips] else { return }
+
+        // Turn every joint about the vertical axis through the hips.
+        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        let hipsWorld = anchor.act(hips) + frame.rootPosition
+        // A positive turn about y decreases the measured yaw, hence the sign.
+        let turn = simd_quatf(angle: -correction, axis: simd_float3(0, 1, 0))
+        for (joint, position) in frame.positions {
+            let world = anchor.act(position) + frame.rootPosition
+            let turned = turn.act(world - hipsWorld) + hipsWorld
+            frame.positions[joint] = anchor.inverse.act(turned - frame.rootPosition)
+        }
     }
 
     // MARK: - Foot planting
@@ -358,7 +454,10 @@ public struct MocapPoseFilter: Sendable {
         guard options.isEnabled, frame.isTracked else { return frame }
         let dt = Float(min(max(time - (lastTime ?? time), 0), 0.25))
         lastTime = time
-        let frame = guardGlitches(frame, at: time, options: options)
+        var frame = guardGlitches(frame, at: time, options: options)
+        if options.steadyYaw {
+            steadyYaw(&frame, at: time, options: options)
+        }
 
         var output = frame
         for (joint, rotation) in frame.rotations {

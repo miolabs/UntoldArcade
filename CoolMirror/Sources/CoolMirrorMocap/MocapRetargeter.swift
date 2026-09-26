@@ -170,6 +170,12 @@ public final class MocapRetargeter: @unchecked Sendable {
         return lock.withLock { filter.filter(frame, at: time, options: options) }
     }
 
+    /// Whether the smoothing filter is holding the torso heading against
+    /// a tracker jump (see `MocapSmoothingOptions.steadyYaw`).
+    public var isYawHeld: Bool {
+        lock.withLock { filter.isYawHeld }
+    }
+
     public func resetSmoothing() {
         lock.withLock { filter.reset() }
     }

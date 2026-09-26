@@ -369,6 +369,51 @@ final class MocapTests: XCTestCase {
         XCTAssertLessThan(simd_length(settled.positions[.leftFoot]! - (foot + simd_float3(0.2, 0, 0))), 0.03, "follows the step after the blend (minus the residual smoothing)")
     }
 
+    /// A 40° torso jump in one frame is held (the skeleton turned back
+    /// about the hips) and released when the tracker comes back; a real
+    /// turn at 10° per frame is followed.
+    func testBodyYawJumpsAreHeldAndSlowTurnsFollow() throws {
+        var filter = MocapPoseFilter()
+        var options = MocapSmoothingOptions()
+        options.bodyCutoff = 100
+        options.legCutoff = 100
+        options.rootCutoff = 100
+        let base: [MocapJoint: simd_float3] = [
+            .hips: simd_float3(0, 0, 0), .leftUpLeg: simd_float3(0.1, -0.05, 0), .rightUpLeg: simd_float3(-0.1, -0.05, 0),
+            .leftShoulder: simd_float3(0.18, 0.45, 0), .rightShoulder: simd_float3(-0.18, 0.45, 0),
+            // Hand close to the body (as when it hangs): a 40° body jump
+            // moves it under the arm jump limit, so only the yaw guard
+            // can catch the jump.
+            .rightHand: simd_float3(-0.3, 0.45, 0),
+        ]
+        func turned(_ yaw: Float, sequence: UInt32) -> MocapFrame {
+            var f = frame(sequence: sequence, rotations: [:])
+            let q = simd_quatf(angle: yaw, axis: simd_float3(0, 1, 0))
+            f.positions = base.mapValues { q.act($0) }
+            return f
+        }
+        for i in 0 ..< 10 {
+            _ = filter.filter(turned(0, sequence: UInt32(i + 1)), at: Double(i) / 30, options: options)
+        }
+        // Tracker jumps 40° in one frame: held, hand stays where it was.
+        let jumped = filter.filter(turned(0.7, sequence: 11), at: 10.0 / 30, options: options)
+        XCTAssertTrue(filter.isYawHeld)
+        let hand = try XCTUnwrap(jumped.positions[.rightHand])
+        XCTAssertLessThan(simd_length(hand - base[.rightHand]!), 0.02)
+        // Tracker comes back: released.
+        _ = filter.filter(turned(0.05, sequence: 12), at: 11.0 / 30, options: options)
+        XCTAssertFalse(filter.isYawHeld)
+        // A real turn, 10° per frame, is followed.
+        var last: MocapFrame?
+        for i in 0 ..< 9 {
+            last = filter.filter(turned(Float(i + 1) * 0.1745, sequence: UInt32(13 + i)), at: (12.0 + Double(i)) / 30, options: options)
+        }
+        XCTAssertFalse(filter.isYawHeld)
+        let turnedHand = try XCTUnwrap(last?.positions[.rightHand])
+        let expected = simd_quatf(angle: 9 * 0.1745, axis: simd_float3(0, 1, 0)).act(base[.rightHand]!)
+        XCTAssertLessThan(simd_length(turnedHand - expected), 0.02)
+    }
+
     func testSwingAndTwistDecomposition() {
         let axis = simd_normalize(simd_float3(1, 2, 0))
         let twist = simd_quatf(angle: 0.7, axis: axis)

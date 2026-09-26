@@ -205,7 +205,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         let seen = (receiver.latestFrame.map { "\($0.trackedJoints.count)/\($0.rotations.count) joints seen" } ?? "")
             + ", pictures \(counts.pictures) of \(counts.chunks) chunks"
         if driving {
-            return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport) (stand still to read the tracker noise)"
+            let held = (lock.withLock { retargeter?.isYawHeld } ?? false) ? " · heading held: the tracker turned the body faster than a body can turn" : ""
+            return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport)\(held) (stand still to read the tracker noise)"
         }
         return "Body tracked (\(receiver.framesPerSecond) Hz), waiting for the next frame…"
     }
