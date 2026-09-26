@@ -30,7 +30,8 @@ enum CoolMirrorMocapMapping {
             .leftUpLeg: p.thigh,
             .leftLeg: p.calf,
             .leftFoot: p.foot,
-            .leftToes: p.toe,
+            // No toes: ARKit infers them from the ankle (they are never
+            // tracked), and their guessed twist stretches the feet.
         ]
         for (joint, name) in joints where joint.mirrored != joint {
             joints[joint.mirrored] = p.mirror(name)
@@ -228,21 +229,37 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     private func showDebugLines(result: MocapRetargetResult, characterId: EntityID, origin: simd_float3) {
         var segments: [DebugLineSegment] = []
-        let captured = simd_float4(1.0, 0.6, 0.1, 1)
-        let lost = simd_float4(1.0, 0.15, 0.15, 1)
-        for (joint, position) in result.capturedJointPositions.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
-            guard let parent = joint.parent, let parentPosition = result.capturedJointPositions[parent] else { continue }
-            let color = result.capturedTrackedJoints.isEmpty || result.capturedTrackedJoints.contains(joint) ? captured : lost
-            segments.append(DebugLineSegment(from: origin + parentPosition, to: origin + position, color: color))
-        }
         let rig = simd_float4(0.2, 0.9, 1.0, 1)
         let joints = entitySkeletonJointPoses(entityId: characterId)
         for joint in joints {
             guard let parentIndex = joint.parentIndex, parentIndex < joints.count else { continue }
             segments.append(DebugLineSegment(from: joints[parentIndex].worldPosition, to: joint.worldPosition, color: rig))
         }
+
+        // ARKit's anchor sits at the hips, not on the floor, so the captured
+        // figure is placed with its hips on the rig's pelvis (both carry the
+        // same root translation); limbs then show the retargeting error.
+        var anchor = origin
+        if let capturedHips = result.capturedJointPositions[.hips],
+           let pelvis = joints.first(where: { Self.jointPath($0.path, matches: result.rootJoint) })
+        {
+            anchor = pelvis.worldPosition - capturedHips
+        }
+        let captured = simd_float4(1.0, 0.6, 0.1, 1)
+        let lost = simd_float4(1.0, 0.15, 0.15, 1)
+        for (joint, position) in result.capturedJointPositions.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            guard let parent = joint.parent, let parentPosition = result.capturedJointPositions[parent] else { continue }
+            let color = result.capturedTrackedJoints.isEmpty || result.capturedTrackedJoints.contains(joint) ? captured : lost
+            segments.append(DebugLineSegment(from: anchor + parentPosition, to: anchor + position, color: color))
+        }
         setDebugLines(segments, named: Self.debugLinesName)
         lock.withLock { debugLinesShown = true }
+    }
+
+    /// Same resolution as the engine's joint lookup: exact path, `/name`
+    /// suffix or last path component.
+    private static func jointPath(_ path: String, matches name: String) -> Bool {
+        path == name || path.hasSuffix("/" + name) || path.split(separator: "/").last.map(String.init) == name
     }
 
     private func hideDebugLines() {
