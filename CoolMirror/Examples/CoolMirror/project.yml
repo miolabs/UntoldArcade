@@ -12,6 +12,9 @@ packages:
     branch: feature/mirror_mocap
   CoolCloth:
     path: ../../../CoolCloth
+  UntoldJoltPhysics:
+    url: https://github.com/miolabs/UntoldJoltPhysics.git
+    branch: feature/soft_body_cloth
 
 settings:
   base:
@@ -42,6 +45,8 @@ targets:
         product: CoolMirror
       - package: CoolCloth
         product: CoolCloth
+      - package: UntoldJoltPhysics
+        product: UntoldJoltPhysics
       - package: UntoldEngine
         product: UntoldEngine
       - package: UntoldEngine

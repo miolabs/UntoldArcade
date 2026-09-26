@@ -11,6 +11,7 @@
 import CoolMirrorMocap
 import simd
 import UntoldEngine
+import UntoldJoltPhysics
 
 /// Characters bundled with the demo, each with its own rig and clips.
 public enum CoolMirrorCharacter: String, CaseIterable, Sendable {
@@ -80,6 +81,8 @@ public final class CoolMirrorGame {
     private var pausedByUser = false
     private let mocap = CoolMirrorMocapController()
     private let cape = CoolMirrorCape()
+    private let joltCape = CoolMirrorJoltCape()
+    private var capeMode: CoolMirrorCapeMode = .jolt
     private var muscleFlex: Float = 0
     private var mlDeformerWeight: Float = 1
     private var muscleCagesVisible = false
@@ -103,6 +106,7 @@ public final class CoolMirrorGame {
     public nonisolated func update(deltaTime: Float) {
         mocap.update()
         cape.update(deltaTime: deltaTime)
+        joltCape.update(deltaTime: deltaTime)
     }
 
     /// Installs the cloth plugin the cape uses; call once before the XR
@@ -111,10 +115,26 @@ public final class CoolMirrorGame {
         CoolMirrorCape.registerPlugin()
     }
 
-    /// Batman's cape as simulated cloth hanging from his shoulders (no
-    /// effect on the other characters).
+    /// The Jolt backend the cape cloth lives in (registered by the app
+    /// before the renderer is created).
+    public func setJoltBackend(_ backend: JoltPhysicsBackend?) {
+        joltCape.setBackend(backend)
+    }
+
+    /// How Batman's cape is done (no effect on the other characters): the
+    /// model's rigid cape, the GPU sheet, or the cape mesh as Jolt cloth.
+    public func setCapeMode(_ mode: CoolMirrorCapeMode) {
+        capeMode = mode
+        cape.setEnabled(mode == .sheet)
+        joltCape.setEnabled(mode == .jolt)
+        if mode == .jolt, skinningPath == .vertexShader {
+            // The cloth writes into the deformation pass's output.
+            setSkinningPath(.computeLBS)
+        }
+    }
+
     public func setCapeEnabled(_ enabled: Bool) {
-        cape.setEnabled(enabled)
+        setCapeMode(enabled ? .jolt : .rigid)
     }
 
     public func hasCape() -> Bool {
@@ -134,6 +154,7 @@ public final class CoolMirrorGame {
         mocap.setCharacter(nil, mapping: nil)
         mocap.setEnabled(false)
         cape.setCharacter(nil, character: nil)
+        joltCape.setCharacter(nil, character: nil)
     }
 
     public func setCharacter(_ newCharacter: CoolMirrorCharacter) {
@@ -168,6 +189,7 @@ public final class CoolMirrorGame {
             self.applySkinningPath()
             self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter), origin: self.characterPosition)
             self.cape.setCharacter(characterId, character: newCharacter)
+            self.joltCape.setCharacter(characterId, character: newCharacter)
             self.applyMocapPause()
             self.onCharacterReady?()
         }
@@ -390,4 +412,14 @@ public final class CoolMirrorGame {
         guard let characterId, let currentClip else { return }
         changeAnimation(entityId: characterId, name: currentClip)
     }
+}
+
+/// How Batman's cape is done.
+public enum CoolMirrorCapeMode: String, CaseIterable, Sendable {
+    /// The model's own cape, skinned like the rest.
+    case rigid
+    /// The CoolCloth GPU sheet hanging from the shoulders.
+    case sheet
+    /// The cape mesh itself as Jolt cloth.
+    case jolt
 }

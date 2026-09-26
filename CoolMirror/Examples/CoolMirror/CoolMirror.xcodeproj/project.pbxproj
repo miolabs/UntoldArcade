@@ -8,16 +8,17 @@
 
 /* Begin PBXBuildFile section */
 		149C80F39DBDBFDC1590A680 /* Animations in Resources */ = {isa = PBXBuildFile; fileRef = 8B96D88176E9C169CD0FF9A5 /* Animations */; };
-		17B1320EA69FB1FCB2AFFD29 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = CDE0DFF20D7B4D2821567090 /* UntoldEngine */; };
+		17B1320EA69FB1FCB2AFFD29 /* UntoldJoltPhysics in Frameworks */ = {isa = PBXBuildFile; productRef = C7168392DDE69DF2361BB88A /* UntoldJoltPhysics */; };
 		2567033DC32C3B3AB6042452 /* CoolMirrorVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17E2CA908C23FF1D375561E2 /* CoolMirrorVisionOSXRApp.swift */; };
+		4ADAEA7B422D3747DE1387A4 /* UntoldEngineShaderSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 5B80A9C24374E5B5F5FD1691 /* UntoldEngineShaderSupport */; };
 		4DE9A936B8DA81A8A03BF71E /* BodyTrackingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC0B3962D7FB9668954CF795 /* BodyTrackingView.swift */; };
 		520F5BEDCAB1B0F7B1DDD830 /* CoolCloth in Frameworks */ = {isa = PBXBuildFile; productRef = C06BC1F09B55FE748AC2D8E6 /* CoolCloth */; };
 		54DE0AE726556B834C4C8361 /* CaptureSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8154E6C4C318B6B7FE3CA66 /* CaptureSession.swift */; };
 		5615C8D6AAF7A3B31CA34144 /* Models in Resources */ = {isa = PBXBuildFile; fileRef = 71BD9E76868F9DFF037BB206 /* Models */; };
-		8ACBBEF4A2B652476433B61B /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = C428B307CE745CEF80EF6B99 /* UntoldEngineXR */; };
-		8F57CD9F19F4EFD706955962 /* UntoldEngineShaderSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 5B80A9C24374E5B5F5FD1691 /* UntoldEngineShaderSupport */; };
+		8ACBBEF4A2B652476433B61B /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = CDE0DFF20D7B4D2821567090 /* UntoldEngine */; };
+		8F57CD9F19F4EFD706955962 /* UntoldEngineAR in Frameworks */ = {isa = PBXBuildFile; productRef = 0C7F387527CE8C4090842FA3 /* UntoldEngineAR */; };
 		D55645A1824BAEF10E90F1D7 /* CoolMirrorMocap in Frameworks */ = {isa = PBXBuildFile; productRef = BB853237F59FE3DB122736F6 /* CoolMirrorMocap */; };
-		D8F4358BFF1E79DFAD247F5F /* UntoldEngineAR in Frameworks */ = {isa = PBXBuildFile; productRef = 0C7F387527CE8C4090842FA3 /* UntoldEngineAR */; };
+		D8F4358BFF1E79DFAD247F5F /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = C428B307CE745CEF80EF6B99 /* UntoldEngineXR */; };
 		F5D7C0367157571EB51E4D72 /* CoolMirror in Frameworks */ = {isa = PBXBuildFile; productRef = DBB255704C65CDE15EB9548A /* CoolMirror */; };
 		F9CDA3310D3FA0EC6EE8BF69 /* CoolMirrorCaptureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489D56CB5721A170A952E64B /* CoolMirrorCaptureApp.swift */; };
 /* End PBXBuildFile section */
@@ -52,10 +53,11 @@
 			files = (
 				F5D7C0367157571EB51E4D72 /* CoolMirror in Frameworks */,
 				520F5BEDCAB1B0F7B1DDD830 /* CoolCloth in Frameworks */,
-				17B1320EA69FB1FCB2AFFD29 /* UntoldEngine in Frameworks */,
-				8ACBBEF4A2B652476433B61B /* UntoldEngineXR in Frameworks */,
-				D8F4358BFF1E79DFAD247F5F /* UntoldEngineAR in Frameworks */,
-				8F57CD9F19F4EFD706955962 /* UntoldEngineShaderSupport in Frameworks */,
+				17B1320EA69FB1FCB2AFFD29 /* UntoldJoltPhysics in Frameworks */,
+				8ACBBEF4A2B652476433B61B /* UntoldEngine in Frameworks */,
+				D8F4358BFF1E79DFAD247F5F /* UntoldEngineXR in Frameworks */,
+				8F57CD9F19F4EFD706955962 /* UntoldEngineAR in Frameworks */,
+				4ADAEA7B422D3747DE1387A4 /* UntoldEngineShaderSupport in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -150,6 +152,7 @@
 			packageProductDependencies = (
 				DBB255704C65CDE15EB9548A /* CoolMirror */,
 				C06BC1F09B55FE748AC2D8E6 /* CoolCloth */,
+				C7168392DDE69DF2361BB88A /* UntoldJoltPhysics */,
 				CDE0DFF20D7B4D2821567090 /* UntoldEngine */,
 				C428B307CE745CEF80EF6B99 /* UntoldEngineXR */,
 				0C7F387527CE8C4090842FA3 /* UntoldEngineAR */,
@@ -189,6 +192,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				404CCDF6D0EF1CC51E5095C9 /* XCRemoteSwiftPackageReference "UntoldEngine" */,
+				3A0C390AAC451D7BD747413A /* XCRemoteSwiftPackageReference "UntoldJoltPhysics" */,
 				625CAC09E80161E10599B41F /* XCLocalSwiftPackageReference "../../../CoolCloth" */,
 				3BAFCF81573AC04A2FEF35D6 /* XCLocalSwiftPackageReference "../.." */,
 			);
@@ -485,6 +489,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		3A0C390AAC451D7BD747413A /* XCRemoteSwiftPackageReference "UntoldJoltPhysics" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/miolabs/UntoldJoltPhysics.git";
+			requirement = {
+				branch = feature/soft_body_cloth;
+				kind = branch;
+			};
+		};
 		404CCDF6D0EF1CC51E5095C9 /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/miolabs/UntoldEngine.git";
@@ -518,6 +530,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 404CCDF6D0EF1CC51E5095C9 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngineXR;
+		};
+		C7168392DDE69DF2361BB88A /* UntoldJoltPhysics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3A0C390AAC451D7BD747413A /* XCRemoteSwiftPackageReference "UntoldJoltPhysics" */;
+			productName = UntoldJoltPhysics;
 		};
 		CDE0DFF20D7B4D2821567090 /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;

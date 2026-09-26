@@ -14,6 +14,7 @@ import CoolMirrorMocap
 import SwiftUI
 import UntoldEngine
 import UntoldEngineXR
+import UntoldJoltPhysics
 
 // Retains the XR system + game so they aren't deallocated.
 final class XRHolder {
@@ -81,8 +82,8 @@ final class MirrorControls {
     }
     var showMuscleList = false
     var hasCape = false
-    var capeEnabled = true {
-        didSet { XRHolder.shared.game?.setCapeEnabled(capeEnabled) }
+    var capeMode: CoolMirrorCapeMode = .jolt {
+        didSet { XRHolder.shared.game?.setCapeMode(capeMode) }
     }
 
     // iPhone motion capture
@@ -183,7 +184,7 @@ final class MirrorControls {
         muscleNames = game.muscleNames()
         hasMLDeformer = game.hasMLDeformer()
         hasCape = game.hasCape()
-        game.setCapeEnabled(capeEnabled)
+        game.setCapeMode(capeMode)
         clips = game.clipNames()
         clip = clips.first ?? ""
         paused = false
@@ -275,8 +276,12 @@ struct CoolMirrorVisionOSXRApp: App {
                     if controls.hasCape {
                         GridRow {
                             Text("Cape")
-                            Toggle(controls.capeEnabled ? "Cloth simulation" : "Rigid (model)", isOn: $controls.capeEnabled)
-                                .toggleStyle(.button)
+                            Picker("Cape", selection: $controls.capeMode) {
+                                Text("Rigid").tag(CoolMirrorCapeMode.rigid)
+                                Text("Sheet").tag(CoolMirrorCapeMode.sheet)
+                                Text("Jolt cloth").tag(CoolMirrorCapeMode.jolt)
+                            }
+                            .pickerStyle(.segmented)
                         }
                     }
                     GridRow {
@@ -439,6 +444,7 @@ struct CoolMirrorVisionOSXRApp: App {
                 }
 
                 CoolMirrorGame.registerRenderPlugins()
+                let joltBackend = registerJoltPhysics()
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 XRHolder.shared.xr = xr
                 xr.setImmersionMode(xrImmersionMode: .mixed)
@@ -447,6 +453,7 @@ struct CoolMirrorVisionOSXRApp: App {
                 // here (matches the engine's XR template). The blocking render loop runs
                 // on its own plain Thread — NOT the main actor.
                 let game = CoolMirrorGame()
+                game.setJoltBackend(joltBackend)
                 XRHolder.shared.game = game
                 game.onCharacterReady = { controls.characterReady() }
                 game.start()

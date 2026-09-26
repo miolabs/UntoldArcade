@@ -1,13 +1,31 @@
 {
-  "originHash" : "953f5785e124b47eca2422e03080ecd5d87053347e1b59aecb0fe685e05154e8",
+  "originHash" : "c21642e0afb9c3968a6f24e923a8aa57fac8a573b894a6bd45720804b6c4291e",
   "pins" : [
+    {
+      "identity" : "joltphysics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/JoltPhysics.git",
+      "state" : {
+        "revision" : "31563d34c249147beadee0eb61994dc3b65b57bf",
+        "version" : "5.6.0-spm.1"
+      }
+    },
     {
       "identity" : "untoldengine",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/miolabs/UntoldEngine.git",
       "state" : {
         "branch" : "feature/mirror_mocap",
-        "revision" : "b37c4667bdce4644b5f5a9c1dc2fa62d7c2c3119"
+        "revision" : "5b3bcfdaa64b3c52e991ca9c4f09fcba871f3c64"
+      }
+    },
+    {
+      "identity" : "untoldjoltphysics",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/miolabs/UntoldJoltPhysics.git",
+      "state" : {
+        "branch" : "feature/soft_body_cloth",
+        "revision" : "d9c518904b1e52080cd6773263bdcf3a90247b48"
       }
     }
   ],
