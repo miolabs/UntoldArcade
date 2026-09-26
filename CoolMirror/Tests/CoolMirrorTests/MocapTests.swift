@@ -331,6 +331,7 @@ final class MocapTests: XCTestCase {
     func testStillFeetArePlantedAndStepsReleaseThem() {
         var filter = MocapPoseFilter()
         var options = MocapSmoothingOptions()
+        options.plantFeet = true
         options.bodyCutoff = 100 // no smoothing: isolate the planting
         options.legCutoff = 100
         options.rootCutoff = 100
@@ -352,16 +353,20 @@ final class MocapTests: XCTestCase {
         XCTAssertLessThan(simd_length(last - foot), 0.01, "pinned near the mean of the wobble")
         let pinned = last
         let held = filter.filter(leg(foot + simd_float3(0.02, 0.01, 0), sequence: 61), at: 61 / 60, options: options)
-        XCTAssertEqual(held.positions[.leftFoot], pinned, "still pinned")
+        XCTAssertLessThan(simd_length(held.positions[.leftFoot]! - pinned), 0.01, "still pinned (creeping slowly)")
         let heldKnee = held.positions[.leftLeg]!
         XCTAssertEqual(simd_length(heldKnee - hip), simd_length(knee - hip), accuracy: 1e-4, "thigh length kept")
         // (the residual smoothing at a 100 Hz cut-off moves the tracked foot by a millimetre or two)
         XCTAssertEqual(simd_length(pinned - heldKnee), simd_length(foot + simd_float3(0.02, 0.01, 0) - knee), accuracy: 0.005, "shin length kept")
         // A 20 cm step (a real move, under the glitch limit) releases the
-        // pin: the foot follows again.
+        // pin; the foot blends out toward the tracked one and reaches it
+        // once the blend is over.
         let stepped = filter.filter(leg(foot + simd_float3(0.2, 0, 0), sequence: 62), at: 62 / 60, options: options)
         XCTAssertFalse(filter.plantedFeet.contains(.leftFoot))
-        XCTAssertLessThan(simd_length(stepped.positions[.leftFoot]! - (foot + simd_float3(0.2, 0, 0))), 0.03, "follows the step (minus the residual smoothing)")
+        let releasedAt = simd_length(stepped.positions[.leftFoot]! - pinned)
+        XCTAssertLessThan(releasedAt, 0.05, "no jump at release")
+        let settled = filter.filter(leg(foot + simd_float3(0.2, 0, 0), sequence: 63), at: 62 / 60 + 0.3, options: options)
+        XCTAssertLessThan(simd_length(settled.positions[.leftFoot]! - (foot + simd_float3(0.2, 0, 0))), 0.03, "follows the step after the blend (minus the residual smoothing)")
     }
 
     func testSwingAndTwistDecomposition() {

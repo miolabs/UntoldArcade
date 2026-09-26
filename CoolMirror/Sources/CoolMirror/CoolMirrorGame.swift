@@ -191,7 +191,7 @@ public final class CoolMirrorGame {
     /// and where the character stands.
     public func setMocapOptions(
         mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
-        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true
+        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false
     ) {
         mocap.isGroundLockEnabled = groundLock
         var options = MocapRetargetOptions()
@@ -202,7 +202,7 @@ public final class CoolMirrorGame {
         options.smoothing.bodyCutoff = Self.smoothingCutoff(bodySmoothing)
         options.smoothing.legCutoff = Self.smoothingCutoff(legSmoothing)
         options.smoothing.rootCutoff = options.smoothing.legCutoff * 0.6
-        options.smoothing.plantFeet = groundLock
+        options.smoothing.plantFeet = plantFeet
         mocap.options = options
     }
 

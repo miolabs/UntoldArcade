@@ -33,12 +33,18 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var maxArmStep: Float = 0.4
     public var glitchHold: TimeInterval = 0.4
     /// Foot planting: a foot slower than `plantSpeed` (m/s) for
-    /// `plantDelay` seconds is pinned where it is, the knee re-solved for
-    /// it, until the tracked foot moves `releaseDistance` from the pin.
-    public var plantFeet = true
+    /// `plantDelay` seconds is pinned near where it is (the pin creeps
+    /// after slow drift with time constant `plantCreep`), the knee
+    /// re-solved for it, until the tracked foot moves faster than twice
+    /// `plantSpeed`, `releaseDistance` away or `releaseRise` up; the
+    /// release blends out over `releaseBlend` seconds.
+    public var plantFeet = false
     public var plantSpeed: Float = 0.3
     public var plantDelay: TimeInterval = 0.12
-    public var releaseDistance: Float = 0.1
+    public var plantCreep: TimeInterval = 1.5
+    public var releaseDistance: Float = 0.08
+    public var releaseRise: Float = 0.04
+    public var releaseBlend: TimeInterval = 0.15
 
     public init() {}
 
@@ -239,6 +245,9 @@ public struct MocapPoseFilter: Sendable {
         /// Recent tracked world positions, for the speed estimate.
         var history: [(time: TimeInterval, position: simd_float3)] = []
         var stillSince: TimeInterval?
+        /// Release in progress: blending from the pin to the tracked foot.
+        var releasing: (start: TimeInterval, from: simd_float3)?
+        var lastTime: TimeInterval?
     }
 
     private var plants: [MocapJoint: FootPlant] = [:]
@@ -258,62 +267,90 @@ public struct MocapPoseFilter: Sendable {
         for leg in Self.legs {
             guard let foot = frame.positions[leg.foot], let knee = frame.positions[leg.knee], let hip = frame.positions[leg.hip] else { continue }
             var plant = plants[leg.foot, default: FootPlant()]
-            let worldFoot = anchor.act(foot) + root
-            plant.history.append((time, worldFoot))
+            let dt = Float(min(max(time - (plant.lastTime ?? time), 0), 0.25))
+            plant.lastTime = time
+            let tracked = anchor.act(foot) + root
+            plant.history.append((time, tracked))
             plant.history.removeAll { time - $0.time > 0.15 }
             let span = time - (plant.history.first?.time ?? time)
-            let speed: Float = span >= 0.08 ? simd_length(worldFoot - plant.history[0].position) / Float(span) : .infinity
+            let speed: Float = span >= 0.08 ? simd_length(tracked - plant.history[0].position) / Float(span) : .infinity
 
-            if let locked = plant.locked {
-                if simd_length(worldFoot - locked) > options.releaseDistance {
+            if var locked = plant.locked {
+                let away = simd_length(tracked - locked)
+                if speed > 2 * options.plantSpeed || away > options.releaseDistance || tracked.y - locked.y > options.releaseRise {
                     plant.locked = nil
                     plant.stillSince = nil
+                    plant.releasing = (time, locked)
+                } else {
+                    // Follow slow drift so the pin never sticks for good.
+                    let creep = 1 - expf(-dt / Float(options.plantCreep))
+                    locked += creep * (tracked - locked)
+                    plant.locked = locked
                 }
             } else if speed < options.plantSpeed {
                 if plant.stillSince == nil {
                     plant.stillSince = time
                 }
                 if let since = plant.stillSince, time - since >= options.plantDelay {
-                    let mean = plant.history.reduce(simd_float3.zero) { $0 + $1.position } / Float(plant.history.count)
-                    plant.locked = mean
+                    plant.locked = plant.history.reduce(simd_float3.zero) { $0 + $1.position } / Float(plant.history.count)
+                    plant.releasing = nil
                 }
             } else {
                 plant.stillSince = nil
             }
 
+            // Where the foot goes: the pin, the tail of a release, or the
+            // tracked foot.
+            var target: simd_float3?
             if let locked = plant.locked {
-                let target = anchor.inverse.act(locked - root)
-                let offset = target - foot
-                frame.positions[leg.foot] = target
+                target = locked
+            } else if let releasing = plant.releasing {
+                let s = Float(min(max((time - releasing.start) / options.releaseBlend, 0), 1))
+                if s < 1 {
+                    target = releasing.from + s * (tracked - releasing.from)
+                } else {
+                    plant.releasing = nil
+                }
+            }
+
+            if let target {
+                let local = anchor.inverse.act(target - root)
+                let offset = local - foot
+                frame.positions[leg.foot] = local
                 if let toes = frame.positions[leg.toes] {
                     frame.positions[leg.toes] = toes + offset
                 }
-                // Knee: same thigh and shin lengths, same bend plane, new foot.
-                let thigh = simd_length(knee - hip)
-                let shin = simd_length(foot - knee)
-                let toTarget = target - hip
-                let distance = simd_length(toTarget)
-                if distance > 1e-4, thigh > 1e-4, shin > 1e-4 {
-                    let u = toTarget / distance
-                    let reach = min(distance, thigh + shin - 1e-3)
-                    let a = (thigh * thigh - shin * shin + reach * reach) / (2 * reach)
-                    let b = sqrt(max(thigh * thigh - a * a, 0))
-                    var bend = (knee - hip) - simd_dot(knee - hip, u) * u
-                    if simd_length_squared(bend) < 1e-6 {
-                        // Straight leg: bend the knee toward the body's front.
-                        let forward = anchor.inverse.act(anchor.act(simd_float3(0, 0, 1)))
-                        bend = forward - simd_dot(forward, u) * u
-                    }
-                    if simd_length_squared(bend) > 1e-8 {
-                        frame.positions[leg.knee] = hip + a * u + b * simd_normalize(bend)
-                    }
+                if let solved = Self.solveKnee(hip: hip, knee: knee, foot: foot, target: local, forward: anchor.inverse.act(simd_float3(0, 0, 1))) {
+                    frame.positions[leg.knee] = solved
                 }
+            }
+            if plant.locked != nil {
                 plantedFeet.insert(leg.foot)
             } else {
                 plantedFeet.remove(leg.foot)
             }
             plants[leg.foot] = plant
         }
+    }
+
+    /// Knee for a moved foot: same thigh and shin lengths, same bend plane
+    /// (toward `forward` when the leg is straight).
+    static func solveKnee(hip: simd_float3, knee: simd_float3, foot: simd_float3, target: simd_float3, forward: simd_float3) -> simd_float3? {
+        let thigh = simd_length(knee - hip)
+        let shin = simd_length(foot - knee)
+        let toTarget = target - hip
+        let distance = simd_length(toTarget)
+        guard distance > 1e-4, thigh > 1e-4, shin > 1e-4 else { return nil }
+        let u = toTarget / distance
+        let reach = min(distance, thigh + shin - 1e-3)
+        let a = (thigh * thigh - shin * shin + reach * reach) / (2 * reach)
+        let b = sqrt(max(thigh * thigh - a * a, 0))
+        var bend = (knee - hip) - simd_dot(knee - hip, u) * u
+        if simd_length_squared(bend) < 1e-6 {
+            bend = forward - simd_dot(forward, u) * u
+        }
+        guard simd_length_squared(bend) > 1e-8 else { return nil }
+        return hip + a * u + b * simd_normalize(bend)
     }
 
     /// The smoothed frame; untracked frames pass through untouched.
