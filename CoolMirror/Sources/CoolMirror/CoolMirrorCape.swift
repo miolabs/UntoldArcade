@@ -59,7 +59,9 @@ final class CoolMirrorCape: @unchecked Sendable {
     private var rig: CoolMirrorCapeRig?
     private var enabled = false
     private var placed = false
-    private var hiddenCape: (mesh: Int, submesh: Int)?
+    /// Centre of the attachment line when the sheet was last laid out.
+    private var placedTop: simd_float3?
+    private var hiddenCape: [(mesh: Int, submesh: Int)]?
 
     var isEnabled: Bool {
         lock.withLock { enabled }
@@ -76,6 +78,7 @@ final class CoolMirrorCape: @unchecked Sendable {
             characterId = id
             self.rig = rig
             placed = false
+            placedTop = nil
             hiddenCape = nil
         }
         apply()
@@ -85,6 +88,7 @@ final class CoolMirrorCape: @unchecked Sendable {
         lock.withLock {
             self.enabled = enabled
             placed = false
+            placedTop = nil
         }
         apply()
     }
@@ -108,20 +112,14 @@ final class CoolMirrorCape: @unchecked Sendable {
                 sheen: simd_float3(0.12, 0.12, 0.16), sheenIntensity: 0.35
             )
             setCoolClothFloor(worldY: 0)
-            // Lay the sheet out at once (behind the character, hanging from
-            // shoulder height) so the first drawn frames are a cape, not the
-            // uninitialised grid; the first update refines the placement
-            // from the skeleton.
-            let origin = getPosition(entityId: characterId)
-            let facing = getRotationQuaternion(entityId: characterId)
-            let back = -simd_normalize(facing.act(simd_float3(0, 0, 1)))
-            let translation = Self.translation(origin + back * (Self.backOffset + 0.05) + simd_float3(0, 1.45 - Self.length / 2, 0))
-            let yaw = atan2(back.x, back.z)
-            setCoolClothModelMatrix(translation * Self.rotationY(yaw) * Self.scale(simd_float3(Self.width / 2, Self.length / 2, 1)))
+            // Hidden until the first placement from a live skeleton (see
+            // update): the sheet must never be seen before it hangs from
+            // the shoulders.
+            setCoolClothVisible(false)
             setCoolClothPinTargets(worldPositions: nil)
-            resetCoolCloth(pinMode: .topEdge)
             hideModelCape(entityId: characterId, hidden: true)
         } else {
+            setCoolClothVisible(false)
             setCoolClothPaused(true)
             setCoolClothPinTargets(worldPositions: nil)
             setCoolClothCapsules([])
@@ -146,6 +144,15 @@ final class CoolMirrorCape: @unchecked Sendable {
               let rightArm = position(rig.rightUpperArm)
         else { return }
 
+        // Before the first animation update the skeleton query returns the
+        // rest transforms, not a pose in the world: wait for joints that sit
+        // on the character.
+        let origin = getPosition(entityId: characterId)
+        let neckHeight = neck.y - origin.y
+        guard simd_length(simd_float2(neck.x - origin.x, neck.z - origin.z)) < 2.5, neckHeight > 0.6, neckHeight < 2.3,
+              simd_length(neck - pelvis) > 0.2
+        else { return }
+
         // Torso frame from the joints: up the spine, lateral across the
         // shoulders, back = lateral × up (right-handed, right minus left).
         let up = simd_normalize(neck - pelvis)
@@ -165,18 +172,28 @@ final class CoolMirrorCape: @unchecked Sendable {
         let rightEnd = center + lateral * halfWidth + drop
         let leftMid = center - lateral * halfWidth * 0.5 + up * 0.01
         let rightMid = center + lateral * halfWidth * 0.5 + up * 0.01
-        setCoolClothPinTargets(worldPositions: [leftEnd, leftMid, center + up * 0.015, rightMid, rightEnd])
 
-        if !placed {
-            // First frame: lay the sheet out hanging from the shoulders so it
-            // does not start inside the body, then reset the simulation.
+        // Lay the sheet out hanging from the attachment line and reset the
+        // simulation when it has not been placed yet, or when the line has
+        // moved far from the sheet's top row (a teleport, a reload): the
+        // pins would otherwise drag the cloth across the room.
+        let sheetTop = lock.withLock { placedTop }
+        if !placed || sheetTop.map({ simd_length($0 - center) > 0.6 }) ?? true {
             let translation = Self.translation(center + behind * 0.5 - up * (Self.length / 2))
             let yaw = atan2(back.x, back.z)
             let rotation = Self.rotationY(yaw)
             let scale = Self.scale(simd_float3(halfWidth, Self.length / 2, 1))
             setCoolClothModelMatrix(translation * rotation * scale)
+            setCoolClothPinTargets(worldPositions: [leftEnd, leftMid, center + up * 0.015, rightMid, rightEnd])
             resetCoolCloth(pinMode: .topEdge)
-            lock.withLock { self.placed = true }
+            setCoolClothVisible(true)
+            lock.withLock {
+                self.placed = true
+                placedTop = center
+            }
+            print(String(format: "CoolMirror cape: sheet placed at (%.2f, %.2f, %.2f), back (%.2f, %.2f, %.2f)", center.x, center.y, center.z, back.x, back.y, back.z))
+        } else {
+            setCoolClothPinTargets(worldPositions: [leftEnd, leftMid, center + up * 0.015, rightMid, rightEnd])
         }
 
         var capsules: [CoolClothSimulation.Capsule] = [
@@ -199,48 +216,50 @@ final class CoolMirrorCape: @unchecked Sendable {
         advanceCoolCloth(deltaTime: deltaTime)
     }
 
-    /// The model's own cape (the submesh textured with the cape map) is
-    /// faded out while the cloth stands in for it.
+    /// The model's own cape is faded out while the cloth stands in for it:
+    /// every material slot whose mesh name or base colour texture name
+    /// mentions the cape.
     private func hideModelCape(entityId: EntityID, hidden: Bool) {
-        let slot: (mesh: Int, submesh: Int)? = lock.withLock { hiddenCape } ?? Self.capeSlot(entityId: entityId)
-        guard let slot else {
-            print("CoolMirror cape: no submesh with a cape texture found; material slots: \(Self.describeMaterialSlots(entityId: entityId))")
+        let slots = lock.withLock { hiddenCape } ?? Self.capeSlots(entityId: entityId)
+        guard !slots.isEmpty else {
+            print("CoolMirror cape: no cape material slot found; slots: \(Self.describeMaterialSlots(entityId: entityId))")
             return
         }
-        lock.withLock { hiddenCape = slot }
-        print("CoolMirror cape: model cape is mesh \(slot.mesh) submesh \(slot.submesh), \(hidden ? "hidden" : "shown")")
-        // Mask with zero opacity: every fragment falls under the cutoff and is
-        // discarded in the main pass (blend would need the transparency pass).
-        updateMaterialAlphaMode(entityId: entityId, mode: hidden ? .mask : .opaque, meshIndex: slot.mesh, submeshIndex: slot.submesh)
-        updateMaterialAlphaCutoff(entityId: entityId, cutoff: 0.5, meshIndex: slot.mesh, submeshIndex: slot.submesh)
-        updateMaterialOpacity(entityId: entityId, opacity: hidden ? 0 : 1, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+        lock.withLock { hiddenCape = slots }
+        print("CoolMirror cape: model cape slots \(slots.map { "\($0.mesh)/\($0.submesh)" }.joined(separator: ", ")) \(hidden ? "hidden" : "shown")")
+        for slot in slots {
+            // Mask with zero opacity: every fragment falls under the cutoff
+            // and is discarded in the main pass (blend would need the
+            // transparency pass).
+            updateMaterialAlphaMode(entityId: entityId, mode: hidden ? .mask : .opaque, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+            updateMaterialAlphaCutoff(entityId: entityId, cutoff: 0.5, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+            updateMaterialOpacity(entityId: entityId, opacity: hidden ? 0 : 1, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+        }
     }
 
-    /// The submesh whose base colour texture is the cape map (bounded scan
-    /// of the material slots: a missing slot answers nil like an untextured one).
-    private static func capeSlot(entityId: EntityID) -> (mesh: Int, submesh: Int)? {
-        for mesh in 0 ..< 8 {
-            for submesh in 0 ..< 32 {
-                if let url = getMaterialTextureURL(entityId: entityId, type: .baseColor, meshIndex: mesh, submeshIndex: submesh),
-                   url.lastPathComponent.localizedCaseInsensitiveContains("cape")
-                {
-                    return (mesh, submesh)
+    private static func capeSlots(entityId: EntityID) -> [(mesh: Int, submesh: Int)] {
+        var slots: [(mesh: Int, submesh: Int)] = []
+        for (mesh, meshName) in getEntityMeshNames(entityId: entityId).enumerated() {
+            let meshIsCape = meshName.localizedCaseInsensitiveContains("cape")
+            for submesh in 0 ..< getEntitySubmeshCount(entityId: entityId, meshIndex: mesh) {
+                let texture = getMaterialBaseColorTextureName(entityId: entityId, meshIndex: mesh, submeshIndex: submesh) ?? ""
+                if meshIsCape || texture.localizedCaseInsensitiveContains("cape") {
+                    slots.append((mesh, submesh))
                 }
             }
         }
-        return nil
+        return slots
     }
 
     private static func describeMaterialSlots(entityId: EntityID) -> String {
         var names: [String] = []
-        for mesh in 0 ..< 8 {
-            for submesh in 0 ..< 32 {
-                if let url = getMaterialTextureURL(entityId: entityId, type: .baseColor, meshIndex: mesh, submeshIndex: submesh) {
-                    names.append("\(mesh)/\(submesh)=\(url.lastPathComponent)")
-                }
+        for (mesh, meshName) in getEntityMeshNames(entityId: entityId).enumerated() {
+            for submesh in 0 ..< getEntitySubmeshCount(entityId: entityId, meshIndex: mesh) {
+                let texture = getMaterialBaseColorTextureName(entityId: entityId, meshIndex: mesh, submeshIndex: submesh) ?? "-"
+                names.append("\(mesh)/\(submesh) \(meshName) [\(texture)]")
             }
         }
-        return names.isEmpty ? "none with a base colour texture" : names.joined(separator: ", ")
+        return names.isEmpty ? "none" : names.joined(separator: ", ")
     }
 
     private static func translation(_ t: simd_float3) -> simd_float4x4 {

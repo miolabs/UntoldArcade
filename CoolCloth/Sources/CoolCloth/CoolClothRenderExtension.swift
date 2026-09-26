@@ -542,9 +542,10 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
 
         encodeLock.withLock {
             guard initializedOnce else { return }
+            let appearance = CoolClothAppearance.shared.state()
+            guard appearance.visible else { return }
             initializeGeometryIfNeeded(indexBuffer: indexBuffer, ballBuffer: ballVertices)
             ensureDefaultFabric(device: context.device)
-            let appearance = CoolClothAppearance.shared.state()
             guard let fabric = appearance.fabricTexture ?? defaultFabricTexture,
                   let encoder = context.sceneRenderTargets.makeRenderCommandEncoder(
                       actions: .loadAndStore,
