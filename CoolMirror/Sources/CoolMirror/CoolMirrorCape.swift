@@ -68,6 +68,9 @@ final class CoolMirrorCape: @unchecked Sendable {
     /// Centre of the attachment line when the sheet was last laid out.
     private var placedTop: simd_float3?
     private var hiddenCape: [MaterialSlot]?
+    /// Once-a-second console report of the sheet's extent and frame time.
+    private var lastReport: TimeInterval = 0
+    private var frameTimes: (min: Float, max: Float, count: Int) = (.greatestFiniteMagnitude, 0, 0)
 
     var isEnabled: Bool {
         lock.withLock { enabled }
@@ -232,6 +235,28 @@ final class CoolMirrorCape: @unchecked Sendable {
         }
         setCoolClothCapsules(capsules)
         advanceCoolCloth(deltaTime: deltaTime)
+        report(center: center, deltaTime: deltaTime)
+    }
+
+    /// Prints the sheet's world extent relative to the attachment line and
+    /// the frame times fed to the simulation, once a second.
+    private func report(center: simd_float3, deltaTime: Float) {
+        let now = Date().timeIntervalSinceReferenceDate
+        let (due, times) = lock.withLock { () -> (Bool, (min: Float, max: Float, count: Int)) in
+            frameTimes = (min(frameTimes.min, deltaTime), max(frameTimes.max, deltaTime), frameTimes.count + 1)
+            guard now - lastReport >= 1 else { return (false, frameTimes) }
+            lastReport = now
+            let t = frameTimes
+            frameTimes = (.greatestFiniteMagnitude, 0, 0)
+            return (true, t)
+        }
+        guard due, let bounds = coolClothWorldBounds() else { return }
+        let size = bounds.max - bounds.min
+        let farthest = max(simd_length(bounds.min - center), simd_length(bounds.max - center))
+        print(String(
+            format: "CoolMirror cape: sheet %.2f×%.2f×%.2f m, farthest corner %.2f m from the shoulders, %d non-finite; dt %.4f–%.4f s over %d updates",
+            size.x, size.y, size.z, farthest, bounds.nonFinite, times.min, times.max, times.count
+        ))
     }
 
     /// A material slot on the character or one of its descendants (the
