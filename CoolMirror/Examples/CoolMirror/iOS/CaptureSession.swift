@@ -60,10 +60,11 @@ final class CaptureSession: NSObject {
         }
         let configuration = ARBodyTrackingConfiguration()
         configuration.automaticSkeletonScaleEstimationEnabled = true
-        // Body tracking only: nothing else competes for the frame.
+        // Body tracking only: nothing else competes for the frame (the
+        // frame semantics stay at their default, .bodyDetection, which the
+        // 3D tracker relies on).
         configuration.planeDetection = []
         configuration.environmentTexturing = .none
-        configuration.frameSemantics = []
         // The largest format at the requested rate (or the nearest rate
         // the device offers).
         let formats = ARBodyTrackingConfiguration.supportedVideoFormats
