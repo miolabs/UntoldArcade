@@ -264,14 +264,29 @@ final class MocapTests: XCTestCase {
         let swapped = filter.filter(legs(right, left, sequence: 2), at: 1 / 30, options: options)
         XCTAssertEqual(swapped.positions[.leftUpLeg], left)
         XCTAssertEqual(filter.swappedFrames, 1)
+        // Arms are their own group: relabelled arms swap back on their own.
+        func withArms(_ f: MocapFrame, leftArm: simd_float3, rightArm: simd_float3) -> MocapFrame {
+            var f = f
+            f.positions[.leftShoulder] = leftArm
+            f.positions[.rightShoulder] = rightArm
+            f.positions[.leftHand] = leftArm - simd_float3(0, 0.6, 0)
+            f.positions[.rightHand] = rightArm - simd_float3(0, 0.6, 0)
+            return f
+        }
+        let leftShoulder = simd_float3(0.2, 1.4, 0), rightShoulder = simd_float3(-0.2, 1.4, 0)
+        _ = filter.filter(withArms(legs(right, left, sequence: 3), leftArm: leftShoulder, rightArm: rightShoulder), at: 2 / 30, options: options)
+        let armsSwapped = filter.filter(withArms(legs(right, left, sequence: 4), leftArm: rightShoulder, rightArm: leftShoulder), at: 3 / 30, options: options)
+        XCTAssertEqual(armsSwapped.positions[.leftHand], leftShoulder - simd_float3(0, 0.6, 0))
+        XCTAssertEqual(armsSwapped.positions[.leftUpLeg], left, "legs untouched")
+        XCTAssertEqual(filter.swappedFrames, 2)
         // A jump of 40 cm on a foot is held back…
-        var jumpy = legs(right, left, sequence: 3)
+        var jumpy = withArms(legs(right, left, sequence: 5), leftArm: rightShoulder, rightArm: leftShoulder)
         jumpy.positions[.leftFoot]! += simd_float3(0.4, 0, 0)
-        let held = filter.filter(jumpy, at: 2 / 30, options: options)
+        let held = filter.filter(jumpy, at: 4 / 30, options: options)
         XCTAssertEqual(held.positions[.leftFoot], left - simd_float3(0, 0.9, 0))
         XCTAssertEqual(filter.rejectedFrames, 1)
         // …until it lasts longer than the hold, when it is taken as motion.
-        _ = filter.filter({ var f = jumpy; f.sequence = 4; return f }(), at: 0.5, options: options)
+        _ = filter.filter({ var f = jumpy; f.sequence = 6; return f }(), at: 0.6, options: options)
         XCTAssertEqual(filter.rejectedFrames, 0)
     }
 

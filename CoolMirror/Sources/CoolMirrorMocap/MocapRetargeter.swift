@@ -65,18 +65,21 @@ public struct MocapBoneFrame: Sendable {
         MocapBoneFrame(joint: .rightUpLeg, child: .rightLeg, hint: .bend(.rightLeg, .rightFoot, backward: true), parent: .hips),
         MocapBoneFrame(joint: .leftLeg, child: .leftFoot, hint: .bend(.leftLeg, .leftUpLeg, backward: true), parent: .leftUpLeg),
         MocapBoneFrame(joint: .rightLeg, child: .rightFoot, hint: .bend(.rightLeg, .rightUpLeg, backward: true), parent: .rightUpLeg),
-        MocapBoneFrame(joint: .leftFoot, child: .leftToes, hint: .bone(.leftFoot, .leftLeg), parent: .leftLeg),
-        MocapBoneFrame(joint: .rightFoot, child: .rightToes, hint: .bone(.rightFoot, .rightLeg), parent: .rightLeg),
+        // No foot frames: ARKit infers the toes from the facing it believes
+        // in, so a foot bone would point backward whenever that flips.
     ]
 }
 
 public extension MocapJoint {
-    /// Joints without a bone of their own that take their parent bone's
-    /// frame: the hands ride on the forearms, the head on the neck.
+    /// Joints without a reliable bone of their own that take their parent
+    /// bone's frame: the hands ride on the forearms, the feet on the
+    /// shins, the head on the neck.
     var followsParentBone: MocapJoint? {
         switch self {
         case .leftHand: .leftForearm
         case .rightHand: .rightForearm
+        case .leftFoot: .leftLeg
+        case .rightFoot: .rightLeg
         case .head: .neck1
         default: nil
         }

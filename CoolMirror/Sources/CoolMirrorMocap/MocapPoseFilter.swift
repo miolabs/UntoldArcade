@@ -28,8 +28,9 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var isEnabled = true
     /// A lower-body joint moving farther than this between two phone
     /// frames is a tracker glitch, not motion: the frame is held back for
-    /// up to `glitchHold` seconds.
+    /// up to `glitchHold` seconds. Arms and hands get `maxArmStep`.
     public var maxJointStep: Float = 0.25
+    public var maxArmStep: Float = 0.4
     public var glitchHold: TimeInterval = 0.4
 
     public init() {}
@@ -108,8 +109,6 @@ public struct MocapPoseFilter: Sendable {
     private var root = OneEuroVector()
     private var lastTime: TimeInterval?
     private var lastAccepted: MocapFrame?
-    private var lastLateral: simd_float3?
-    private var sidesSwapped = false
     private var holdUntil: TimeInterval?
     /// Frames the glitch guard rejected since the last accepted one.
     public private(set) var rejectedFrames = 0
@@ -124,27 +123,57 @@ public struct MocapPoseFilter: Sendable {
         root = OneEuroVector()
         lastTime = nil
         lastAccepted = nil
-        lastLateral = nil
-        sidesSwapped = false
+        lastLateral.removeAll()
+        sidesSwapped.removeAll()
         holdUntil = nil
         rejectedFrames = 0
         swappedFrames = 0
     }
 
-    /// The hip axis (left → right thigh) in world space.
-    private static func lateral(of frame: MocapFrame) -> simd_float3? {
-        guard let l = frame.positions[.leftUpLeg], let r = frame.positions[.rightUpLeg] else { return nil }
+    /// A side of the body ARKit can relabel on its own: the arms (with the
+    /// shoulders) or the legs, and the left → right axis that shows it.
+    public enum SideGroup: CaseIterable, Sendable {
+        case arms, legs
+
+        public var joints: [MocapJoint] {
+            switch self {
+            case .arms: [.leftShoulder, .leftArm, .leftForearm, .leftHand, .rightShoulder, .rightArm, .rightForearm, .rightHand]
+            case .legs: [.leftUpLeg, .leftLeg, .leftFoot, .leftToes, .rightUpLeg, .rightLeg, .rightFoot, .rightToes]
+            }
+        }
+
+        var axisJoints: (MocapJoint, MocapJoint) {
+            switch self {
+            case .arms: (.leftShoulder, .rightShoulder)
+            case .legs: (.leftUpLeg, .rightUpLeg)
+            }
+        }
+    }
+
+    private var lastLateral: [SideGroup: simd_float3] = [:]
+    private var sidesSwapped: Set<SideGroup> = []
+
+    /// The group's left → right axis in world space.
+    private static func lateral(of frame: MocapFrame, group: SideGroup) -> simd_float3? {
+        let (left, right) = group.axisJoints
+        guard let l = frame.positions[left], let r = frame.positions[right] else { return nil }
         let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
         let d = anchor.act(r - l)
         return simd_length_squared(d) > 1e-6 ? simd_normalize(d) : nil
     }
 
-    /// `frame` with every left joint's data on the right and vice versa.
-    public static func swappingSides(_ frame: MocapFrame) -> MocapFrame {
+    /// `frame` with the group's left joints' data on the right and vice versa.
+    public static func swappingSides(_ frame: MocapFrame, group: SideGroup) -> MocapFrame {
         var swapped = frame
-        swapped.rotations = Dictionary(uniqueKeysWithValues: frame.rotations.map { ($0.key.mirrored, $0.value) })
-        swapped.positions = Dictionary(uniqueKeysWithValues: frame.positions.map { ($0.key.mirrored, $0.value) })
-        swapped.trackedJoints = Set(frame.trackedJoints.map(\.mirrored))
+        for joint in group.joints {
+            swapped.rotations[joint] = frame.rotations[joint.mirrored]
+            swapped.positions[joint] = frame.positions[joint.mirrored]
+            if frame.trackedJoints.contains(joint.mirrored) {
+                swapped.trackedJoints.insert(joint)
+            } else {
+                swapped.trackedJoints.remove(joint)
+            }
+        }
         return swapped
     }
 
@@ -154,26 +183,35 @@ public struct MocapPoseFilter: Sendable {
         guard let previous = lastAccepted, frame.sequence != previous.sequence else {
             if lastAccepted == nil {
                 lastAccepted = frame
-                lastLateral = Self.lateral(of: frame)
+                for group in SideGroup.allCases {
+                    lastLateral[group] = Self.lateral(of: frame, group: group)
+                }
             }
             return lastAccepted ?? frame
         }
-        var candidate = sidesSwapped ? Self.swappingSides(frame) : frame
-        if let lateral = Self.lateral(of: candidate), let last = lastLateral {
-            if simd_dot(lateral, last) < -0.5 {
-                // Reversed in one frame: the tracker swapped the legs.
-                sidesSwapped.toggle()
-                candidate = Self.swappingSides(candidate)
+        var candidate = frame
+        for group in SideGroup.allCases {
+            if sidesSwapped.contains(group) {
+                candidate = Self.swappingSides(candidate, group: group)
+            }
+            if let lateral = Self.lateral(of: candidate, group: group), let last = lastLateral[group], simd_dot(lateral, last) < -0.5 {
+                // Reversed in one frame: the tracker relabelled the sides.
+                if sidesSwapped.contains(group) {
+                    sidesSwapped.remove(group)
+                } else {
+                    sidesSwapped.insert(group)
+                }
+                candidate = Self.swappingSides(candidate, group: group)
                 swappedFrames += 1
             }
         }
         var jump: Float = 0
-        for joint in MocapJoint.allCases where joint.isLowerBody {
-            if let a = candidate.positions[joint], let b = previous.positions[joint] {
-                jump = max(jump, simd_length(a - b))
-            }
+        for joint in MocapJoint.allCases {
+            guard let a = candidate.positions[joint], let b = previous.positions[joint] else { continue }
+            let limit = joint.isLowerBody ? options.maxJointStep : options.maxArmStep
+            jump = max(jump, simd_length(a - b) / limit)
         }
-        if jump > options.maxJointStep {
+        if jump > 1 {
             if let holdUntil, time >= holdUntil {
                 // Held long enough: this is real motion after all.
                 self.holdUntil = nil
@@ -189,7 +227,9 @@ public struct MocapPoseFilter: Sendable {
         }
         rejectedFrames = 0
         lastAccepted = candidate
-        lastLateral = Self.lateral(of: candidate) ?? lastLateral
+        for group in SideGroup.allCases {
+            lastLateral[group] = Self.lateral(of: candidate, group: group) ?? lastLateral[group]
+        }
         return candidate
     }
 
