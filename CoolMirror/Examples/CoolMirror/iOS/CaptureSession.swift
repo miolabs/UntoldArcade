@@ -63,6 +63,8 @@ final class CaptureSession: NSObject {
     private nonisolated(unsafe) var sharedOrientation: UIInterfaceOrientation = .landscapeRight
     private nonisolated(unsafe) var sharedBody: ARBodyAnchor?
     private(set) var previewsSent = 0
+    private(set) var previewFailures = 0
+    private(set) var cameraFrames = 0
     private var sentTimes: [TimeInterval] = []
     private var statusTimer: Timer?
     private var jitter = MocapJitterMeter()
@@ -182,10 +184,12 @@ final class CaptureSession: NSObject {
         image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         image = image.transformed(by: CGAffineTransform(translationX: -image.extent.origin.x, y: -image.extent.origin.y))
         let size = CGSize(width: image.extent.width.rounded(), height: image.extent.height.rounded())
-        guard let jpeg = previewContext.jpegRepresentation(
-            of: image, colorSpace: CGColorSpaceCreateDeviceRGB(),
-            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.4]
-        ) else { return }
+        guard let cgImage = previewContext.createCGImage(image, from: CGRect(origin: .zero, size: size)),
+              let jpeg = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.4)
+        else {
+            Task { @MainActor in self.previewFailures += 1 }
+            return
+        }
         var keypoints: [MocapJoint: SIMD2<Float>] = [:]
         if let body, body.isTracked {
             let mocap = Self.frame(from: body, timestamp: now)
@@ -248,6 +252,7 @@ extension CaptureSession: ARSessionDelegate {
     }
 
     nonisolated func session(_: ARSession, didUpdate frame: ARFrame) {
+        Task { @MainActor in self.cameraFrames += 1 }
         sendPreview(for: frame)
     }
 
