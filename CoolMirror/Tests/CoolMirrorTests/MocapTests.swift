@@ -107,6 +107,16 @@ final class MocapTests: XCTestCase {
         XCTAssertEqual(a.feet, 0.01, accuracy: 1e-6, "mean over both feet, one of them still")
         XCTAssertEqual(a.hips, 0, accuracy: 1e-6)
         XCTAssertTrue(meter.report.contains("root 10 mm"))
+        XCTAssertEqual(meter.flips, 0)
+        // The tracker reverses the hip axis: one flip counted.
+        var flipped = frame(sequence: 9, rotations: [:], root: simd_float3(0.03, 0, 0))
+        flipped.positions = [.leftUpLeg: simd_float3(-0.1, 0.95, 0), .rightUpLeg: simd_float3(0.1, 0.95, 0), .leftFoot: .zero, .rightFoot: .zero]
+        var before = frame(sequence: 8, rotations: [:], root: simd_float3(0.03, 0, 0))
+        before.positions = [.leftUpLeg: simd_float3(0.1, 0.95, 0), .rightUpLeg: simd_float3(-0.1, 0.95, 0), .leftFoot: .zero, .rightFoot: .zero]
+        meter.add(before, at: 4 / 30)
+        meter.add(flipped, at: 5 / 30)
+        XCTAssertEqual(meter.flips, 1)
+        XCTAssertTrue(meter.report.contains("flips 1/s"))
     }
 
     func testCapturedPositionsFollowTheMirrorAndFacingOptions() throws {

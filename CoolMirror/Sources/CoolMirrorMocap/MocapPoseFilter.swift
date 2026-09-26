@@ -260,6 +260,9 @@ public struct MocapJitterMeter: Sendable {
         public var feet: Float
         /// Hips orientation step (rad).
         public var hips: Float
+        /// Whether the hip or shoulder axis reversed since the previous
+        /// frame: the tracker changed its mind about the facing or the sides.
+        public var flipped: Bool
     }
 
     private var previous: MocapFrame?
@@ -290,8 +293,27 @@ public struct MocapJitterMeter: Sendable {
         if let a = frame.rotations[.hips], let b = previous.rotations[.hips] {
             hips = rotationAngle(between: a, b)
         }
-        samples.append(Sample(time: time, root: root, feet: feetCount > 0 ? feet / feetCount : 0, hips: hips))
+        var flipped = false
+        for (left, right) in [(MocapJoint.leftUpLeg, MocapJoint.rightUpLeg), (.leftShoulder, .rightShoulder)] {
+            if let a = Self.axis(frame, left, right), let b = Self.axis(previous, left, right), simd_dot(a, b) < -0.5 {
+                flipped = true
+            }
+        }
+        samples.append(Sample(time: time, root: root, feet: feetCount > 0 ? feet / feetCount : 0, hips: hips, flipped: flipped))
         samples.removeAll { time - $0.time > window }
+    }
+
+    /// World-space left → right axis between two joints.
+    private static func axis(_ frame: MocapFrame, _ left: MocapJoint, _ right: MocapJoint) -> simd_float3? {
+        guard let l = frame.positions[left], let r = frame.positions[right] else { return nil }
+        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        let d = anchor.act(r - l)
+        return simd_length_squared(d) > 1e-6 ? simd_normalize(d) : nil
+    }
+
+    /// Frames in the window whose facing or sides reversed.
+    public var flips: Int {
+        samples.filter(\.flipped).count
     }
 
     /// Mean step per frame over the window, or nil without two frames.
@@ -302,16 +324,17 @@ public struct MocapJitterMeter: Sendable {
             time: samples.last!.time,
             root: samples.reduce(0) { $0 + $1.root } / n,
             feet: samples.reduce(0) { $0 + $1.feet } / n,
-            hips: samples.reduce(0) { $0 + $1.hips } / n
+            hips: samples.reduce(0) { $0 + $1.hips } / n,
+            flipped: false
         )
     }
 
-    /// e.g. "raw step/frame: root 4 mm · feet 9 mm · hips 0.6°"
+    /// e.g. "raw step/frame: root 4 mm · feet 9 mm · hips 0.6° · flips 2/s"
     public var report: String {
         guard let a = average() else { return "raw step/frame: —" }
         return String(
-            format: "raw step/frame: root %.0f mm · feet %.0f mm · hips %.1f°",
-            a.root * 1000, a.feet * 1000, a.hips * 180 / .pi
+            format: "raw step/frame: root %.0f mm · feet %.0f mm · hips %.1f° · flips %d/s",
+            a.root * 1000, a.feet * 1000, a.hips * 180 / .pi, flips
         )
     }
 }
