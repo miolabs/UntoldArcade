@@ -138,7 +138,7 @@ final class CoolClothGPUTests: XCTestCase {
         )
         let initKernel = try kernel("coolClothInitKernel")
         let predictKernel = try kernel("coolClothPredictKernel")
-        let solveKernel = try kernel("coolClothSolveKernel")
+        let solveKernel = try kernel("coolClothSolveKernel2")
         let finalizeKernel = try kernel("coolClothFinalizeKernel")
         let normalKernel = try kernel("coolClothNormalKernel")
 
@@ -241,7 +241,7 @@ final class CoolClothGPUTests: XCTestCase {
         var sim = Sim(posA: try makeSimTexture(), posB: try makeSimTexture(), prev: try makeSimTexture(), vel: try makeSimTexture(), nrm: try makeSimTexture())
         let initKernel = try kernel("coolClothInitKernel")
         let predictKernel = try kernel("coolClothPredictKernel")
-        let solveKernel = try kernel("coolClothSolveKernel")
+        let solveKernel = try kernel("coolClothSolveKernel2")
         let finalizeKernel = try kernel("coolClothFinalizeKernel")
         let normalKernel = try kernel("coolClothNormalKernel")
         let frameDelta: Float = 1.0 / 90.0
@@ -336,6 +336,138 @@ final class CoolClothGPUTests: XCTestCase {
             )
             print("cape sweep \(name): farthest \(result.farthest) m, nonFinite \(result.nonFinite)")
         }
+    }
+
+    /// The cape exactly as the mirror configures it through the public API,
+    /// with the extension's own state consumption, parameter packing and
+    /// substep loop. Returns the non-finite count and farthest distance at
+    /// the end of `frames` frames of `frameDt` seconds.
+    private func runCapeViaAPI(frameDt: Float, wind: Bool, capsules useCapsules: Bool, substeps: Int = 12, frames: Int = 60) throws -> (nonFinite: Int, farthest: Float) {
+        let simulation = CoolClothSimulation.shared
+        simulation.resetForTesting()
+        CoolClothAppearance.shared.resetForTesting()
+        defer {
+            simulation.resetForTesting()
+            CoolClothAppearance.shared.resetForTesting()
+        }
+        let ext = CoolClothRenderExtension()
+        let shoulders = SIMD3<Float>(0, 1.41, -1.70)
+        let back = SIMD3<Float>(-0.05, -0.21, -0.98)
+        let halfWidth: Float = 0.31, halfLength: Float = 0.575
+
+        setCoolClothPaused(false)
+        setCoolClothBallVisible(false)
+        setCoolClothGravity(SIMD3<Float>(0, -9.81, 0))
+        setCoolClothMaterial(CoolClothMaterialParameters(stretchCompliance: 3e-7, shearCompliance: 3e-6, bendCompliance: 2e-4, damping: 1.2))
+        setCoolClothSolverQuality(substeps: substeps, iterations: 1)
+        setCoolClothMaxSpeed(6)
+        if wind {
+            setCoolClothWind(directionWorld: SIMD3<Float>(0, 0, 1), strength: 0.15, gustiness: 0.6)
+        }
+        setCoolClothFloor(worldY: 0)
+        let translation = SIMD3<Float>(shoulders + back * 0.5 * 0.15 - SIMD3<Float>(0, 1, 0) * halfLength)
+        let yaw = atan2(back.x, back.z)
+        var model = simd_float4x4(simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0)))
+        model = simd_mul(model, simd_float4x4(diagonal: SIMD4<Float>(halfWidth, halfLength, 1, 1)))
+        model.columns.3 = SIMD4<Float>(translation, 1)
+        setCoolClothModelMatrix(model)
+        let lateral = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), back))
+        let center = shoulders + back * 0.15
+        setCoolClothPinTargets(worldPositions: [center - lateral * halfWidth, center - lateral * halfWidth * 0.5, center, center + lateral * halfWidth * 0.5, center + lateral * halfWidth])
+        resetCoolCloth(pinMode: .topEdge)
+        if useCapsules {
+            let spine = SIMD3<Float>(0, 0, -1.70)
+            setCoolClothCapsules([
+                .init(start: spine + SIMD3(0, 0.85, 0), end: spine + SIMD3(0, 1.45, 0), radius: 0.12, softness: 0.5),
+                .init(start: spine + SIMD3(0, 1.45, 0), end: spine + SIMD3(0, 1.72, 0), radius: 0.11, softness: 0.5),
+                .init(start: spine + SIMD3(0.2, 1.4, 0), end: spine + SIMD3(0.25, 1.1, 0), radius: 0.065, softness: 0.5),
+                .init(start: spine + SIMD3(-0.2, 1.4, 0), end: spine + SIMD3(-0.25, 1.1, 0), radius: 0.065, softness: 0.5),
+                .init(start: spine + SIMD3(0.1, 0.9, 0), end: spine + SIMD3(0.12, 0.5, 0), radius: 0.09, softness: 0.5),
+                .init(start: spine + SIMD3(-0.1, 0.9, 0), end: spine + SIMD3(-0.12, 0.5, 0), radius: 0.09, softness: 0.5),
+            ])
+        }
+
+        var sim = Sim(posA: try makeSimTexture(), posB: try makeSimTexture(), prev: try makeSimTexture(), vel: try makeSimTexture(), nrm: try makeSimTexture())
+        let initKernel = try kernel("coolClothInitKernel")
+        let predictKernel = try kernel("coolClothPredictKernel")
+        let solveKernel = try kernel("coolClothSolveKernel2")
+        let finalizeKernel = try kernel("coolClothFinalizeKernel")
+        let normalKernel = try kernel("coolClothNormalKernel")
+        var simulationTime: Float = 0
+        var applied: UInt64 = .max
+        var nonFinite = 0
+        var farthest: Float = 0
+        for frame in 0 ..< frames {
+            advanceCoolCloth(deltaTime: frame == 0 ? 1.149 : frameDt)
+            let state = simulation.consumeFrameState()
+            let appearance = CoolClothAppearance.shared.state()
+            let invModel = simd_inverse(appearance.modelMatrix)
+            var params = ext.makeParams(state: state, model: appearance.modelMatrix, invModel: invModel, dt: 0)
+            let bindings = ext.makeSolveBindings(state: state)
+            let commandBuffer = try XCTUnwrap(queue.makeCommandBuffer())
+            if state.resetGeneration != applied {
+                dispatch(initKernel, commandBuffer, params: &params, textures: [sim.current, sim.prev, sim.vel, sim.nrm], pinTargets: bindings.pinTargets, capsules: bindings.capsules)
+                sim.currentIsA = true
+                applied = state.resetGeneration
+                simulationTime = 0
+            }
+            let frameDelta = min(max(state.deltaTime, 1.0 / 240.0), 1.0 / 30.0)
+            let substeps = CoolClothRenderExtension.substepCount(frameDelta: frameDelta, requested: state.substeps)
+            params.gravityDt.w = frameDelta / Float(substeps)
+            for _ in 0 ..< substeps {
+                params.misc.z = simulationTime
+                dispatch(predictKernel, commandBuffer, params: &params, textures: [sim.current, sim.other, sim.prev, sim.vel, sim.nrm], pinTargets: bindings.pinTargets, capsules: bindings.capsules)
+                sim.currentIsA.toggle()
+                dispatch(solveKernel, commandBuffer, params: &params, textures: [sim.current, sim.other, sim.prev], pinTargets: bindings.pinTargets, capsules: bindings.capsules)
+                sim.currentIsA.toggle()
+                dispatch(finalizeKernel, commandBuffer, params: &params, textures: [sim.current, sim.prev, sim.vel], pinTargets: bindings.pinTargets, capsules: bindings.capsules)
+                simulationTime += params.gravityDt.w
+            }
+            dispatch(normalKernel, commandBuffer, params: &params, textures: [sim.current, sim.nrm], pinTargets: bindings.pinTargets, capsules: bindings.capsules)
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+
+            if frame == frames - 1 {
+                nonFinite = 0
+                for p in readParticles(sim.current) {
+                    let world = appearance.modelMatrix * SIMD4<Float>(p.x, p.y, p.z, 1)
+                    guard world.x.isFinite, world.y.isFinite, world.z.isFinite else {
+                        nonFinite += 1
+                        continue
+                    }
+                    farthest = max(farthest, simd_length(SIMD3<Float>(world.x, world.y, world.z) - shoulders))
+                }
+            }
+        }
+        return (nonFinite, farthest)
+    }
+
+    /// The substep rule: a long frame gets more substeps, never a longer step.
+    func testSubstepCountKeepsTheStepShort() {
+        XCTAssertEqual(CoolClothRenderExtension.substepCount(frameDelta: 1.0 / 90.0, requested: 8), 8)
+        XCTAssertEqual(CoolClothRenderExtension.substepCount(frameDelta: 1.0 / 90.0, requested: 12), 12)
+        XCTAssertEqual(CoolClothRenderExtension.substepCount(frameDelta: 0.029, requested: 12), 21, "29 ms needs 21 steps of ≤ 1/720 s")
+        XCTAssertEqual(CoolClothRenderExtension.substepCount(frameDelta: 1.0 / 30.0, requested: 8), 24)
+        XCTAssertEqual(CoolClothRenderExtension.substepCount(frameDelta: 1.0, requested: 8), 32, "capped")
+    }
+
+    /// Frame times from 90 Hz down to 30 fps, through the real state path
+    /// (printed and asserted): the substep rule keeps every one finite.
+    func testCapeViaAPIAcrossFrameRates() throws {
+        for dt in [Float(1.0 / 90.0), 0.02, 0.029, Float(1.0 / 30.0)] {
+            let result = try runCapeViaAPI(frameDt: dt, wind: true, capsules: true, substeps: 12)
+            print("cape via API dt=\(dt): nonFinite \(result.nonFinite), farthest \(result.farthest)")
+            XCTAssertEqual(result.nonFinite, 0, "dt \(dt)")
+            XCTAssertLessThan(result.farthest, 1.6, "dt \(dt)")
+        }
+    }
+
+    /// The cape as the mirror configures it, at the mirror's frame rate,
+    /// through the real state path, must stay finite and near the body.
+    func testCapeThroughTheSimulationStateAndExtensionPacking() throws {
+        let result = try runCapeViaAPI(frameDt: 0.029, wind: true, capsules: true, frames: 120)
+        XCTAssertEqual(result.nonFinite, 0)
+        XCTAssertLessThan(result.farthest, 1.6)
     }
 
     /// The mirror's cape, with the settings it ships with (attachment line

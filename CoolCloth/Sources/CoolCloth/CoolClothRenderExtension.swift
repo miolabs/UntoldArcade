@@ -11,7 +11,18 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
 
     private static let gridSize = CoolClothSimulation.gridSize
     /// Rest distance between grid neighbors in cloth-local units (grid spans [-1,1]).
-    private static let restSpacing = 2.0 / Float(gridSize - 1)
+    static let restSpacing = 2.0 / Float(gridSize - 1)
+
+    /// Longest substep the Jacobi solver holds (a 90 Hz frame in 8 steps):
+    /// at longer frames the requested count is raised so the substep never
+    /// exceeds it, otherwise the sheet goes non-finite (seen at 34 fps with
+    /// 12 substeps). Capped at 32 substeps per frame.
+    static let maxSubstepDuration: Float = 1.0 / 720.0
+
+    static func substepCount(frameDelta: Float, requested: Int) -> Int {
+        let needed = Int((frameDelta / maxSubstepDuration).rounded(.up))
+        return min(max(requested, needed, 1), 32)
+    }
 
     private let encodeLock = NSLock()
     private var currentTextureIsA = true
@@ -132,7 +143,7 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
         for (id, function, name) in [
             (CoolClothPluginContract.initPipelineID, "coolClothInitKernel", "CoolCloth Init"),
             (CoolClothPluginContract.predictPipelineID, "coolClothPredictKernel", "CoolCloth Predict"),
-            (CoolClothPluginContract.solvePipelineID, "coolClothSolveKernel", "CoolCloth Solve"),
+            (CoolClothPluginContract.solvePipelineID, "coolClothSolveKernel2", "CoolCloth Solve"),
             (CoolClothPluginContract.finalizePipelineID, "coolClothFinalizeKernel", "CoolCloth Finalize"),
             (CoolClothPluginContract.normalPipelineID, "coolClothNormalKernel", "CoolCloth Normals"),
         ] {
@@ -241,10 +252,11 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
             guard !state.paused else { return }
 
             let frameDelta = min(max(state.deltaTime, 1.0 / 240.0), 1.0 / 30.0)
-            let substepDelta = frameDelta / Float(state.substeps)
+            let substeps = Self.substepCount(frameDelta: frameDelta, requested: state.substeps)
+            let substepDelta = frameDelta / Float(substeps)
             params.gravityDt.w = substepDelta
 
-            for _ in 0 ..< state.substeps {
+            for _ in 0 ..< substeps {
                 params.misc.z = simulationTime
                 encodePredict(context, textures: textures, params: params)
                 for _ in 0 ..< state.iterations {
@@ -257,7 +269,7 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
         }
     }
 
-    private func makeParams(
+    func makeParams(
         state: CoolClothSimulation.FrameState,
         model: simd_float4x4,
         invModel: simd_float4x4,
@@ -306,12 +318,12 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
 
     /// Per-column attachment targets and capsule colliders, bound next to
     /// the params on every simulation kernel (small enough for setBytes).
-    private struct SolveBindings {
+    struct SolveBindings {
         var pinTargets: [SIMD4<Float>]
         var capsules: [CoolClothCapsuleData]
     }
 
-    private func makeSolveBindings(state: CoolClothSimulation.FrameState) -> SolveBindings {
+    func makeSolveBindings(state: CoolClothSimulation.FrameState) -> SolveBindings {
         var pins = [SIMD4<Float>](repeating: .zero, count: coolClothPinTargetCount)
         if let targets = state.pinTargets {
             for (column, target) in targets.prefix(coolClothPinTargetCount).enumerated() {

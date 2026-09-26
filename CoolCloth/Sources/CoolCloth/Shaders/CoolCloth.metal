@@ -123,7 +123,7 @@ kernel void coolClothPredictKernel(texture2d<float, access::read> posSrc [[textu
 // substep the Lagrange multipliers start at zero, so Δλ = -C / (Σw + α/dt²)
 // needs no per-constraint storage. Collisions and the grab constraint run after
 // the distance solve, in world space.
-kernel void coolClothSolveKernel(texture2d<float, access::read> posSrc [[texture(0)]],
+kernel void coolClothSolveKernel2(texture2d<float, access::read> posSrc [[texture(0)]],
                                  texture2d<float, access::write> posDst [[texture(1)]],
                                  texture2d<float, access::read> prev [[texture(2)]],
                                  constant CoolClothSimParams &p [[buffer(CoolClothSimParamsIndex)]],
