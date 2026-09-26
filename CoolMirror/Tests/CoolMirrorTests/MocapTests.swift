@@ -171,6 +171,60 @@ final class MocapTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(retargeter.retarget(moved)).rootTranslationDelta, .zero)
     }
 
+    /// With the rig's rest positions known, a limb copies the captured bone
+    /// direction whatever pose the user calibrated in.
+    func testBoneDirectionsDriveTheLimbsRegardlessOfCalibration() throws {
+        let mapping = try XCTUnwrap(CoolMirrorMocapMapping.mapping(for: .spiderman))
+        XCTAssertEqual(mapping.referenceJoints[.leftToes], "mixamorig:LeftToeBase")
+        XCTAssertNil(mapping.joints[.leftToes], "toes are a bone end, not driven")
+
+        let retargeter = MocapRetargeter(mapping: mapping)
+        retargeter.options.mirror = false
+        // Rig rest: T-pose, left arm along +x.
+        retargeter.rigRestPositions = [
+            "mixamorig:LeftArm": simd_float3(0.2, 1.4, 0),
+            "mixamorig:LeftForeArm": simd_float3(0.5, 1.4, 0),
+            "mixamorig:LeftHand": simd_float3(0.8, 1.4, 0),
+        ]
+        // Calibrated with the arm hanging down (any rotation, any direction).
+        var calibration = frame(rotations: [.leftArm: simd_quatf(angle: 1.0, axis: simd_float3(0, 0, 1))])
+        calibration.positions = [.leftArm: simd_float3(0.2, 1.4, 0), .leftForearm: simd_float3(0.2, 1.1, 0), .leftHand: simd_float3(0.2, 0.8, 0)]
+        retargeter.calibrate(with: calibration)
+
+        // Now the user points the upper arm straight up and the forearm forward.
+        var moved = frame(sequence: 2, rotations: [.leftArm: simd_quatf(angle: 1.0, axis: simd_float3(0, 0, 1))])
+        moved.positions = [.leftArm: simd_float3(0.2, 1.4, 0), .leftForearm: simd_float3(0.2, 1.7, 0), .leftHand: simd_float3(0.2, 1.7, 0.3)]
+        let result = try XCTUnwrap(retargeter.retarget(moved))
+
+        let arm = try XCTUnwrap(result.worldRotationDeltas["mixamorig:LeftArm"])
+        let armDirection = arm.act(simd_float3(1, 0, 0))
+        XCTAssertEqual(armDirection.y, 1, accuracy: 1e-4, "+x rest bone now points up")
+        let forearm = try XCTUnwrap(result.worldRotationDeltas["mixamorig:LeftForeArm"])
+        XCTAssertEqual(forearm.act(simd_float3(1, 0, 0)).z, 1, accuracy: 1e-4, "forearm points forward")
+        let hand = try XCTUnwrap(result.worldRotationDeltas["mixamorig:LeftHand"])
+        assertEqual(hand, forearm) // the hand follows the forearm bone
+
+        // Mirrored: the user's left arm drives the character's right arm,
+        // whose rest bone points along -x, reflected to the same up direction.
+        retargeter.options.mirror = true
+        retargeter.rigRestPositions["mixamorig:RightArm"] = simd_float3(-0.2, 1.4, 0)
+        retargeter.rigRestPositions["mixamorig:RightForeArm"] = simd_float3(-0.5, 1.4, 0)
+        let mirrored = try XCTUnwrap(retargeter.retarget(moved))
+        let rightArm = try XCTUnwrap(mirrored.worldRotationDeltas["mixamorig:RightArm"])
+        XCTAssertEqual(rightArm.act(simd_float3(-1, 0, 0)).y, 1, accuracy: 1e-4)
+    }
+
+    func testSwingAndTwistDecomposition() {
+        let axis = simd_normalize(simd_float3(1, 2, 0))
+        let twist = simd_quatf(angle: 0.7, axis: axis)
+        let swing = MocapRetargeter.swing(from: axis, to: simd_float3(0, 0, 1))
+        let combined = simd_normalize(swing * twist)
+        assertEqual(MocapRetargeter.twist(of: combined, about: axis), twist)
+        XCTAssertEqual(simd_length(swing.act(axis) - simd_float3(0, 0, 1)), 0, accuracy: 1e-5)
+        let flip = MocapRetargeter.swing(from: simd_float3(0, 1, 0), to: simd_float3(0, -1, 0))
+        XCTAssertEqual(simd_length(flip.act(simd_float3(0, 1, 0)) - simd_float3(0, -1, 0)), 0, accuracy: 1e-5)
+    }
+
     func testReflectionIsAnInvolution() {
         let q = simd_quatf(angle: 1.1, axis: simd_normalize(simd_float3(0.3, 0.8, -0.5)))
         assertEqual(MocapRetargeter.reflectAcrossSagittalPlane(MocapRetargeter.reflectAcrossSagittalPlane(q)), q)

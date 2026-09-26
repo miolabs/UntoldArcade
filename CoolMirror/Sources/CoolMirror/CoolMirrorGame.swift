@@ -191,8 +191,9 @@ public final class CoolMirrorGame {
     /// and where the character stands.
     public func setMocapOptions(
         mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
-        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6
+        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true
     ) {
+        mocap.isGroundLockEnabled = groundLock
         var options = MocapRetargetOptions()
         options.mirror = mirror
         options.flipFacing = flipFacing

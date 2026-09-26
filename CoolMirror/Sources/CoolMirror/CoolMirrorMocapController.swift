@@ -30,13 +30,18 @@ enum CoolMirrorMocapMapping {
             .leftUpLeg: p.thigh,
             .leftLeg: p.calf,
             .leftFoot: p.foot,
-            // No toes: ARKit infers them from the ankle (they are never
-            // tracked), and their guessed twist stretches the feet.
         ]
+        // The toes are only a bone end: ARKit infers them from the ankle
+        // (never tracked), so their twist would stretch the feet if driven.
+        var reference = joints
+        reference[.leftToes] = p.toe
         for (joint, name) in joints where joint.mirrored != joint {
             joints[joint.mirrored] = p.mirror(name)
         }
-        return MocapRigMapping(joints: joints, rootJoint: p.pelvis)
+        for (joint, name) in reference where joint.mirrored != joint {
+            reference[joint.mirrored] = p.mirror(name)
+        }
+        return MocapRigMapping(joints: joints, rootJoint: p.pelvis, referenceJoints: reference)
     }
 }
 
@@ -61,6 +66,9 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     private var jitter = MocapJitterMeter()
     private var debugOverlay = false
     private var debugLinesShown = false
+    private var groundLock = true
+    private var groundCorrection: Float = 0
+    private var restFootHeight: Float?
 
     var options: MocapRetargetOptions {
         get { lock.withLock { storedOptions } }
@@ -85,6 +93,19 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     var isDebugOverlayEnabled: Bool {
         get { lock.withLock { debugOverlay } }
         set { lock.withLock { debugOverlay = newValue } }
+    }
+
+    /// Keeps the character's lowest foot on the floor: the root translation
+    /// is corrected by whatever the lowest ankle has risen above its rest
+    /// height (no jumping, no floating).
+    var isGroundLockEnabled: Bool {
+        get { lock.withLock { groundLock } }
+        set {
+            lock.withLock {
+                groundLock = newValue
+                if !newValue { groundCorrection = 0 }
+            }
+        }
     }
 
     /// Raw per-frame motion of the capture (see `MocapJitterMeter`).
@@ -112,7 +133,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             return "Hold still… capturing your pose as the character's rest pose."
         }
         if !calibrated {
-            return "3 · Body tracked (\(receiver.framesPerSecond) Hz). Stand like the character (arms as shown), then tap Calibrate and hold the pose."
+            return "3 · Body tracked (\(receiver.framesPerSecond) Hz). Stand upright facing the phone, look at it, arms relaxed, then tap Calibrate and hold still."
         }
         let seen = receiver.latestFrame.map { "\($0.trackedJoints.count)/\($0.rotations.count) joints seen" } ?? ""
         if driving {
@@ -130,14 +151,39 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             if let mapping {
                 let retargeter = MocapRetargeter(mapping: mapping)
                 retargeter.options = storedOptions
+                if let id {
+                    retargeter.rigRestPositions = Self.restPositions(of: id)
+                    restFootHeight = Self.restFootHeight(of: retargeter.rigRestPositions, mapping: mapping)
+                }
                 self.retargeter = retargeter
             } else {
                 retargeter = nil
+                restFootHeight = nil
             }
             driving = false
+            groundCorrection = 0
             jitter.reset()
         }
         hideDebugLines()
+    }
+
+    /// The rig's rest joint positions keyed by full path and by last path
+    /// component (the names the mappings use).
+    private static func restPositions(of entityId: EntityID) -> [String: simd_float3] {
+        var positions: [String: simd_float3] = [:]
+        for joint in entitySkeletonRestJointPoses(entityId: entityId) {
+            positions[joint.path] = joint.modelPosition
+            if let name = joint.path.split(separator: "/").last {
+                positions[String(name)] = joint.modelPosition
+            }
+        }
+        return positions
+    }
+
+    /// Height of the lower ankle in the rest pose: the floor contact.
+    private static func restFootHeight(of positions: [String: simd_float3], mapping: MocapRigMapping) -> Float? {
+        let heights = [MocapJoint.leftFoot, .rightFoot].compactMap { mapping.joints[$0].flatMap { positions[$0]?.y } }
+        return heights.min()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -208,7 +254,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         if calibrate {
             retargeter.calibrate(with: smoothed)
         }
-        guard let result = retargeter.retarget(smoothed) else { return }
+        guard var result = retargeter.retarget(smoothed) else { return }
+        result.rootTranslationDelta.y += groundCorrection(characterId: characterId, origin: origin, mapping: retargeter.mapping)
         setEntityExternalPose(
             entityId: characterId,
             worldRotationDeltas: result.worldRotationDeltas,
@@ -223,6 +270,26 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         } else {
             hideDebugLines()
         }
+    }
+
+    // MARK: - Ground lock
+
+    /// Vertical root correction keeping the lower ankle at its rest height.
+    /// Reads the pose the engine composed last frame (which already holds
+    /// the previous correction) and closes the remaining error gradually.
+    private func groundCorrection(characterId: EntityID, origin: simd_float3, mapping: MocapRigMapping) -> Float {
+        let (enabled, restHeight, previous) = lock.withLock { (groundLock, restFootHeight, groundCorrection) }
+        guard enabled, let restHeight else { return 0 }
+        let feet = [MocapJoint.leftFoot, .rightFoot].compactMap { mapping.joints[$0] }
+        let joints = entitySkeletonJointPoses(entityId: characterId)
+        let heights = joints.compactMap { joint -> Float? in
+            feet.contains { Self.jointPath(joint.path, matches: $0) } ? joint.worldPosition.y - origin.y : nil
+        }
+        guard let lowest = heights.min() else { return previous }
+        let error = lowest - restHeight
+        let correction = previous - 0.5 * error
+        lock.withLock { groundCorrection = correction }
+        return correction
     }
 
     // MARK: - Debug overlay

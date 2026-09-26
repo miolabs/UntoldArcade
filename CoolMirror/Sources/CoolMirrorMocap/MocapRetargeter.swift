@@ -16,10 +16,52 @@ public struct MocapRigMapping: Sendable {
     public var joints: [MocapJoint: String]
     /// Rig joint that receives the root translation (the hips).
     public var rootJoint: String
+    /// Rig joints known for every captured joint, driven or not (the toes,
+    /// say): the ends of the bones whose directions the retarget copies.
+    /// Defaults to `joints`.
+    public var referenceJoints: [MocapJoint: String]
 
-    public init(joints: [MocapJoint: String], rootJoint: String) {
+    public init(joints: [MocapJoint: String], rootJoint: String, referenceJoints: [MocapJoint: String]? = nil) {
         self.joints = joints
         self.rootJoint = rootJoint
+        self.referenceJoints = referenceJoints ?? joints
+    }
+}
+
+public extension MocapJoint {
+    /// The captured child whose position, with this joint's, gives the bone
+    /// direction the rig copies (nil: the joint is driven by its rotation).
+    var boneChild: MocapJoint? {
+        switch self {
+        case .spine2: .spine5
+        case .spine5: .spine7
+        case .spine7: .neck1
+        case .neck1: .head
+        case .leftShoulder: .leftArm
+        case .leftArm: .leftForearm
+        case .leftForearm: .leftHand
+        case .leftUpLeg: .leftLeg
+        case .leftLeg: .leftFoot
+        case .leftFoot: .leftToes
+        case .rightShoulder: .rightArm
+        case .rightArm: .rightForearm
+        case .rightForearm: .rightHand
+        case .rightUpLeg: .rightLeg
+        case .rightLeg: .rightFoot
+        case .rightFoot: .rightToes
+        default: nil
+        }
+    }
+
+    /// Joints with no reliable bone of their own that keep their rest
+    /// orientation relative to the parent bone (the hands follow the
+    /// forearm).
+    var followsParentBone: MocapJoint? {
+        switch self {
+        case .leftHand: .leftForearm
+        case .rightHand: .rightForearm
+        default: nil
+        }
     }
 }
 
@@ -52,11 +94,25 @@ public struct MocapRetargetResult: Sendable {
     public var capturedTrackedJoints: Set<MocapJoint>
 }
 
-/// Retargets frames relative to a calibration pose captured while the user
-/// stands in the character's rest pose.
+/// Retargets frames onto a rig. Limbs and spine copy the captured bone
+/// directions (a swing from the rig's rest bone direction, plus the
+/// captured twist about it), so the character points its bones where the
+/// user's point whatever the proportions and however the user stood at
+/// calibration; that needs the rig's rest joint positions
+/// (`rigRestPositions`). Joints without a bone (hips, head) and rigs
+/// without rest positions use the rotation relative to the calibration
+/// pose instead, so the user calibrates standing upright, facing the phone.
 public final class MocapRetargeter: @unchecked Sendable {
     public var mapping: MocapRigMapping
     public var options = MocapRetargetOptions()
+    /// Rest joint positions of the rig, model space, by the names used in
+    /// `mapping`.
+    public var rigRestPositions: [String: simd_float3] {
+        get { lock.withLock { restPositions } }
+        set { lock.withLock { restPositions = newValue } }
+    }
+
+    private var restPositions: [String: simd_float3] = [:]
 
     private var calibrationRotations: [MocapJoint: simd_quatf] = [:]
     private var calibrationRootPosition = simd_float3(0, 0, 0)
@@ -99,28 +155,12 @@ public final class MocapRetargeter: @unchecked Sendable {
 
     /// Nil until calibrated.
     public func retarget(_ frame: MocapFrame) -> MocapRetargetResult? {
-        let (calibration, calibrationPosition, calibrationRoot) = lock.withLock {
-            (calibrationRotations, calibrationRootPosition, calibrationRootRotation)
+        let (calibration, calibrationPosition, calibrationRoot, restPositions) = lock.withLock {
+            (calibrationRotations, calibrationRootPosition, calibrationRootRotation, self.restPositions)
         }
         guard !calibration.isEmpty else { return nil }
         let options = options
         let facing = options.flipFacing ? simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0)) : nil
-
-        var deltas: [String: simd_quatf] = [:]
-        for (captured, rigJoint) in mapping.joints {
-            // With the mirror on, the character's joint takes the delta of the
-            // user's opposite joint, reflected across the sagittal plane.
-            let source = options.mirror ? captured.mirrored : captured
-            guard let current = frame.rotations[source], let reference = calibration[source] else { continue }
-            var delta = simd_normalize(current * reference.inverse)
-            if options.mirror {
-                delta = Self.reflectAcrossSagittalPlane(delta)
-            }
-            if let facing {
-                delta = simd_normalize(facing * delta * facing.inverse)
-            }
-            deltas[rigJoint] = delta
-        }
 
         // Root motion relative to the calibration spot, in the calibrated
         // body's frame so walking toward the phone moves the character the
@@ -149,10 +189,84 @@ public final class MocapRetargeter: @unchecked Sendable {
             captured[joint] = p
         }
 
+        /// Rotation of a captured joint relative to its calibration, in the
+        /// character's space. With the mirror on, the character's joint takes
+        /// the delta of the user's opposite joint, reflected across the
+        /// sagittal plane.
+        func rotationDelta(_ captured: MocapJoint) -> simd_quatf? {
+            let source = options.mirror ? captured.mirrored : captured
+            guard let current = frame.rotations[source], let reference = calibration[source] else { return nil }
+            var delta = simd_normalize(current * reference.inverse)
+            if options.mirror {
+                delta = Self.reflectAcrossSagittalPlane(delta)
+            }
+            if let facing {
+                delta = simd_normalize(facing * delta * facing.inverse)
+            }
+            return delta
+        }
+
+        /// Bone directions: rig rest direction → captured direction.
+        func restDirection(_ joint: MocapJoint) -> simd_float3? {
+            guard let child = joint.boneChild,
+                  let rigJoint = mapping.referenceJoints[joint], let rigChild = mapping.referenceJoints[child],
+                  let a = restPositions[rigJoint], let b = restPositions[rigChild]
+            else { return nil }
+            let d = b - a
+            return simd_length_squared(d) > 1e-8 ? simd_normalize(d) : nil
+        }
+        func capturedDirection(_ joint: MocapJoint) -> simd_float3? {
+            let source = options.mirror ? joint.mirrored : joint
+            guard let child = source.boneChild, let a = captured[source], let b = captured[child] else { return nil }
+            let d = b - a
+            return simd_length_squared(d) > 1e-8 ? simd_normalize(d) : nil
+        }
+        var swings: [MocapJoint: simd_quatf] = [:]
+        var restDirections: [MocapJoint: simd_float3] = [:]
+        for joint in mapping.referenceJoints.keys {
+            guard let rest = restDirection(joint), let target = capturedDirection(joint) else { continue }
+            swings[joint] = Self.swing(from: rest, to: target)
+            restDirections[joint] = rest
+        }
+
+        var deltas: [String: simd_quatf] = [:]
+        for (captured, rigJoint) in mapping.joints {
+            if let swing = swings[captured], let rest = restDirections[captured] {
+                // Bone-direction joint: the captured twist about the bone
+                // rides on the swing.
+                let twist = rotationDelta(captured).map { Self.twist(of: $0, about: rest) } ?? simd_quatf(angle: 0, axis: rest)
+                deltas[rigJoint] = simd_normalize(swing * twist)
+            } else if let parent = captured.followsParentBone, let swing = swings[parent] {
+                deltas[rigJoint] = swing
+            } else if let delta = rotationDelta(captured) {
+                deltas[rigJoint] = delta
+            }
+        }
+
         return MocapRetargetResult(
             worldRotationDeltas: deltas, rootTranslationDelta: translation, rootJoint: mapping.rootJoint,
             capturedJointPositions: captured, capturedTrackedJoints: frame.trackedJoints
         )
+    }
+
+    /// The shortest rotation taking unit vector `from` onto unit vector `to`.
+    public static func swing(from: simd_float3, to: simd_float3) -> simd_quatf {
+        if simd_dot(from, to) < -0.9999 {
+            // Opposite directions: half a turn about any perpendicular axis.
+            let helper = abs(from.x) < 0.9 ? simd_float3(1, 0, 0) : simd_float3(0, 1, 0)
+            return simd_quatf(angle: .pi, axis: simd_normalize(simd_cross(from, helper)))
+        }
+        return simd_normalize(simd_quatf(from: from, to: to))
+    }
+
+    /// The part of `rotation` that turns about `axis` (swing–twist
+    /// decomposition, twist first).
+    public static func twist(of rotation: simd_quatf, about axis: simd_float3) -> simd_quatf {
+        let projected = simd_dot(rotation.imag, axis) * axis
+        let twist = simd_quatf(ix: projected.x, iy: projected.y, iz: projected.z, r: rotation.real)
+        let length = twist.length
+        guard length > 1e-6 else { return simd_quatf(angle: 0, axis: axis) }
+        return twist / length
     }
 
     /// The rotation reflected across the x = 0 plane: the axis loses its x

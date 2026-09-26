@@ -90,6 +90,7 @@ final class MirrorControls {
     var mocapMirror = true { didSet { pushMocapOptions() } }
     var mocapFlipFacing = false { didSet { pushMocapOptions() } }
     var mocapRootMotion = true { didSet { pushMocapOptions() } }
+    var mocapGroundLock = true { didSet { pushMocapOptions() } }
     var mocapWeight: Double = 1 { didSet { pushMocapOptions() } }
     var mocapBodySmoothing: Double = 0.4 { didSet { pushMocapOptions() } }
     var mocapLegSmoothing: Double = 0.6 { didSet { pushMocapOptions() } }
@@ -103,7 +104,7 @@ final class MirrorControls {
     func pushMocapOptions() {
         XRHolder.shared.game?.setMocapOptions(
             mirror: mocapMirror, flipFacing: mocapFlipFacing, weight: Float(mocapWeight), rootMotion: mocapRootMotion,
-            bodySmoothing: Float(mocapBodySmoothing), legSmoothing: Float(mocapLegSmoothing)
+            bodySmoothing: Float(mocapBodySmoothing), legSmoothing: Float(mocapLegSmoothing), groundLock: mocapGroundLock
         )
     }
 
@@ -259,13 +260,14 @@ struct CoolMirrorVisionOSXRApp: App {
                                     if let remaining = controls.calibrationCountdown {
                                         Text("Hold the pose… \(remaining)")
                                     } else {
-                                        Text(controls.mocapCalibrated ? "Recalibrate" : "Stand like the character, then tap")
+                                        Text(controls.mocapCalibrated ? "Recalibrate" : "Stand upright facing the phone, then tap")
                                     }
                                 }
                                 .disabled(controls.calibrationCountdown != nil)
                                 Toggle("Mirror", isOn: $controls.mocapMirror).toggleStyle(.button)
                                 Toggle("Flip", isOn: $controls.mocapFlipFacing).toggleStyle(.button)
                                 Toggle("Move", isOn: $controls.mocapRootMotion).toggleStyle(.button)
+                                Toggle("Ground", isOn: $controls.mocapGroundLock).toggleStyle(.button)
                             }
                         }
                         GridRow {
