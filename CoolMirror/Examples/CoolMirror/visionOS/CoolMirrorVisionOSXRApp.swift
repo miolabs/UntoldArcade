@@ -10,6 +10,7 @@
 
 import CompositorServices
 import CoolMirror
+import CoolMirrorMocap
 import SwiftUI
 import UntoldEngine
 import UntoldEngineXR
@@ -99,6 +100,8 @@ final class MirrorControls {
     }
     var mocapStatus = "off"
     var mocapCalibrated = false
+    var mocapFramed = false
+    var mocapPreview: MocapPreviewFrame?
     var calibrationCountdown: Int?
 
     func pushMocapOptions() {
@@ -112,6 +115,15 @@ final class MirrorControls {
         guard let game = XRHolder.shared.game else { return }
         mocapStatus = game.mocapStatus()
         mocapCalibrated = game.mocapIsCalibrated()
+        mocapFramed = game.mocapIsFramed()
+    }
+
+    func refreshMocapPreview() {
+        guard let game = XRHolder.shared.game else { return }
+        let preview = game.mocapPreview()
+        if preview?.id != mocapPreview?.id {
+            mocapPreview = preview
+        }
     }
 
     /// Three-second countdown so the user can settle into the character's
@@ -263,7 +275,7 @@ struct CoolMirrorVisionOSXRApp: App {
                                         Text(controls.mocapCalibrated ? "Recalibrate" : "Stand upright facing the phone, then tap")
                                     }
                                 }
-                                .disabled(controls.calibrationCountdown != nil)
+                                .disabled(controls.calibrationCountdown != nil || !controls.mocapFramed)
                                 Toggle("Mirror", isOn: $controls.mocapMirror).toggleStyle(.button)
                                 Toggle("Flip", isOn: $controls.mocapFlipFacing).toggleStyle(.button)
                                 Toggle("Move", isOn: $controls.mocapRootMotion).toggleStyle(.button)
@@ -351,6 +363,14 @@ struct CoolMirrorVisionOSXRApp: App {
                 }
 
                 if controls.mocapEnabled {
+                    MocapPreviewView(preview: controls.mocapPreview, framed: controls.mocapFramed)
+                        .frame(height: 180)
+                        .task {
+                            while !Task.isCancelled {
+                                controls.refreshMocapPreview()
+                                try? await Task.sleep(for: .milliseconds(100))
+                            }
+                        }
                     Text(controls.mocapStatus)
                         .font(.callout)
                         .multilineTextAlignment(.leading)
@@ -421,5 +441,46 @@ struct CoolMirrorVisionOSXRApp: App {
             }
         }
         .immersionStyle(selection: $immersionStyle, in: .mixed)
+    }
+}
+
+/// What the phone sees: its camera picture with the tracked skeleton, a
+/// green border when the whole body is inside, red when not.
+struct MocapPreviewView: View {
+    let preview: MocapPreviewFrame?
+    let framed: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                if let preview, let image = UIImage(data: preview.jpeg) {
+                    let scale = min(geometry.size.width / CGFloat(preview.width), geometry.size.height / CGFloat(preview.height))
+                    let size = CGSize(width: CGFloat(preview.width) * scale, height: CGFloat(preview.height) * scale)
+                    Image(uiImage: image)
+                        .resizable()
+                        .frame(width: size.width, height: size.height)
+                        .overlay {
+                            Canvas { context, _ in
+                                for joint in MocapJoint.allCases {
+                                    guard let parent = joint.parent, let a = preview.keypoints[parent], let b = preview.keypoints[joint] else { continue }
+                                    var path = Path()
+                                    path.move(to: CGPoint(x: CGFloat(a.x) * scale, y: CGFloat(a.y) * scale))
+                                    path.addLine(to: CGPoint(x: CGFloat(b.x) * scale, y: CGFloat(b.y) * scale))
+                                    context.stroke(path, with: .color(.orange), lineWidth: 2)
+                                }
+                            }
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(framed ? Color.green : Color.red, lineWidth: 3)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                } else {
+                    ContentUnavailableView("No picture from the iPhone yet", systemImage: "iphone.slash")
+                        .font(.footnote)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
     }
 }

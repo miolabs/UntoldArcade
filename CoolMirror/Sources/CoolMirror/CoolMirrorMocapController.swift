@@ -115,6 +115,45 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         }
     }
 
+    /// Joints the phone must actually see before the pose is trustworthy
+    /// and calibration makes sense.
+    static let framingJoints: [MocapJoint] = [.head, .leftHand, .rightHand, .leftFoot, .rightFoot]
+
+    /// Whether the phone sees the whole body (head, hands and feet tracked,
+    /// not inferred) in the newest frame.
+    var isFramed: Bool {
+        guard let frame = receiver.latestFrame, frame.isTracked, (receiver.secondsSinceLastFrame ?? .infinity) < 1 else { return false }
+        return Self.framingJoints.allSatisfy { frame.trackedJoints.contains($0) }
+    }
+
+    /// What to change so the whole body is in the picture, or nil when it is.
+    var framingHint: String? {
+        guard let frame = receiver.latestFrame, frame.isTracked else { return nil }
+        let missing = Set(Self.framingJoints.filter { !frame.trackedJoints.contains($0) })
+        guard !missing.isEmpty else { return nil }
+        let head = missing.contains(.head)
+        let feet = !missing.isDisjoint(with: [.leftFoot, .rightFoot])
+        let hands = !missing.isDisjoint(with: [.leftHand, .rightHand])
+        if head, feet {
+            return "Head and feet out of the picture: step back from the phone."
+        }
+        if head {
+            return "Head out of the picture: step back, or tilt the phone up."
+        }
+        if feet {
+            return "Feet out of the picture: step back, or tilt the phone down."
+        }
+        if hands {
+            return "Hands out of the picture: keep them inside the frame."
+        }
+        return nil
+    }
+
+    /// Newest camera preview from the phone.
+    var preview: MocapPreviewFrame? {
+        receiver.latestPreview
+    }
+
     /// Raw per-frame motion of the capture (see `MocapJitterMeter`).
     var jitterReport: String {
         lock.withLock { jitter.report }
@@ -139,8 +178,11 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         if pending {
             return "Hold still… capturing your pose as the character's rest pose."
         }
+        if let hint = framingHint {
+            return "3 · \(hint) The picture above shows what the phone sees; the whole body must be inside it, or the tracker guesses and flips."
+        }
         if !calibrated {
-            return "3 · Body tracked (\(receiver.framesPerSecond) Hz). Stand upright facing the phone, look at it, arms relaxed, then tap Calibrate and hold still."
+            return "4 · Whole body in view (\(receiver.framesPerSecond) Hz). Stand upright facing the phone, look at it, arms relaxed, then tap Calibrate and hold still."
         }
         let seen = receiver.latestFrame.map { "\($0.trackedJoints.count)/\($0.rotations.count) joints seen" } ?? ""
         if driving {

@@ -5,7 +5,9 @@
 
 import ARKit
 import CoolMirrorMocap
+import CoreImage
 import Foundation
+import ImageIO
 import Observation
 import simd
 import UIKit
@@ -46,6 +48,13 @@ final class CaptureSession: NSObject {
 
     let session = ARSession()
     private let sender = MocapSender()
+    /// Camera preview for the headset: this wide, this often.
+    private static let previewWidth: CGFloat = 320
+    private static let previewInterval: TimeInterval = 0.1
+    private let previewContext = CIContext(options: [.cacheIntermediates: false])
+    private var lastPreviewTime: TimeInterval = 0
+    private var previewId: UInt32 = 0
+    private var latestBody: ARBodyAnchor?
     private var sentTimes: [TimeInterval] = []
     private var statusTimer: Timer?
     private var jitter = MocapJitterMeter()
@@ -148,6 +157,42 @@ final class CaptureSession: NSObject {
         )
     }
 
+    /// Encodes and sends the small camera picture with the joints in it.
+    private func sendPreview(for frame: ARFrame) {
+        let now = frame.timestamp
+        guard now - lastPreviewTime >= Self.previewInterval else { return }
+        lastPreviewTime = now
+        var image = CIImage(cvPixelBuffer: frame.capturedImage)
+        // The buffer is in the camera's native landscape (home button on
+        // the right); the other landscape is the same picture upside down.
+        if interfaceOrientation == .landscapeLeft {
+            image = image.oriented(.down)
+        }
+        let scale = Self.previewWidth / image.extent.width
+        image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        image = image.transformed(by: CGAffineTransform(translationX: -image.extent.origin.x, y: -image.extent.origin.y))
+        let size = CGSize(width: image.extent.width.rounded(), height: image.extent.height.rounded())
+        guard let jpeg = previewContext.jpegRepresentation(
+            of: image, colorSpace: CGColorSpaceCreateDeviceRGB(),
+            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.4]
+        ) else { return }
+        var keypoints: [MocapJoint: SIMD2<Float>] = [:]
+        if let body = latestBody, body.isTracked {
+            let mocap = Self.frame(from: body, timestamp: now)
+            for (joint, position) in mocap.positions {
+                let world = body.transform * simd_float4(position, 1)
+                let point = frame.camera.projectPoint(simd_float3(world.x, world.y, world.z), orientation: interfaceOrientation, viewportSize: size)
+                if point.x.isFinite, point.y.isFinite {
+                    keypoints[joint] = SIMD2(Float(point.x), Float(point.y))
+                }
+            }
+        }
+        previewId &+= 1
+        sender.send(MocapPreviewFrame(
+            id: previewId, width: UInt16(size.width), height: UInt16(size.height), jpeg: jpeg, keypoints: keypoints
+        ))
+    }
+
     /// Projects the body's joints into the preview for the overlay.
     private func updateOverlay(camera: ARCamera, body: ARBodyAnchor, frame: MocapFrame) {
         guard showSkeleton, viewportSize.width > 0 else {
@@ -175,6 +220,7 @@ extension CaptureSession: ARSessionDelegate {
         let timestamp = Date().timeIntervalSinceReferenceDate
         var frame = Self.frame(from: body, timestamp: timestamp)
         Task { @MainActor in
+            self.latestBody = body
             self.isTracked = body.isTracked
             self.trackedJointCount = frame.trackedJoints.count
             self.sender.send(frame)
@@ -187,6 +233,10 @@ extension CaptureSession: ARSessionDelegate {
                 self.updateOverlay(camera: camera, body: body, frame: frame)
             }
         }
+    }
+
+    nonisolated func session(_: ARSession, didUpdate frame: ARFrame) {
+        Task { @MainActor in self.sendPreview(for: frame) }
     }
 
     nonisolated func session(_: ARSession, didFailWithError error: Error) {

@@ -306,6 +306,26 @@ final class MocapTests: XCTestCase {
         XCTAssertEqual(filter.rejectedFrames, 0)
     }
 
+    func testPreviewFramesSplitIntoChunksAndReassemble() throws {
+        let jpeg = Data((0 ..< 3000).map { UInt8($0 % 251) })
+        let preview = MocapPreviewFrame(id: 7, width: 320, height: 180, jpeg: jpeg, keypoints: [.head: SIMD2(160, 20), .leftFoot: SIMD2(150, 170)])
+        let chunks = preview.chunks()
+        XCTAssertEqual(chunks.count, 3, "22 B of keypoints + 3000 B of picture at 1200 B per chunk")
+        XCTAssertTrue(chunks.allSatisfy(MocapPreviewFrame.isChunk))
+        XCTAssertFalse(MocapPreviewFrame.isChunk(frame(rotations: [:]).encode()))
+
+        var assembler = MocapPreviewAssembler()
+        // Out of order, with a stray chunk of an older frame in between.
+        XCTAssertNil(assembler.add(chunks[2]))
+        var old = MocapPreviewFrame(id: 6, width: 320, height: 180, jpeg: Data([1, 2, 3]), keypoints: [:])
+        old.id = 6
+        XCTAssertNil(assembler.add(old.chunks()[0]))
+        XCTAssertNil(assembler.add(chunks[0]))
+        let decoded = try XCTUnwrap(assembler.add(chunks[1]))
+        XCTAssertEqual(decoded, preview)
+        XCTAssertEqual(decoded.keypoints[.leftFoot], SIMD2(150, 170))
+    }
+
     func testSwingAndTwistDecomposition() {
         let axis = simd_normalize(simd_float3(1, 2, 0))
         let twist = simd_quatf(angle: 0.7, axis: axis)

@@ -16,6 +16,8 @@ public final class MocapReceiver: @unchecked Sendable {
     private var listener: NWListener?
     private var connections: [NWConnection] = []
     private var latest: MocapFrame?
+    private var latestPreviewFrame: MocapPreviewFrame?
+    private var previewAssembler = MocapPreviewAssembler()
     private var frameTimes: [TimeInterval] = []
     private var lastFrameTime: TimeInterval?
     private var statusText = "stopped"
@@ -26,6 +28,11 @@ public final class MocapReceiver: @unchecked Sendable {
     /// Newest decoded frame, or nil before the first one.
     public var latestFrame: MocapFrame? {
         lock.withLock { latest }
+    }
+
+    /// Newest complete camera preview, or nil before the first one.
+    public var latestPreview: MocapPreviewFrame? {
+        lock.withLock { latestPreviewFrame }
     }
 
     /// Frames received during the last second.
@@ -99,6 +106,8 @@ public final class MocapReceiver: @unchecked Sendable {
         connections.removeAll()
         lock.withLock {
             latest = nil
+            latestPreviewFrame = nil
+            previewAssembler = MocapPreviewAssembler()
             frameTimes.removeAll()
             lastFrameTime = nil
             peer = nil
@@ -134,7 +143,13 @@ public final class MocapReceiver: @unchecked Sendable {
     private func receive(on connection: NWConnection) {
         connection.receiveMessage { [weak self, weak connection] data, _, _, error in
             guard let self, let connection else { return }
-            if let data, let frame = MocapFrame(data: data) {
+            if let data, MocapPreviewFrame.isChunk(data) {
+                self.lock.withLock {
+                    if let preview = self.previewAssembler.add(data) {
+                        self.latestPreviewFrame = preview
+                    }
+                }
+            } else if let data, let frame = MocapFrame(data: data) {
                 self.lock.withLock {
                     if self.latest == nil || frame.sequence >= (self.latest?.sequence ?? 0) || frame.sequence < 16 {
                         self.latest = frame
@@ -238,5 +253,13 @@ public final class MocapSender: @unchecked Sendable {
             return sequence
         }
         connection.send(content: stamped.encode(), completion: .contentProcessed { _ in })
+    }
+
+    /// Sends a camera preview, one datagram per chunk.
+    public func send(_ preview: MocapPreviewFrame) {
+        guard let connection, isConnected else { return }
+        for chunk in preview.chunks() {
+            connection.send(content: chunk, completion: .contentProcessed { _ in })
+        }
     }
 }

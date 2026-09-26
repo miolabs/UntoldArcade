@@ -223,6 +223,17 @@ public final class CoolMirrorGame {
         mocap.isCalibrated
     }
 
+    /// Whether the phone sees the whole body (calibrate only then).
+    public func mocapIsFramed() -> Bool {
+        mocap.isFramed
+    }
+
+    /// The phone's camera picture with the tracked joints, a few times a
+    /// second, so the wearer can check the framing.
+    public func mocapPreview() -> MocapPreviewFrame? {
+        mocap.preview
+    }
+
     private func applyMocapPause() {
         guard let characterId else { return }
         // Mocap needs a frozen base pose; otherwise the user's pause choice.
