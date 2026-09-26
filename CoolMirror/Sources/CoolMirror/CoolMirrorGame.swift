@@ -224,6 +224,13 @@ public final class CoolMirrorGame {
         mocap.isCalibrated
     }
 
+    /// Drives the character's head from the headset's own orientation
+    /// (the phone cannot see the head under the Vision Pro). The provider
+    /// runs on the render thread every frame; nil goes back to the neck.
+    public func setMocapHeadPoseProvider(_ provider: (@Sendable () -> simd_quatf?)?) {
+        mocap.setHeadPoseProvider(provider)
+    }
+
     /// Whether an iPhone is connected to the mirror.
     public func mocapIsConnected() -> Bool {
         mocap.isConnected

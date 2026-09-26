@@ -66,6 +66,11 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     private var jitter = MocapJitterMeter()
     private var debugOverlay = false
     private var debugLinesShown = false
+    /// The headset's own orientation (world), read every update: it drives
+    /// the character's head, the one joint the phone cannot see under the
+    /// Vision Pro.
+    private var headPoseProvider: (@Sendable () -> simd_quatf?)?
+    private var headReference: simd_quatf?
     private var groundLock = true
     private var groundCorrection: Float = 0
     /// Rest height of every ankle and toe joint, by rig joint name.
@@ -97,6 +102,15 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     var isDebugOverlayEnabled: Bool {
         get { lock.withLock { debugOverlay } }
         set { lock.withLock { debugOverlay = newValue } }
+    }
+
+    /// Supplies the headset's world orientation; the head then follows the
+    /// wearer's head (mirrored like the rest) instead of riding on the neck.
+    func setHeadPoseProvider(_ provider: (@Sendable () -> simd_quatf?)?) {
+        lock.withLock {
+            headPoseProvider = provider
+            headReference = nil
+        }
     }
 
     /// Keeps the character's lowest foot on the floor: the root translation
@@ -328,10 +342,19 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             defer { pendingCalibration = false }
             return pendingCalibration
         }
+        let headPose = lock.withLock { headPoseProvider }?()
         if calibrate {
             retargeter.calibrate(with: smoothed)
+            lock.withLock { headReference = headPose }
         }
         guard var result = retargeter.retarget(smoothed) else { return }
+        if let headPose, let reference = lock.withLock({ headReference }),
+           let headJoint = retargeter.mapping.joints[.head]
+        {
+            result.worldRotationDeltas[headJoint] = Self.headDelta(
+                pose: headPose, reference: reference, characterId: characterId, options: retargeter.options
+            )
+        }
         result.rootTranslationDelta = grounded(result, characterId: characterId, origin: origin, time: time)
         setEntityExternalPose(
             entityId: characterId,
@@ -347,6 +370,25 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         } else {
             hideDebugLines()
         }
+    }
+
+    // MARK: - Head from the headset
+
+    /// The headset's rotation since calibration, brought into the
+    /// character's model space (the entity is turned to face the wearer),
+    /// then mirrored and flipped like the captured joints.
+    static func headDelta(pose: simd_quatf, reference: simd_quatf, characterId: EntityID, options: MocapRetargetOptions) -> simd_quatf {
+        let world = simd_normalize(pose * reference.inverse)
+        let entity = getRotationQuaternion(entityId: characterId)
+        var delta = simd_normalize(entity.inverse * world * entity)
+        if options.mirror {
+            delta = MocapRetargeter.reflectAcrossSagittalPlane(delta)
+        }
+        if options.flipFacing {
+            let facing = simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0))
+            delta = simd_normalize(facing * delta * facing.inverse)
+        }
+        return delta
     }
 
     // MARK: - Ground lock

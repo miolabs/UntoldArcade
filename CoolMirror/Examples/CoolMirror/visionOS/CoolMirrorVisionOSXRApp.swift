@@ -440,6 +440,10 @@ struct CoolMirrorVisionOSXRApp: App {
                     gameUpdate: { dt in game.update(deltaTime: dt) },
                     handleInput: { game.handleInput() }
                 )
+                // The wearer's head comes from the headset itself.
+                game.setMocapHeadPoseProvider { [weak xr] in
+                    xr?.currentDevicePose.map { simd_quatf($0) }
+                }
 
                 let t = Thread {
                     xr.start()
