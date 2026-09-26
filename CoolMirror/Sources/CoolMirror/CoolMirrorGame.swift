@@ -147,7 +147,7 @@ public final class CoolMirrorGame {
             setEntityMuscleRig(entityId: characterId, rig: CoolMirrorMuscles.rig(for: newCharacter))
             self.applyClip()
             self.applySkinningPath()
-            self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter))
+            self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter), origin: self.characterPosition)
             self.applyMocapPause()
             self.onCharacterReady?()
         }
@@ -186,13 +186,32 @@ public final class CoolMirrorGame {
         mocap.requestCalibration()
     }
 
-    public func setMocapOptions(mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool) {
+    /// `bodySmoothing` and `legSmoothing` go from 0 (raw tracker, shaky)
+    /// to 1 (very steady, laggy); the legs setting also steadies the hips
+    /// and where the character stands.
+    public func setMocapOptions(
+        mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
+        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6
+    ) {
         var options = MocapRetargetOptions()
         options.mirror = mirror
         options.flipFacing = flipFacing
         options.weight = weight
         options.rootTranslationScale = rootMotion ? 1 : 0
+        options.smoothing.bodyCutoff = Self.smoothingCutoff(bodySmoothing)
+        options.smoothing.legCutoff = Self.smoothingCutoff(legSmoothing)
+        options.smoothing.rootCutoff = options.smoothing.legCutoff * 0.6
         mocap.options = options
+    }
+
+    /// 0 → 8 Hz (hardly any smoothing), 1 → 0.24 Hz, exponential in between.
+    static func smoothingCutoff(_ amount: Float) -> Float {
+        8 * powf(0.03, min(max(amount, 0), 1))
+    }
+
+    /// Draws the captured skeleton and the rig bones over the character.
+    public func setMocapDebugOverlay(_ enabled: Bool) {
+        mocap.isDebugOverlayEnabled = enabled
     }
 
     public func mocapStatus() -> String {

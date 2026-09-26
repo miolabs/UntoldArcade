@@ -44,17 +44,22 @@ enum CoolMirrorMocapMapping {
 final class CoolMirrorMocapController: @unchecked Sendable {
     /// Frames older than this stop driving the character (the phone left).
     private static let staleInterval: TimeInterval = 1.0
+    private static let debugLinesName = "coolmirror.mocap"
 
     private let receiver = MocapReceiver()
     private let lock = NSLock()
     private var retargeter: MocapRetargeter?
     private var characterId: EntityID?
+    private var characterOrigin = simd_float3(0, 0, 0)
     private var enabled = false
     private var pendingCalibration = false
     private var lastSequence: UInt32?
     private var lastFrameDate = Date.distantPast
     private var driving = false
     private var storedOptions = MocapRetargetOptions()
+    private var jitter = MocapJitterMeter()
+    private var debugOverlay = false
+    private var debugLinesShown = false
 
     var options: MocapRetargetOptions {
         get { lock.withLock { storedOptions } }
@@ -72,6 +77,18 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     var isCalibrated: Bool {
         lock.withLock { retargeter?.isCalibrated ?? false }
+    }
+
+    /// Draws the captured skeleton (orange, red bones where ARKit lost the
+    /// joint) and the character's rig bones (cyan) as lines in the world.
+    var isDebugOverlayEnabled: Bool {
+        get { lock.withLock { debugOverlay } }
+        set { lock.withLock { debugOverlay = newValue } }
+    }
+
+    /// Raw per-frame motion of the capture (see `MocapJitterMeter`).
+    var jitterReport: String {
+        lock.withLock { jitter.report }
     }
 
     /// Setup guidance for the person wearing the headset (the phone's screen
@@ -96,15 +113,19 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         if !calibrated {
             return "3 · Body tracked (\(receiver.framesPerSecond) Hz). Stand like the character (arms as shown), then tap Calibrate and hold the pose."
         }
+        let seen = receiver.latestFrame.map { "\($0.trackedJoints.count)/\($0.rotations.count) joints seen" } ?? ""
         if driving {
-            return "Mirroring you at \(receiver.framesPerSecond) Hz. Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time."
+            return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport) (stand still to read the tracker noise)"
         }
         return "Body tracked (\(receiver.framesPerSecond) Hz), waiting for the next frame…"
     }
 
-    func setCharacter(_ id: EntityID?, mapping: MocapRigMapping?) {
+    /// `origin` is where the character's rest pose stands in the world (the
+    /// captured skeleton is drawn relative to it).
+    func setCharacter(_ id: EntityID?, mapping: MocapRigMapping?, origin: simd_float3 = .zero) {
         lock.withLock {
             characterId = id
+            characterOrigin = origin
             if let mapping {
                 let retargeter = MocapRetargeter(mapping: mapping)
                 retargeter.options = storedOptions
@@ -113,7 +134,9 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 retargeter = nil
             }
             driving = false
+            jitter.reset()
         }
+        hideDebugLines()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -129,7 +152,12 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             if let characterId {
                 clearEntityExternalPose(entityId: characterId)
             }
-            lock.withLock { driving = false }
+            lock.withLock {
+                driving = false
+                retargeter?.resetSmoothing()
+                jitter.reset()
+            }
+            hideDebugLines()
         }
     }
 
@@ -137,38 +165,49 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         lock.withLock { pendingCalibration = true }
     }
 
-    /// Render-thread step: retargets the newest frame onto the character.
+    /// Render-thread step: smooths the newest frame toward the current time
+    /// and retargets it onto the character. Runs every render tick, so the
+    /// filter also interpolates between the phone's frames.
     func update() {
-        let (enabled, characterId, retargeter) = lock.withLock { (self.enabled, self.characterId, self.retargeter) }
+        let (enabled, characterId, retargeter, origin) = lock.withLock {
+            (self.enabled, self.characterId, self.retargeter, characterOrigin)
+        }
         guard enabled, let characterId, let retargeter else { return }
         guard let frame = receiver.latestFrame else { return }
 
         let now = Date()
+        let time = now.timeIntervalSinceReferenceDate
         let isNew = lock.withLock { () -> Bool in
             guard frame.sequence != lastSequence else { return false }
             lastSequence = frame.sequence
             lastFrameDate = now
+            jitter.add(frame, at: time)
             return true
         }
         if !isNew {
             // The phone went quiet: release the character after a moment.
-            let stale = lock.withLock { now.timeIntervalSince(lastFrameDate) > Self.staleInterval && driving }
+            let stale = lock.withLock { now.timeIntervalSince(lastFrameDate) > Self.staleInterval }
             if stale {
-                clearEntityExternalPose(entityId: characterId)
-                lock.withLock { driving = false }
+                let wasDriving = lock.withLock { driving }
+                if wasDriving {
+                    clearEntityExternalPose(entityId: characterId)
+                    lock.withLock { driving = false }
+                }
+                hideDebugLines()
+                return
             }
-            return
         }
         guard frame.isTracked else { return }
 
+        let smoothed = retargeter.smoothed(frame, at: time)
         let calibrate = lock.withLock { () -> Bool in
             defer { pendingCalibration = false }
             return pendingCalibration
         }
         if calibrate {
-            retargeter.calibrate(with: frame)
+            retargeter.calibrate(with: smoothed)
         }
-        guard let result = retargeter.retarget(frame) else { return }
+        guard let result = retargeter.retarget(smoothed) else { return }
         setEntityExternalPose(
             entityId: characterId,
             worldRotationDeltas: result.worldRotationDeltas,
@@ -177,5 +216,42 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             weight: retargeter.options.weight
         )
         lock.withLock { driving = true }
+
+        if lock.withLock({ debugOverlay }) {
+            showDebugLines(result: result, characterId: characterId, origin: origin)
+        } else {
+            hideDebugLines()
+        }
+    }
+
+    // MARK: - Debug overlay
+
+    private func showDebugLines(result: MocapRetargetResult, characterId: EntityID, origin: simd_float3) {
+        var segments: [DebugLineSegment] = []
+        let captured = simd_float4(1.0, 0.6, 0.1, 1)
+        let lost = simd_float4(1.0, 0.15, 0.15, 1)
+        for (joint, position) in result.capturedJointPositions.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            guard let parent = joint.parent, let parentPosition = result.capturedJointPositions[parent] else { continue }
+            let color = result.capturedTrackedJoints.isEmpty || result.capturedTrackedJoints.contains(joint) ? captured : lost
+            segments.append(DebugLineSegment(from: origin + parentPosition, to: origin + position, color: color))
+        }
+        let rig = simd_float4(0.2, 0.9, 1.0, 1)
+        let joints = entitySkeletonJointPoses(entityId: characterId)
+        for joint in joints {
+            guard let parentIndex = joint.parentIndex, parentIndex < joints.count else { continue }
+            segments.append(DebugLineSegment(from: joints[parentIndex].worldPosition, to: joint.worldPosition, color: rig))
+        }
+        setDebugLines(segments, named: Self.debugLinesName)
+        lock.withLock { debugLinesShown = true }
+    }
+
+    private func hideDebugLines() {
+        let shown = lock.withLock { () -> Bool in
+            defer { debugLinesShown = false }
+            return debugLinesShown
+        }
+        if shown {
+            clearDebugLines(named: Self.debugLinesName)
+        }
     }
 }

@@ -34,6 +34,8 @@ public struct MocapRetargetOptions: Sendable, Equatable {
     public var weight: Float = 1
     /// Scale of the root translation (0 keeps the character in place).
     public var rootTranslationScale: Float = 1
+    /// Temporal smoothing applied by `smoothed(_:at:)`.
+    public var smoothing = MocapSmoothingOptions()
 
     public init() {}
 }
@@ -42,6 +44,12 @@ public struct MocapRetargetResult: Sendable {
     public var worldRotationDeltas: [String: simd_quatf]
     public var rootTranslationDelta: simd_float3
     public var rootJoint: String
+    /// The captured skeleton's joint positions relative to the calibration
+    /// spot, in the character's model space (mirrored and flipped like the
+    /// rotations): the character's rest origin plus these is where the
+    /// captured body stands. Empty when the frame carries no positions.
+    public var capturedJointPositions: [MocapJoint: simd_float3]
+    public var capturedTrackedJoints: Set<MocapJoint>
 }
 
 /// Retargets frames relative to a calibration pose captured while the user
@@ -53,6 +61,7 @@ public final class MocapRetargeter: @unchecked Sendable {
     private var calibrationRotations: [MocapJoint: simd_quatf] = [:]
     private var calibrationRootPosition = simd_float3(0, 0, 0)
     private var calibrationRootRotation = simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+    private var filter = MocapPoseFilter()
     private let lock = NSLock()
 
     public init(mapping: MocapRigMapping) {
@@ -74,6 +83,18 @@ public final class MocapRetargeter: @unchecked Sendable {
 
     public func resetCalibration() {
         lock.withLock { calibrationRotations.removeAll() }
+    }
+
+    /// `frame` smoothed against the frames fed before it (see
+    /// `MocapPoseFilter`); call once per render tick with the newest frame,
+    /// then retarget the result.
+    public func smoothed(_ frame: MocapFrame, at time: TimeInterval) -> MocapFrame {
+        let options = options.smoothing
+        return lock.withLock { filter.filter(frame, at: time, options: options) }
+    }
+
+    public func resetSmoothing() {
+        lock.withLock { filter.reset() }
     }
 
     /// Nil until calibrated.
@@ -113,7 +134,25 @@ public final class MocapRetargeter: @unchecked Sendable {
         }
         translation *= options.rootTranslationScale
 
-        return MocapRetargetResult(worldRotationDeltas: deltas, rootTranslationDelta: translation, rootJoint: mapping.rootJoint)
+        // The captured skeleton in the same space as the translation: anchor
+        // space → world → calibrated body frame, then mirrored and flipped.
+        let anchorRotation = frame.rotations[.root] ?? calibrationRoot
+        var captured: [MocapJoint: simd_float3] = [:]
+        for (joint, position) in frame.positions {
+            var p = calibrationRoot.inverse.act(anchorRotation.act(position) + frame.rootPosition - calibrationPosition)
+            if options.mirror {
+                p.x = -p.x
+            }
+            if let facing {
+                p = facing.act(p)
+            }
+            captured[joint] = p
+        }
+
+        return MocapRetargetResult(
+            worldRotationDeltas: deltas, rootTranslationDelta: translation, rootJoint: mapping.rootJoint,
+            capturedJointPositions: captured, capturedTrackedJoints: frame.trackedJoints
+        )
     }
 
     /// The rotation reflected across the x = 0 plane: the axis loses its x

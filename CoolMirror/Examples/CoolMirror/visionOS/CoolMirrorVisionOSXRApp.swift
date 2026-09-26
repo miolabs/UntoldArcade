@@ -91,13 +91,19 @@ final class MirrorControls {
     var mocapFlipFacing = false { didSet { pushMocapOptions() } }
     var mocapRootMotion = true { didSet { pushMocapOptions() } }
     var mocapWeight: Double = 1 { didSet { pushMocapOptions() } }
+    var mocapBodySmoothing: Double = 0.4 { didSet { pushMocapOptions() } }
+    var mocapLegSmoothing: Double = 0.6 { didSet { pushMocapOptions() } }
+    var mocapDebugOverlay = false {
+        didSet { XRHolder.shared.game?.setMocapDebugOverlay(mocapDebugOverlay) }
+    }
     var mocapStatus = "off"
     var mocapCalibrated = false
     var calibrationCountdown: Int?
 
     func pushMocapOptions() {
         XRHolder.shared.game?.setMocapOptions(
-            mirror: mocapMirror, flipFacing: mocapFlipFacing, weight: Float(mocapWeight), rootMotion: mocapRootMotion
+            mirror: mocapMirror, flipFacing: mocapFlipFacing, weight: Float(mocapWeight), rootMotion: mocapRootMotion,
+            bodySmoothing: Float(mocapBodySmoothing), legSmoothing: Float(mocapLegSmoothing)
         )
     }
 
@@ -148,6 +154,7 @@ final class MirrorControls {
         guard let game = XRHolder.shared.game else { return }
         pushMocapOptions()
         game.setMocapEnabled(mocapEnabled)
+        game.setMocapDebugOverlay(mocapDebugOverlay)
         morphNames = game.morphTargetNames()
         muscleNames = game.muscleNames()
         hasMLDeformer = game.hasMLDeformer()
@@ -264,6 +271,17 @@ struct CoolMirrorVisionOSXRApp: App {
                         GridRow {
                             Text("Mocap blend")
                             Slider(value: $controls.mocapWeight, in: 0 ... 1)
+                        }
+                        GridRow {
+                            Text("Smooth body")
+                            Slider(value: $controls.mocapBodySmoothing, in: 0 ... 1)
+                        }
+                        GridRow {
+                            Text("Smooth legs")
+                            HStack {
+                                Slider(value: $controls.mocapLegSmoothing, in: 0 ... 1)
+                                Toggle("Skeleton", isOn: $controls.mocapDebugOverlay).toggleStyle(.button)
+                            }
                         }
                     }
                     GridRow {

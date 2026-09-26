@@ -8,6 +8,7 @@
 //  character in front of you like a mirror.
 //
 
+import CoolMirrorMocap
 import SwiftUI
 
 @main
@@ -27,6 +28,12 @@ struct ContentView: View {
             if CaptureSession.isSupported {
                 BodyTrackingView(session: capture)
                     .ignoresSafeArea()
+                    .overlay {
+                        if capture.showSkeleton {
+                            SkeletonOverlay(points: capture.overlayPoints, tracked: capture.overlayTracked)
+                                .ignoresSafeArea()
+                        }
+                    }
             } else {
                 ContentUnavailableView(
                     "Body tracking not supported",
@@ -36,11 +43,16 @@ struct ContentView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Label(capture.isTracked ? "Body tracked" : "Phone sideways, 3–4 m away, whole body in view", systemImage: capture.isTracked ? "figure.stand" : "figure.walk.motion")
-                    .font(.headline)
-                Text(capture.status)
+                HStack {
+                    Label(capture.isTracked ? "Body tracked (\(capture.trackedJointCount)/\(MocapJoint.allCases.count) joints seen)" : "Phone sideways, 3–4 m away, whole body in view", systemImage: capture.isTracked ? "figure.stand" : "figure.walk.motion")
+                        .font(.headline)
+                    Spacer()
+                    Toggle("Skeleton", isOn: $capture.showSkeleton)
+                        .toggleStyle(.button)
+                }
+                Text("\(capture.status) · \(capture.videoFormat)")
                     .font(.footnote)
-                Text("\(capture.framesPerSecond) frames/s sent")
+                Text("\(capture.framesPerSecond) frames/s sent · \(capture.jitterReport)")
                     .font(.footnote.monospacedDigit())
             }
             .padding(14)

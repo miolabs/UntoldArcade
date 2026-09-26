@@ -1,5 +1,5 @@
 {
-  "originHash" : "6c91af501a6bd0ac32357ed4ac35b05652134cf2808eed852dcb01bbf0a46818",
+  "originHash" : "efb9f50dd104d88ef9d0cc12e27f8ecaacb5c14cfb9c8a585a651ad3368795d6",
   "pins" : [
     {
       "identity" : "untoldengine",
@@ -7,7 +7,7 @@
       "location" : "https://github.com/miolabs/UntoldEngine.git",
       "state" : {
         "branch" : "feature/mirror_mocap",
-        "revision" : "7472196a1a30106dd1b4ced2995a2303027813dc"
+        "revision" : "9e6c8569d31f5b47bc0b000341c8fa528c8279f6"
       }
     }
   ],

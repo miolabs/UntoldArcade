@@ -24,9 +24,11 @@ final class MocapTests: XCTestCase {
     }
 
     func testFrameRoundTripsThroughTheWireFormat() throws {
-        let original = frame(sequence: 42, rotations: [.leftArm: simd_quatf(angle: 0.4, axis: simd_float3(0, 0, 1))], root: simd_float3(0.1, 1.2, -0.3))
+        var original = frame(sequence: 42, rotations: [.leftArm: simd_quatf(angle: 0.4, axis: simd_float3(0, 0, 1))], root: simd_float3(0.1, 1.2, -0.3))
+        original.positions = [.leftFoot: simd_float3(0.1, 0.05, 0), .hips: simd_float3(0, 0.9, 0)]
+        original.trackedJoints = [.hips, .leftArm]
         let data = original.encode()
-        XCTAssertEqual(data.count, 36 + MocapJoint.allCases.count * 20)
+        XCTAssertEqual(data.count, MocapFrame.headerSize + MocapJoint.allCases.count * MocapFrame.jointRecordSize)
         let decoded = try XCTUnwrap(MocapFrame(data: data))
         XCTAssertEqual(decoded.sequence, 42)
         XCTAssertEqual(decoded.timestamp, 12.5)
@@ -34,8 +36,102 @@ final class MocapTests: XCTestCase {
         XCTAssertEqual(decoded.rootPosition, original.rootPosition)
         XCTAssertEqual(decoded.rotations.count, MocapJoint.allCases.count)
         assertEqual(decoded.rotations[.leftArm]!, original.rotations[.leftArm]!)
+        XCTAssertEqual(decoded.positions[.leftFoot], original.positions[.leftFoot])
+        XCTAssertEqual(decoded.positions[.head], .zero, "joints sent without a position decode as the origin")
+        XCTAssertEqual(decoded.trackedJoints, [.hips, .leftArm])
         XCTAssertNil(MocapFrame(data: data.prefix(20)))
         XCTAssertNil(MocapFrame(data: Data([1, 2, 3, 4])))
+    }
+
+    func testEveryJointButTheRootHasAParentInTheSet() {
+        for joint in MocapJoint.allCases {
+            if joint == .root {
+                XCTAssertNil(joint.parent)
+            } else {
+                XCTAssertNotNil(joint.parent, "\(joint)")
+            }
+        }
+        XCTAssertEqual(MocapJoint.leftToes.parent, .leftFoot)
+        XCTAssertEqual(MocapJoint.rightShoulder.parent, .spine7)
+        XCTAssertTrue(MocapJoint.rightFoot.isLowerBody)
+        XCTAssertFalse(MocapJoint.leftHand.isLowerBody)
+    }
+
+    /// Standing still with tracker noise on the feet, the filter removes
+    /// most of it; a fast arm swing still gets through almost unlagged.
+    func testFilterSteadiesNoiseButFollowsFastMotion() {
+        var filter = MocapPoseFilter()
+        var options = MocapSmoothingOptions()
+        options.legCutoff = 1
+        options.bodyCutoff = 2
+        var generator = SystemRandomNumberGenerator()
+        var lastFoot = simd_float3.zero
+        var lastArm = simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        let dt = 1.0 / 60
+        let rest = simd_float3(0.1, 0.05, 0)
+        var footError: Float = 0
+        var count: Float = 0
+        for i in 0 ..< 240 {
+            let time = Double(i) * dt
+            let noise = simd_float3(
+                Float.random(in: -0.02 ... 0.02, using: &generator),
+                Float.random(in: -0.02 ... 0.02, using: &generator),
+                Float.random(in: -0.02 ... 0.02, using: &generator)
+            )
+            // The arm swings 90° over the last second.
+            let swing = Float(max(0, i - 180)) / 60 * (.pi / 2)
+            var f = frame(sequence: UInt32(i + 1), rotations: [.leftArm: simd_quatf(angle: swing, axis: simd_float3(0, 0, 1))])
+            f.positions = [.leftFoot: rest + noise]
+            let out = filter.filter(f, at: time, options: options)
+            lastFoot = out.positions[.leftFoot] ?? .zero
+            lastArm = out.rotations[.leftArm] ?? lastArm
+            if i >= 120, i < 180 {
+                footError += simd_length(lastFoot - rest)
+                count += 1
+            }
+        }
+        XCTAssertLessThan(footError / count, 0.006, "2 cm noise on a still foot should shrink well below 1 cm")
+        XCTAssertLessThan(abs(simd_angle(lastArm) - .pi / 2), 0.15, "a fast swing lags by less than ~9°")
+    }
+
+    func testJitterMeterAveragesRawSteps() throws {
+        var meter = MocapJitterMeter()
+        XCTAssertNil(meter.average())
+        for i in 0 ..< 4 {
+            var f = frame(sequence: UInt32(i + 1), rotations: [:], root: simd_float3(Float(i) * 0.01, 0, 0))
+            f.positions = [.leftFoot: simd_float3(0, Float(i) * 0.02, 0), .rightFoot: .zero]
+            meter.add(f, at: Double(i) / 30)
+        }
+        let a = try XCTUnwrap(meter.average())
+        XCTAssertEqual(a.root, 0.01, accuracy: 1e-6)
+        XCTAssertEqual(a.feet, 0.01, accuracy: 1e-6, "mean over both feet, one of them still")
+        XCTAssertEqual(a.hips, 0, accuracy: 1e-6)
+        XCTAssertTrue(meter.report.contains("root 10 mm"))
+    }
+
+    func testCapturedPositionsFollowTheMirrorAndFacingOptions() throws {
+        let mapping = try XCTUnwrap(CoolMirrorMocapMapping.mapping(for: .spiderman))
+        let retargeter = MocapRetargeter(mapping: mapping)
+        var calibration = frame(rotations: [:], root: simd_float3(0, 0, 2))
+        calibration.positions = [.leftHand: simd_float3(0.5, 1.4, 0)]
+        retargeter.calibrate(with: calibration)
+        var moved = frame(sequence: 2, rotations: [:], root: simd_float3(0.1, 0, 2))
+        moved.positions = [.leftHand: simd_float3(0.5, 1.4, 0.2)]
+        moved.trackedJoints = [.leftHand]
+
+        let mirrored = try XCTUnwrap(retargeter.retarget(moved))
+        let hand = try XCTUnwrap(mirrored.capturedJointPositions[.leftHand])
+        XCTAssertEqual(hand.x, -0.6, accuracy: 1e-6, "root offset plus joint offset, reflected")
+        XCTAssertEqual(hand.y, 1.4, accuracy: 1e-6)
+        XCTAssertEqual(hand.z, 0.2, accuracy: 1e-6)
+        XCTAssertEqual(mirrored.capturedTrackedJoints, [.leftHand])
+
+        retargeter.options.mirror = false
+        retargeter.options.flipFacing = true
+        let flipped = try XCTUnwrap(retargeter.retarget(moved))
+        let flippedHand = try XCTUnwrap(flipped.capturedJointPositions[.leftHand])
+        XCTAssertEqual(flippedHand.x, -0.6, accuracy: 1e-6)
+        XCTAssertEqual(flippedHand.z, -0.2, accuracy: 1e-6)
     }
 
     func testMirroredRetargetSwapsSidesAndReflects() throws {
