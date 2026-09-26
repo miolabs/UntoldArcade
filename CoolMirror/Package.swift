@@ -59,6 +59,7 @@ let package = Package(
                 "CoolMirror",
                 "CoolMirrorMocap",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
+                .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

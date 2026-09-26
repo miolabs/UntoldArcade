@@ -83,7 +83,13 @@ final class MirrorControls {
     var showMuscleList = false
     var hasCape = false
     var capeMode: CoolMirrorCapeMode = .jolt {
-        didSet { XRHolder.shared.game?.setCapeMode(capeMode) }
+        didSet {
+            XRHolder.shared.game?.setCapeMode(capeMode)
+            // The cloth writes into the deformation pass: no vertex-shader skinning.
+            if capeMode == .jolt, skinningPath == .vertexShader {
+                skinningPath = .computeLBS
+            }
+        }
     }
 
     // iPhone motion capture
@@ -185,6 +191,9 @@ final class MirrorControls {
         hasMLDeformer = game.hasMLDeformer()
         hasCape = game.hasCape()
         game.setCapeMode(capeMode)
+        if hasCape, capeMode == .jolt, skinningPath == .vertexShader {
+            skinningPath = .computeLBS
+        }
         clips = game.clipNames()
         clip = clips.first ?? ""
         paused = false

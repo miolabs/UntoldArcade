@@ -26,9 +26,11 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     /// A vertex whose skin weight on the collar joints is at least this is
     /// pinned to them.
     private static let collarWeight: Float = 0.45
-    private static let weldTolerance: Float = 1e-4
     /// A particle farther than this from the character is a blown-up cloth.
     private static let runawayDistance: Float = 3.0
+    /// Ceiling on a particle's speed: a cape never needs more, and it
+    /// bounds what a resolved overlap or a tracking jump can throw in.
+    static let maxParticleSpeed: Float = 4.0
 
     private struct Slot {
         var entity: EntityID
@@ -46,15 +48,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     private struct Piece {
         var slot: Slot
         var body: JoltSoftBody
-        /// Particle per mesh vertex of the slot (welded).
-        var particleOfVertex: [UInt32]
-        var vertexIds: [UInt32]
-        var faces: [SIMD3<UInt32>]
-        /// Pinned particles and, per pinned particle, up to four skeleton
-        /// joints with weights and the rest offset in each joint's frame.
-        var pinned: [UInt32]
-        var pinBindings: [[(joint: Int, weight: Float, offset: simd_float3)]]
-        var particleCount: Int
+        var cloth: CoolMirrorCapeCloth
     }
 
     private let lock = NSLock()
@@ -64,7 +58,6 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     private var enabled = false
     private var pieces: [Piece] = []
     private var colliders: [Collider] = []
-    private var restJoints: [SkeletonRestJoint] = []
     private var jointIndexByName: [String: Int] = [:]
     private var built = false
     private var scratchPositions: [SIMD3<Float>] = []
@@ -108,6 +101,16 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         guard !joints.isEmpty else { return }
         let origin = getPosition(entityId: characterId)
         let rotation = getRotationQuaternion(entityId: characterId)
+        let scale = getScale(entityId: characterId)
+        // The character's transform (uniform scale composes after skinning):
+        // rest data goes to world through it, particles come back through
+        // its inverse.
+        var modelToWorld = simd_float4x4(rotation)
+        modelToWorld.columns.0 *= scale.x
+        modelToWorld.columns.1 *= scale.y
+        modelToWorld.columns.2 *= scale.z
+        modelToWorld.columns.3 = simd_float4(origin, 1)
+        let worldToModel = simd_inverse(modelToWorld)
         // The skeleton query answers the rest transforms until the first
         // animation update: wait for joints that sit on the character.
         guard let neck = joints.first(where: { Self.matches($0.path, rig.neck) }),
@@ -116,9 +119,9 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         else { return }
 
         if !built {
-            build(characterId: characterId, rig: rig, backend: backend, joints: joints, origin: origin, rotation: rotation)
+            build(characterId: characterId, rig: rig, backend: backend, joints: joints, modelToWorld: modelToWorld, rotation: rotation)
         }
-        let (pieces, colliders, restJoints, jointIndexByName) = lock.withLock { (self.pieces, self.colliders, self.restJoints, self.jointIndexByName) }
+        let (pieces, colliders, jointIndexByName) = lock.withLock { (self.pieces, self.colliders, self.jointIndexByName) }
         guard !pieces.isEmpty else { return }
 
         // Colliders follow the bones.
@@ -130,31 +133,17 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             backend.setKinematicTarget(collider.body, position: position, rotation: orientation)
         }
 
-        // The collar rides on its joints: each pinned particle is the
-        // weighted sum of its rest offset carried by each joint's current
-        // frame.
+        // The collar rides on its joints.
+        let frames = joints.map { CoolMirrorCapeCloth.JointFrame(position: $0.worldPosition, rotation: $0.worldRotation) }
         for piece in pieces {
-            var targets: [SIMD3<Float>] = []
-            targets.reserveCapacity(piece.pinned.count)
-            for bindings in piece.pinBindings {
-                var target = SIMD3<Float>.zero
-                var total: Float = 0
-                for binding in bindings where binding.joint < joints.count {
-                    let joint = joints[binding.joint]
-                    target += binding.weight * (joint.worldPosition + joint.worldRotation.act(binding.offset))
-                    total += binding.weight
-                }
-                targets.append(total > 0 ? target / total : .zero)
-            }
-            backend.setSoftBodyVertices(piece.body, indices: piece.pinned, worldPositions: targets)
+            backend.setSoftBodyVertices(piece.body, indices: piece.cloth.pinned, worldPositions: piece.cloth.pinTargets(joints: frames))
         }
 
         // Read the cloth back into the mesh (model space).
-        let inverseRotation = rotation.inverse
         for piece in pieces {
             var world = lock.withLock { scratchPositions }
             let read = backend.readSoftBodyVertices(piece.body, into: &world)
-            guard read == piece.particleCount else { continue }
+            guard read == piece.cloth.particleRest.count else { continue }
             // A runaway cloth (a bad step, a teleport) is rebuilt in the
             // current pose rather than left to blow up Jolt's broadphase.
             if world.contains(where: { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) || simd_length($0 - origin) > Self.runawayDistance }) {
@@ -162,8 +151,8 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
                 tearDown()
                 return
             }
-            var normals = [SIMD3<Float>](repeating: .zero, count: piece.particleCount)
-            for face in piece.faces {
+            var normals = [SIMD3<Float>](repeating: .zero, count: piece.cloth.particleRest.count)
+            for face in piece.cloth.faces {
                 let a = world[Int(face.x)], b = world[Int(face.y)], c = world[Int(face.z)]
                 let n = simd_cross(b - a, c - a)
                 normals[Int(face.x)] += n
@@ -172,29 +161,32 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             }
             var positions: [simd_float3] = []
             var vertexNormals: [simd_float3] = []
-            positions.reserveCapacity(piece.vertexIds.count)
-            vertexNormals.reserveCapacity(piece.vertexIds.count)
-            for particle in piece.particleOfVertex {
-                let p = world[Int(particle)]
-                positions.append(inverseRotation.act(p - origin))
+            positions.reserveCapacity(piece.cloth.vertexIds.count)
+            vertexNormals.reserveCapacity(piece.cloth.vertexIds.count)
+            for particle in piece.cloth.particleOfVertex {
+                let p = worldToModel * simd_float4(world[Int(particle)], 1)
+                positions.append(simd_float3(p.x, p.y, p.z))
                 let n = normals[Int(particle)]
-                vertexNormals.append(inverseRotation.act(simd_length_squared(n) > 1e-12 ? simd_normalize(n) : SIMD3<Float>(0, 0, 1)))
+                vertexNormals.append(rotation.inverse.act(simd_length_squared(n) > 1e-12 ? simd_normalize(n) : SIMD3<Float>(0, 0, 1)))
             }
             setEntityDeformationOverride(
                 entityId: piece.slot.entity, meshIndex: piece.slot.mesh,
-                indices: piece.vertexIds, positions: positions, normals: vertexNormals
+                indices: piece.cloth.vertexIds, positions: positions, normals: vertexNormals
             )
             lock.withLock { scratchPositions = world }
             report(world: world, origin: origin)
         }
-        _ = restJoints
     }
 
     // MARK: - Build
 
-    private func build(characterId: EntityID, rig: CoolMirrorCapeRig, backend: JoltPhysicsBackend, joints: [SkeletonJointPose], origin: simd_float3, rotation: simd_quatf) {
+    private func build(characterId: EntityID, rig: CoolMirrorCapeRig, backend: JoltPhysicsBackend, joints: [SkeletonJointPose], modelToWorld: simd_float4x4, rotation: simd_quatf) {
         lock.withLock { built = true }
-        let restJoints = entitySkeletonRestJointPoses(entityId: characterId)
+        // Rest joints in world space (the entity's transform applied).
+        let restJoints: [CoolMirrorCapeCloth.JointFrame] = entitySkeletonRestJointPoses(entityId: characterId).map { joint in
+            let p = modelToWorld * simd_float4(joint.modelPosition, 1)
+            return .init(position: simd_float3(p.x, p.y, p.z), rotation: simd_normalize(rotation * joint.modelRotation))
+        }
         var jointIndexByName: [String: Int] = [:]
         for (index, joint) in joints.enumerated() {
             if let name = joint.path.split(separator: "/").last {
@@ -204,6 +196,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         }
         let collarJoints = Set([rig.neck, rig.upperChest, rig.leftClavicle, rig.rightClavicle, rig.head].compactMap { jointIndexByName[$0] })
 
+        let startCapsules = Self.capsules(rig, joints: joints, jointIndexByName: jointIndexByName)
         var pieces: [Piece] = []
         for slot in Self.capeSlots(root: characterId) {
             guard let geometry = entitySubmeshGeometry(entityId: slot.entity, meshIndex: slot.mesh, submeshIndex: slot.submesh),
@@ -211,21 +204,13 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             else { continue }
             guard let piece = makePiece(
                 slot: slot, geometry: geometry, backend: backend, restJoints: restJoints, joints: joints,
-                collarJoints: collarJoints, origin: origin, rotation: rotation
+                collarJoints: collarJoints, modelToWorld: modelToWorld, startCapsules: startCapsules
             ) else { continue }
             pieces.append(piece)
         }
 
         var colliders: [Collider] = []
-        // The collar pins must never sit inside a collider (their free
-        // neighbours would be shoved out against fixed pins every step),
-        // so the torso stops at the chest and the upper back is thin.
-        let bones: [(String, String, Float)] = [
-            (rig.pelvis, rig.chest, 0.11), (rig.chest, rig.neck, 0.075), (rig.neck, rig.head, 0.08),
-            (rig.leftUpperArm, rig.leftForearm, 0.055), (rig.rightUpperArm, rig.rightForearm, 0.055),
-            (rig.leftThigh, rig.leftCalf, 0.085), (rig.rightThigh, rig.rightCalf, 0.085),
-        ]
-        for (from, to, radius) in bones {
+        for (from, to, radius) in Self.bones(rig) {
             guard let a = jointIndexByName[from], let b = jointIndexByName[to] else { continue }
             let (position, orientation) = Self.capsulePose(from: joints[a].worldPosition, to: joints[b].worldPosition)
             let length = simd_length(joints[b].worldPosition - joints[a].worldPosition)
@@ -236,108 +221,39 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         lock.withLock {
             self.pieces = pieces
             self.colliders = colliders
-            self.restJoints = restJoints
             self.jointIndexByName = jointIndexByName
         }
-        print("CoolMirror jolt cape: \(pieces.count) cape piece(s), \(pieces.reduce(0) { $0 + $1.particleCount }) particles, \(pieces.reduce(0) { $0 + $1.pinned.count }) pinned, \(colliders.count) colliders")
+        print("CoolMirror jolt cape: \(pieces.count) cape piece(s), \(pieces.reduce(0) { $0 + $1.cloth.particleRest.count }) particles, \(pieces.reduce(0) { $0 + $1.cloth.pinned.count }) pinned, \(colliders.count) colliders")
     }
 
-    /// Welds the slot's vertices into particles, builds the soft body from
-    /// its triangles and binds the collar particles to their joints.
+    /// Builds the slot's cloth (see `CoolMirrorCapeCloth`) and its soft body.
     private func makePiece(
-        slot: Slot, geometry: EntitySubmeshGeometry, backend: JoltPhysicsBackend, restJoints: [SkeletonRestJoint],
-        joints: [SkeletonJointPose], collarJoints: Set<Int>, origin: simd_float3, rotation: simd_quatf
+        slot: Slot, geometry: EntitySubmeshGeometry, backend: JoltPhysicsBackend, restJoints: [CoolMirrorCapeCloth.JointFrame],
+        joints: [SkeletonJointPose], collarJoints: Set<Int>, modelToWorld: simd_float4x4, startCapsules: [CoolMirrorCapeCloth.Capsule]
     ) -> Piece? {
-        // Vertices used by this slot's triangles, welded by rest position.
-        let vertexIds = Array(Set(geometry.triangles)).sorted()
-        var particleOfVertex: [UInt32] = []
-        var particleOfMeshVertex: [UInt32: UInt32] = [:]
-        var particleRest: [simd_float3] = []
-        var particleSourceVertex: [Int] = []
-        var buckets: [SIMD3<Int32>: [UInt32]] = [:]
-        let cell: Float = 1e-3
-        for id in vertexIds {
-            let local = geometry.positions[Int(id)]
-            let p4 = geometry.localTransform * simd_float4(local, 1)
-            let p = simd_float3(p4.x, p4.y, p4.z)
-            let key = SIMD3<Int32>(Int32((p.x / cell).rounded()), Int32((p.y / cell).rounded()), Int32((p.z / cell).rounded()))
-            var found: UInt32?
-            for candidate in buckets[key, default: []] where simd_length(particleRest[Int(candidate)] - p) <= Self.weldTolerance {
-                found = candidate
-                break
-            }
-            let particle: UInt32
-            if let found {
-                particle = found
-            } else {
-                particle = UInt32(particleRest.count)
-                particleRest.append(p)
-                particleSourceVertex.append(Int(id))
-                buckets[key, default: []].append(particle)
-            }
-            particleOfMeshVertex[id] = particle
-            particleOfVertex.append(particle)
+        // Rest vertices in world space, like the rest joints.
+        let toWorld = modelToWorld * geometry.localTransform
+        let positions = geometry.positions.map { p -> simd_float3 in
+            let m = toWorld * simd_float4(p, 1)
+            return simd_float3(m.x, m.y, m.z)
         }
-        var faces: [SIMD3<UInt32>] = []
-        for t in stride(from: 0, to: geometry.triangles.count - 2, by: 3) {
-            guard let a = particleOfMeshVertex[geometry.triangles[t]], let b = particleOfMeshVertex[geometry.triangles[t + 1]], let c = particleOfMeshVertex[geometry.triangles[t + 2]],
-                  a != b, b != c, a != c
-            else { continue }
-            faces.append(SIMD3(a, b, c))
-        }
-        guard !faces.isEmpty else { return nil }
+        var cloth = CoolMirrorCapeCloth(
+            positions: positions, normals: geometry.normals, triangles: geometry.triangles,
+            jointIndices: geometry.jointIndices, jointWeights: geometry.jointWeights,
+            restJoints: restJoints,
+            joints: joints.map { .init(position: $0.worldPosition, rotation: $0.worldRotation) },
+            collarJoints: collarJoints, collarWeight: Self.collarWeight,
+            particleMass: Self.particleMass
+        )
+        print("CoolMirror jolt cape: \(cloth.stats)")
+        guard !cloth.faces.isEmpty else { return nil }
+        cloth.pushStartOut(of: startCapsules, margin: 0.012)
 
-        // Every particle's skin binding: rest offsets in its joints' rest
-        // frames. Used to start the cloth in the current pose (skinned on
-        // the CPU) and, for the collar, to pin it to the joints.
-        var inverseMasses = [Float](repeating: 1 / Self.particleMass, count: particleRest.count)
-        var pinned: [UInt32] = []
-        var pinBindings: [[(joint: Int, weight: Float, offset: simd_float3)]] = []
-        var startWorld = particleRest.map { origin + rotation.act($0) }
-        let hasSkin = geometry.jointIndices.count == geometry.positions.count && geometry.jointWeights.count == geometry.positions.count
-        if hasSkin {
-            for (particle, source) in particleSourceVertex.enumerated() {
-                let ids = geometry.jointIndices[source]
-                let weights = geometry.jointWeights[source]
-                let entries: [(Int, Float)] = [(Int(ids.x), weights.x), (Int(ids.y), weights.y), (Int(ids.z), weights.z), (Int(ids.w), weights.w)]
-                var bindings: [(joint: Int, weight: Float, offset: simd_float3)] = []
-                for (joint, weight) in entries where weight > 1e-3 && joint < restJoints.count && joint < joints.count {
-                    let rest = restJoints[joint]
-                    let offset = rest.modelRotation.inverse.act(particleRest[particle] - rest.modelPosition)
-                    bindings.append((joint, weight, offset))
-                }
-                guard !bindings.isEmpty else { continue }
-                var skinned = simd_float3.zero
-                var total: Float = 0
-                for binding in bindings {
-                    let joint = joints[binding.joint]
-                    skinned += binding.weight * (joint.worldPosition + joint.worldRotation.act(binding.offset))
-                    total += binding.weight
-                }
-                if total > 0 {
-                    startWorld[particle] = skinned / total
-                }
-                let collar = entries.filter { collarJoints.contains($0.0) }.reduce(Float(0)) { $0 + $1.1 }
-                guard collar >= Self.collarWeight else { continue }
-                inverseMasses[particle] = 0
-                pinned.append(UInt32(particle))
-                pinBindings.append(bindings)
-            }
-        }
-        if pinned.isEmpty {
-            // No skin data: pin the top tenth of the cape.
-            let sorted = particleRest.indices.sorted { particleRest[$0].y > particleRest[$1].y }
-            for particle in sorted.prefix(max(1, particleRest.count / 10)) {
-                inverseMasses[particle] = 0
-                pinned.append(UInt32(particle))
-                pinBindings.append([])
-            }
-        }
-
+        let origin = simd_float3(modelToWorld.columns.3.x, modelToWorld.columns.3.y, modelToWorld.columns.3.z)
         var descriptor = JoltSoftBodyDescriptor(
-            vertices: startWorld.map { $0 - origin },
-            inverseMasses: inverseMasses,
-            faces: faces,
+            vertices: cloth.startWorld.map { $0 - origin },
+            inverseMasses: cloth.inverseMasses,
+            faces: cloth.faces,
             compliance: Self.stretchCompliance, shearCompliance: Self.shearCompliance, bendCompliance: Self.bendCompliance
         )
         descriptor.position = origin
@@ -345,14 +261,16 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         descriptor.linearDamping = 0.6
         descriptor.vertexRadius = 0.008
         descriptor.friction = 0.5
+        descriptor.maxLinearVelocity = Self.maxParticleSpeed
+        // Dihedral bends diverge under a moving collar (the headless cape
+        // test shows 3.7 m of fling in a second, at any iteration count);
+        // distance bends hold at 4 iterations.
+        descriptor.bendType = .distance
         guard let body = backend.addSoftBody(descriptor) else {
-            print("CoolMirror jolt cape: Jolt rejected the cape soft body (\(particleRest.count) particles, \(faces.count) faces)")
+            print("CoolMirror jolt cape: Jolt rejected the cape soft body (\(cloth.particleRest.count) particles, \(cloth.faces.count) faces)")
             return nil
         }
-        return Piece(
-            slot: slot, body: body, particleOfVertex: particleOfVertex, vertexIds: vertexIds, faces: faces,
-            pinned: pinned, pinBindings: pinBindings, particleCount: particleRest.count
-        )
+        return Piece(slot: slot, body: body, cloth: cloth)
     }
 
     private func tearDown() {
@@ -373,6 +291,28 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Body colliders. No collider may reach the collar: a pinned particle
+    /// inside one has its free neighbours shoved out against a pin that
+    /// cannot move, every step, and the cloth explodes (the headless cape
+    /// test reproduces it). So nothing above the chest — the collar pins
+    /// hold the cape to the upper back and neck themselves — and every
+    /// capsule stays inside the body the cape rests on.
+    static func bones(_ rig: CoolMirrorCapeRig) -> [(from: String, to: String, radius: Float)] {
+        [
+            (rig.pelvis, rig.chest, 0.09),
+            (rig.leftUpperArm, rig.leftForearm, 0.05), (rig.rightUpperArm, rig.rightForearm, 0.05),
+            (rig.leftThigh, rig.leftCalf, 0.08), (rig.rightThigh, rig.rightCalf, 0.08),
+        ]
+    }
+
+    /// The capsules for the current joints, world space.
+    static func capsules(_ rig: CoolMirrorCapeRig, joints: [SkeletonJointPose], jointIndexByName: [String: Int]) -> [CoolMirrorCapeCloth.Capsule] {
+        bones(rig).compactMap { bone in
+            guard let a = jointIndexByName[bone.from], let b = jointIndexByName[bone.to], a < joints.count, b < joints.count else { return nil }
+            return .init(start: joints[a].worldPosition, end: joints[b].worldPosition, radius: bone.radius)
+        }
+    }
 
     private static func capsulePose(from a: simd_float3, to b: simd_float3) -> (simd_float3, simd_quatf) {
         let axis = b - a

@@ -1,5 +1,5 @@
 {
-  "originHash" : "c21642e0afb9c3968a6f24e923a8aa57fac8a573b894a6bd45720804b6c4291e",
+  "originHash" : "a7b2b80aeac48b8be3892fdf87bdc0e439c582943e49d3384d6efebf13407d4b",
   "pins" : [
     {
       "identity" : "joltphysics",
@@ -16,7 +16,7 @@
       "location" : "https://github.com/miolabs/UntoldEngine.git",
       "state" : {
         "branch" : "feature/mirror_mocap",
-        "revision" : "5b3bcfdaa64b3c52e991ca9c4f09fcba871f3c64"
+        "revision" : "ae91909ae51508feb6bb52acca4b2bd106529251"
       }
     },
     {
@@ -25,7 +25,7 @@
       "location" : "https://github.com/miolabs/UntoldJoltPhysics.git",
       "state" : {
         "branch" : "feature/soft_body_cloth",
-        "revision" : "0807509d9b2e5a50df5fd89ee10a730d6b66b24a"
+        "revision" : "b3b91e17873f7f9a4ecbdb4043dfb48b668ba249"
       }
     }
   ],
