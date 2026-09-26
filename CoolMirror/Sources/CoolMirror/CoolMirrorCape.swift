@@ -61,15 +61,20 @@ final class CoolMirrorCape: @unchecked Sendable {
     private var placed = false
     /// Centre of the attachment line when the sheet was last laid out.
     private var placedTop: simd_float3?
-    private var hiddenCape: [(mesh: Int, submesh: Int)]?
+    private var hiddenCape: [MaterialSlot]?
 
     var isEnabled: Bool {
         lock.withLock { enabled }
     }
 
-    /// Registers the cloth plugin once, before the renderer is created.
+    /// Registers the cloth plugin once, before the renderer is created. The
+    /// sheet starts hidden: the plugin would otherwise draw its default
+    /// 2 m grid at the world origin (where the wearer stands) until a cape
+    /// is placed.
     static func registerPlugin() {
         _ = registerCoolClothPlugin()
+        setCoolClothVisible(false)
+        setCoolClothBallVisible(false)
     }
 
     func setCharacter(_ id: EntityID?, character: CoolMirrorCharacter?) {
@@ -216,49 +221,68 @@ final class CoolMirrorCape: @unchecked Sendable {
         advanceCoolCloth(deltaTime: deltaTime)
     }
 
+    /// A material slot on the character or one of its descendants (the
+    /// meshes live on child entities of the character root).
+    private struct MaterialSlot {
+        var entity: EntityID
+        var mesh: Int
+        var submesh: Int
+    }
+
     /// The model's own cape is faded out while the cloth stands in for it:
     /// every material slot whose mesh name or base colour texture name
-    /// mentions the cape.
+    /// mentions the cape, anywhere in the character's hierarchy.
     private func hideModelCape(entityId: EntityID, hidden: Bool) {
-        let slots = lock.withLock { hiddenCape } ?? Self.capeSlots(entityId: entityId)
+        let slots = lock.withLock { hiddenCape } ?? Self.capeSlots(root: entityId)
         guard !slots.isEmpty else {
-            print("CoolMirror cape: no cape material slot found; slots: \(Self.describeMaterialSlots(entityId: entityId))")
+            print("CoolMirror cape: no cape material slot found; slots: \(Self.describeMaterialSlots(root: entityId))")
             return
         }
         lock.withLock { hiddenCape = slots }
-        print("CoolMirror cape: model cape slots \(slots.map { "\($0.mesh)/\($0.submesh)" }.joined(separator: ", ")) \(hidden ? "hidden" : "shown")")
+        print("CoolMirror cape: model cape slots \(slots.map { "\($0.entity):\($0.mesh)/\($0.submesh)" }.joined(separator: ", ")) \(hidden ? "hidden" : "shown")")
         for slot in slots {
             // Mask with zero opacity: every fragment falls under the cutoff
             // and is discarded in the main pass (blend would need the
             // transparency pass).
-            updateMaterialAlphaMode(entityId: entityId, mode: hidden ? .mask : .opaque, meshIndex: slot.mesh, submeshIndex: slot.submesh)
-            updateMaterialAlphaCutoff(entityId: entityId, cutoff: 0.5, meshIndex: slot.mesh, submeshIndex: slot.submesh)
-            updateMaterialOpacity(entityId: entityId, opacity: hidden ? 0 : 1, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+            updateMaterialAlphaMode(entityId: slot.entity, mode: hidden ? .mask : .opaque, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+            updateMaterialAlphaCutoff(entityId: slot.entity, cutoff: 0.5, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+            updateMaterialOpacity(entityId: slot.entity, opacity: hidden ? 0 : 1, meshIndex: slot.mesh, submeshIndex: slot.submesh)
         }
     }
 
-    private static func capeSlots(entityId: EntityID) -> [(mesh: Int, submesh: Int)] {
-        var slots: [(mesh: Int, submesh: Int)] = []
-        for (mesh, meshName) in getEntityMeshNames(entityId: entityId).enumerated() {
-            let meshIsCape = meshName.localizedCaseInsensitiveContains("cape")
-            for submesh in 0 ..< getEntitySubmeshCount(entityId: entityId, meshIndex: mesh) {
-                let texture = getMaterialBaseColorTextureName(entityId: entityId, meshIndex: mesh, submeshIndex: submesh) ?? ""
-                if meshIsCape || texture.localizedCaseInsensitiveContains("cape") {
-                    slots.append((mesh, submesh))
+    private static func entityAndDescendants(_ root: EntityID) -> [EntityID] {
+        var result = [root]
+        var pending = getEntityChildren(parentId: root)
+        while let next = pending.first {
+            pending.removeFirst()
+            result.append(next)
+            pending.append(contentsOf: getEntityChildren(parentId: next))
+        }
+        return result
+    }
+
+    private static func allMaterialSlots(root: EntityID) -> [(slot: MaterialSlot, meshName: String, texture: String?)] {
+        var slots: [(slot: MaterialSlot, meshName: String, texture: String?)] = []
+        for entity in entityAndDescendants(root) {
+            for (mesh, meshName) in getEntityMeshNames(entityId: entity).enumerated() {
+                for submesh in 0 ..< getEntitySubmeshCount(entityId: entity, meshIndex: mesh) {
+                    let texture = getMaterialBaseColorTextureName(entityId: entity, meshIndex: mesh, submeshIndex: submesh)
+                    slots.append((MaterialSlot(entity: entity, mesh: mesh, submesh: submesh), meshName, texture))
                 }
             }
         }
         return slots
     }
 
-    private static func describeMaterialSlots(entityId: EntityID) -> String {
-        var names: [String] = []
-        for (mesh, meshName) in getEntityMeshNames(entityId: entityId).enumerated() {
-            for submesh in 0 ..< getEntitySubmeshCount(entityId: entityId, meshIndex: mesh) {
-                let texture = getMaterialBaseColorTextureName(entityId: entityId, meshIndex: mesh, submeshIndex: submesh) ?? "-"
-                names.append("\(mesh)/\(submesh) \(meshName) [\(texture)]")
-            }
-        }
+    private static func capeSlots(root: EntityID) -> [MaterialSlot] {
+        allMaterialSlots(root: root).filter { entry in
+            entry.meshName.localizedCaseInsensitiveContains("cape")
+                || (entry.texture?.localizedCaseInsensitiveContains("cape") ?? false)
+        }.map(\.slot)
+    }
+
+    private static func describeMaterialSlots(root: EntityID) -> String {
+        let names = allMaterialSlots(root: root).map { "\($0.slot.entity):\($0.slot.mesh)/\($0.slot.submesh) \($0.meshName) [\($0.texture ?? "-")]" }
         return names.isEmpty ? "none" : names.joined(separator: ", ")
     }
 
