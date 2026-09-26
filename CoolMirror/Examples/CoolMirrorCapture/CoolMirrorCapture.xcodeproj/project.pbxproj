@@ -19,7 +19,7 @@
 		70104AEC0FD71FDED88AE87C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9B72F6815D71DEF3CDB4093D /* CaptureSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSession.swift; sourceTree = "<group>"; };
 		A48C1DFAA92ABBD1A20B76EC /* CoolMirrorCaptureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoolMirrorCaptureApp.swift; sourceTree = "<group>"; };
-		EC3D385CD5A88EC6A57A54FB /* CoolMirrorCapture.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CoolMirrorCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EC3D385CD5A88EC6A57A54FB /* CoolMirrorCapture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoolMirrorCapture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -266,6 +266,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53X2422NYU;
 				INFOPLIST_FILE = CoolMirrorCapture/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -288,6 +289,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53X2422NYU;
 				INFOPLIST_FILE = CoolMirrorCapture/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
