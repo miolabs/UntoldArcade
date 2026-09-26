@@ -28,38 +28,56 @@ public struct MocapRigMapping: Sendable {
     }
 }
 
-public extension MocapJoint {
-    /// The captured child whose position, with this joint's, gives the bone
-    /// direction the rig copies (nil: the joint is driven by its rotation).
-    var boneChild: MocapJoint? {
-        switch self {
-        case .spine2: .spine5
-        case .spine5: .spine7
-        case .spine7: .neck1
-        case .neck1: .head
-        case .leftShoulder: .leftArm
-        case .leftArm: .leftForearm
-        case .leftForearm: .leftHand
-        case .leftUpLeg: .leftLeg
-        case .leftLeg: .leftFoot
-        case .leftFoot: .leftToes
-        case .rightShoulder: .rightArm
-        case .rightArm: .rightForearm
-        case .rightForearm: .rightHand
-        case .rightUpLeg: .rightLeg
-        case .rightLeg: .rightFoot
-        case .rightFoot: .rightToes
-        default: nil
-        }
+/// How a driven joint's orientation is built from captured positions.
+public struct MocapBoneFrame: Sendable {
+    public enum Hint: Sendable {
+        /// Left → right axis between two joints (torso twist).
+        case lateral(MocapJoint, MocapJoint)
+        /// Direction of another bone.
+        case bone(MocapJoint, MocapJoint)
+        /// Direction of the next bone (the bend); at rest the rig's forward
+        /// axis, or backward for the knees. Falls back to the parent's
+        /// frame while the limb is straight.
+        case bend(MocapJoint, MocapJoint, backward: Bool)
     }
 
-    /// Joints with no reliable bone of their own that keep their rest
-    /// orientation relative to the parent bone (the hands follow the
-    /// forearm).
+    public var joint: MocapJoint
+    /// The bone's far end.
+    public var child: MocapJoint
+    public var hint: Hint
+    public var parent: MocapJoint?
+
+    /// Parents before children, so a straight limb can inherit its
+    /// parent's twist.
+    public static let order: [MocapBoneFrame] = [
+        MocapBoneFrame(joint: .hips, child: .spine2, hint: .lateral(.leftUpLeg, .rightUpLeg), parent: nil),
+        MocapBoneFrame(joint: .spine2, child: .spine5, hint: .lateral(.leftUpLeg, .rightUpLeg), parent: .hips),
+        MocapBoneFrame(joint: .spine5, child: .spine7, hint: .lateral(.leftShoulder, .rightShoulder), parent: .spine2),
+        MocapBoneFrame(joint: .spine7, child: .neck1, hint: .lateral(.leftShoulder, .rightShoulder), parent: .spine5),
+        MocapBoneFrame(joint: .neck1, child: .head, hint: .lateral(.leftShoulder, .rightShoulder), parent: .spine7),
+        MocapBoneFrame(joint: .leftShoulder, child: .leftArm, hint: .bone(.spine7, .neck1), parent: .spine7),
+        MocapBoneFrame(joint: .rightShoulder, child: .rightArm, hint: .bone(.spine7, .neck1), parent: .spine7),
+        MocapBoneFrame(joint: .leftArm, child: .leftForearm, hint: .bend(.leftForearm, .leftHand, backward: false), parent: .leftShoulder),
+        MocapBoneFrame(joint: .rightArm, child: .rightForearm, hint: .bend(.rightForearm, .rightHand, backward: false), parent: .rightShoulder),
+        MocapBoneFrame(joint: .leftForearm, child: .leftHand, hint: .bend(.leftForearm, .leftArm, backward: false), parent: .leftArm),
+        MocapBoneFrame(joint: .rightForearm, child: .rightHand, hint: .bend(.rightForearm, .rightArm, backward: false), parent: .rightArm),
+        MocapBoneFrame(joint: .leftUpLeg, child: .leftLeg, hint: .bend(.leftLeg, .leftFoot, backward: true), parent: .hips),
+        MocapBoneFrame(joint: .rightUpLeg, child: .rightLeg, hint: .bend(.rightLeg, .rightFoot, backward: true), parent: .hips),
+        MocapBoneFrame(joint: .leftLeg, child: .leftFoot, hint: .bend(.leftLeg, .leftUpLeg, backward: true), parent: .leftUpLeg),
+        MocapBoneFrame(joint: .rightLeg, child: .rightFoot, hint: .bend(.rightLeg, .rightUpLeg, backward: true), parent: .rightUpLeg),
+        MocapBoneFrame(joint: .leftFoot, child: .leftToes, hint: .bone(.leftFoot, .leftLeg), parent: .leftLeg),
+        MocapBoneFrame(joint: .rightFoot, child: .rightToes, hint: .bone(.rightFoot, .rightLeg), parent: .rightLeg),
+    ]
+}
+
+public extension MocapJoint {
+    /// Joints without a bone of their own that take their parent bone's
+    /// frame: the hands ride on the forearms, the head on the neck.
     var followsParentBone: MocapJoint? {
         switch self {
         case .leftHand: .leftForearm
         case .rightHand: .rightForearm
+        case .head: .neck1
         default: nil
         }
     }
@@ -206,38 +224,65 @@ public final class MocapRetargeter: @unchecked Sendable {
             return delta
         }
 
-        /// Bone directions: rig rest direction → captured direction.
-        func restDirection(_ joint: MocapJoint) -> simd_float3? {
-            guard let child = joint.boneChild,
-                  let rigJoint = mapping.referenceJoints[joint], let rigChild = mapping.referenceJoints[child],
-                  let a = restPositions[rigJoint], let b = restPositions[rigChild]
+        // Every driven joint gets a frame built from positions only: the
+        // bone it owns (primary axis) and a hint fixing the twist about it
+        // (the lateral hip or shoulder axis for the torso, the bend of the
+        // next joint for limbs). ARKit's joint orientations are not used
+        // for these: they flip when it mistakes front for back while the
+        // positions stay put. The delta is captured frame × rest frame⁻¹.
+        let rig = mapping.referenceJoints
+        func rest(_ joint: MocapJoint) -> simd_float3? {
+            rig[joint].flatMap { restPositions[$0] }
+        }
+        func cap(_ joint: MocapJoint) -> simd_float3? {
+            captured[options.mirror ? joint.mirrored : joint]
+        }
+        func direction(_ a: simd_float3?, _ b: simd_float3?) -> simd_float3? {
+            guard let a, let b else { return nil }
+            let d = b - a
+            return simd_length_squared(d) > 1e-8 ? simd_normalize(d) : nil
+        }
+        // The rig's rest forward axis (up × lateral): the direction elbows
+        // bend toward and knees bend away from.
+        let restForward: simd_float3? = {
+            guard let up = direction(rest(.hips), rest(.neck1)),
+                  let lateral = direction(rest(.leftShoulder), rest(.rightShoulder))
             else { return nil }
-            let d = b - a
-            return simd_length_squared(d) > 1e-8 ? simd_normalize(d) : nil
-        }
-        func capturedDirection(_ joint: MocapJoint) -> simd_float3? {
-            let source = options.mirror ? joint.mirrored : joint
-            guard let child = source.boneChild, let a = captured[source], let b = captured[child] else { return nil }
-            let d = b - a
-            return simd_length_squared(d) > 1e-8 ? simd_normalize(d) : nil
-        }
-        var swings: [MocapJoint: simd_quatf] = [:]
-        var restDirections: [MocapJoint: simd_float3] = [:]
-        for joint in mapping.referenceJoints.keys {
-            guard let rest = restDirection(joint), let target = capturedDirection(joint) else { continue }
-            swings[joint] = Self.swing(from: rest, to: target)
-            restDirections[joint] = rest
+            let f = simd_cross(up, lateral)
+            return simd_length_squared(f) > 1e-8 ? simd_normalize(f) : nil
+        }()
+
+        var frames: [MocapJoint: simd_quatf] = [:]
+        for spec in MocapBoneFrame.order {
+            guard let restPrimary = direction(rest(spec.joint), rest(spec.child)),
+                  let capturedPrimary = direction(cap(spec.joint), cap(spec.child))
+            else { continue }
+            let restHint: simd_float3?
+            let capturedHint: simd_float3?
+            switch spec.hint {
+            case let .lateral(left, right):
+                restHint = direction(rest(left), rest(right))
+                capturedHint = direction(cap(left), cap(right))
+            case let .bone(a, b):
+                restHint = direction(rest(a), rest(b))
+                capturedHint = direction(cap(a), cap(b))
+            case let .bend(a, b, backward):
+                restHint = restForward.map { backward ? -$0 : $0 }
+                capturedHint = direction(cap(a), cap(b))
+            }
+            frames[spec.joint] = Self.frameDelta(
+                restPrimary: restPrimary, restHint: restHint,
+                capturedPrimary: capturedPrimary, capturedHint: capturedHint,
+                parentDelta: spec.parent.flatMap { frames[$0] }
+            )
         }
 
         var deltas: [String: simd_quatf] = [:]
         for (captured, rigJoint) in mapping.joints {
-            if let swing = swings[captured], let rest = restDirections[captured] {
-                // Bone-direction joint: the captured twist about the bone
-                // rides on the swing.
-                let twist = rotationDelta(captured).map { Self.twist(of: $0, about: rest) } ?? simd_quatf(angle: 0, axis: rest)
-                deltas[rigJoint] = simd_normalize(swing * twist)
-            } else if let parent = captured.followsParentBone, let swing = swings[parent] {
-                deltas[rigJoint] = swing
+            if let frame = frames[captured] {
+                deltas[rigJoint] = frame
+            } else if let parent = captured.followsParentBone, let frame = frames[parent] {
+                deltas[rigJoint] = frame
             } else if let delta = rotationDelta(captured) {
                 deltas[rigJoint] = delta
             }
@@ -257,6 +302,44 @@ public final class MocapRetargeter: @unchecked Sendable {
             return simd_quatf(angle: .pi, axis: simd_normalize(simd_cross(from, helper)))
         }
         return simd_normalize(simd_quatf(from: from, to: to))
+    }
+
+    /// Rotation taking the rest bone frame onto the captured one. The frame
+    /// is the primary axis plus the hint made perpendicular to it; a hint
+    /// too close to the axis (straight limb) blends toward the parent's
+    /// frame applied to the rest hint, and with no hint at all the result
+    /// is the plain swing.
+    public static func frameDelta(
+        restPrimary: simd_float3, restHint: simd_float3?,
+        capturedPrimary: simd_float3, capturedHint: simd_float3?,
+        parentDelta: simd_quatf?
+    ) -> simd_quatf {
+        let swing = Self.swing(from: restPrimary, to: capturedPrimary)
+        guard let restHint, let restSide = perpendicular(restHint, to: restPrimary) else { return swing }
+        let inherited = (parentDelta ?? swing).act(restHint)
+        var side = perpendicular(inherited, to: capturedPrimary) ?? swing.act(restSide)
+        if let capturedHint {
+            let raw = capturedHint - simd_dot(capturedHint, capturedPrimary) * capturedPrimary
+            let sine = simd_length(raw)
+            // Fully trusted from ~25° of bend, ignored under ~8°.
+            let weight = min(max((sine - 0.15) / 0.28, 0), 1)
+            if weight > 0 {
+                let blended = weight * (raw / sine) + (1 - weight) * side
+                side = perpendicular(blended, to: capturedPrimary) ?? side
+            }
+        }
+        let restFrame = simd_quatf(basis(primary: restPrimary, side: restSide))
+        let capturedFrame = simd_quatf(basis(primary: capturedPrimary, side: side))
+        return simd_normalize(capturedFrame * restFrame.inverse)
+    }
+
+    private static func perpendicular(_ v: simd_float3, to axis: simd_float3) -> simd_float3? {
+        let p = v - simd_dot(v, axis) * axis
+        return simd_length_squared(p) > 1e-6 ? simd_normalize(p) : nil
+    }
+
+    private static func basis(primary: simd_float3, side: simd_float3) -> simd_float3x3 {
+        simd_float3x3(primary, side, simd_cross(primary, side))
     }
 
     /// The part of `rotation` that turns about `axis` (swing–twist

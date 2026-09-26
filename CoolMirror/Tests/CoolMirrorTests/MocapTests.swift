@@ -214,6 +214,67 @@ final class MocapTests: XCTestCase {
         XCTAssertEqual(rightArm.act(simd_float3(-1, 0, 0)).y, 1, accuracy: 1e-4)
     }
 
+    /// The torso frame comes from positions: when the user turns 90° the
+    /// hips delta is a 90° yaw, and ARKit's joint orientations play no part.
+    func testTorsoFrameFollowsTheHipAxisNotTheReportedOrientations() throws {
+        let mapping = try XCTUnwrap(CoolMirrorMocapMapping.mapping(for: .spiderman))
+        let retargeter = MocapRetargeter(mapping: mapping)
+        retargeter.options.mirror = false
+        retargeter.rigRestPositions = [
+            "mixamorig:Pelvis": simd_float3(0, 1, 0), "mixamorig:Spine": simd_float3(0, 1.1, 0),
+            "mixamorig:Spine2": simd_float3(0, 1.25, 0), "mixamorig:Spine3": simd_float3(0, 1.4, 0),
+            "mixamorig:Neck": simd_float3(0, 1.5, 0), "mixamorig:Head": simd_float3(0, 1.6, 0),
+            "mixamorig:LeftUpLeg": simd_float3(0.1, 0.95, 0), "mixamorig:RightUpLeg": simd_float3(-0.1, 0.95, 0),
+            "mixamorig:LeftShoulder": simd_float3(0.05, 1.45, 0), "mixamorig:RightShoulder": simd_float3(-0.05, 1.45, 0),
+        ]
+        let upright: [MocapJoint: simd_float3] = [
+            .hips: simd_float3(0, 1, 0), .spine2: simd_float3(0, 1.25, 0), .spine5: simd_float3(0, 1.4, 0),
+            .spine7: simd_float3(0, 1.5, 0), .neck1: simd_float3(0, 1.55, 0), .head: simd_float3(0, 1.65, 0),
+            .leftUpLeg: simd_float3(0.1, 0.95, 0), .rightUpLeg: simd_float3(-0.1, 0.95, 0),
+            .leftShoulder: simd_float3(0.05, 1.45, 0), .rightShoulder: simd_float3(-0.05, 1.45, 0),
+        ]
+        var calibration = frame(rotations: [:])
+        calibration.positions = upright
+        retargeter.calibrate(with: calibration)
+
+        // Turned a quarter turn about y, with garbage joint orientations.
+        let yaw = simd_quatf(angle: .pi / 2, axis: simd_float3(0, 1, 0))
+        var turned = frame(sequence: 2, rotations: [.hips: simd_quatf(angle: 2.5, axis: simd_float3(1, 0, 0))])
+        turned.positions = upright.mapValues { yaw.act($0) }
+        let result = try XCTUnwrap(retargeter.retarget(turned))
+        let hips = try XCTUnwrap(result.worldRotationDeltas["mixamorig:Pelvis"])
+        assertEqual(hips, yaw)
+        let chest = try XCTUnwrap(result.worldRotationDeltas["mixamorig:Spine3"])
+        assertEqual(chest, yaw)
+        let head = try XCTUnwrap(result.worldRotationDeltas["mixamorig:Head"])
+        assertEqual(head, yaw) // rides on the neck
+    }
+
+    func testFilterUndoesASideSwapAndHoldsBackJumps() {
+        var filter = MocapPoseFilter()
+        let options = MocapSmoothingOptions()
+        func legs(_ left: simd_float3, _ right: simd_float3, sequence: UInt32) -> MocapFrame {
+            var f = frame(sequence: sequence, rotations: [:])
+            f.positions = [.leftUpLeg: left, .rightUpLeg: right, .leftFoot: left - simd_float3(0, 0.9, 0), .rightFoot: right - simd_float3(0, 0.9, 0)]
+            return f
+        }
+        let left = simd_float3(0.1, 0.95, 0), right = simd_float3(-0.1, 0.95, 0)
+        _ = filter.filter(legs(left, right, sequence: 1), at: 0, options: options)
+        // The tracker relabels the legs: reversed hip axis in one frame.
+        let swapped = filter.filter(legs(right, left, sequence: 2), at: 1 / 30, options: options)
+        XCTAssertEqual(swapped.positions[.leftUpLeg], left)
+        XCTAssertEqual(filter.swappedFrames, 1)
+        // A jump of 40 cm on a foot is held back…
+        var jumpy = legs(right, left, sequence: 3)
+        jumpy.positions[.leftFoot]! += simd_float3(0.4, 0, 0)
+        let held = filter.filter(jumpy, at: 2 / 30, options: options)
+        XCTAssertEqual(held.positions[.leftFoot], left - simd_float3(0, 0.9, 0))
+        XCTAssertEqual(filter.rejectedFrames, 1)
+        // …until it lasts longer than the hold, when it is taken as motion.
+        _ = filter.filter({ var f = jumpy; f.sequence = 4; return f }(), at: 0.5, options: options)
+        XCTAssertEqual(filter.rejectedFrames, 0)
+    }
+
     func testSwingAndTwistDecomposition() {
         let axis = simd_normalize(simd_float3(1, 2, 0))
         let twist = simd_quatf(angle: 0.7, axis: axis)

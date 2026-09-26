@@ -26,6 +26,11 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     /// Cut-off of the speed estimate used by `beta`.
     public var derivativeCutoff: Float = 1.0
     public var isEnabled = true
+    /// A lower-body joint moving farther than this between two phone
+    /// frames is a tracker glitch, not motion: the frame is held back for
+    /// up to `glitchHold` seconds.
+    public var maxJointStep: Float = 0.25
+    public var glitchHold: TimeInterval = 0.4
 
     public init() {}
 
@@ -93,12 +98,23 @@ struct OneEuroVector {
 }
 
 /// Smooths successive frames; feed it the newest frame every render tick
-/// with the current time.
+/// with the current time. Also undoes two ARKit body-tracking glitches
+/// before smoothing: a left/right swap (the hip axis reverses between two
+/// frames, faster than anyone can turn) is swapped back, and a frame in
+/// which a lower-body joint jumps implausibly is held back for a moment.
 public struct MocapPoseFilter: Sendable {
     private var rotations: [MocapJoint: OneEuroQuaternion] = [:]
     private var positions: [MocapJoint: OneEuroVector] = [:]
     private var root = OneEuroVector()
     private var lastTime: TimeInterval?
+    private var lastAccepted: MocapFrame?
+    private var lastLateral: simd_float3?
+    private var sidesSwapped = false
+    private var holdUntil: TimeInterval?
+    /// Frames the glitch guard rejected since the last accepted one.
+    public private(set) var rejectedFrames = 0
+    /// Frames whose sides were swapped back.
+    public private(set) var swappedFrames = 0
 
     public init() {}
 
@@ -107,6 +123,74 @@ public struct MocapPoseFilter: Sendable {
         positions.removeAll()
         root = OneEuroVector()
         lastTime = nil
+        lastAccepted = nil
+        lastLateral = nil
+        sidesSwapped = false
+        holdUntil = nil
+        rejectedFrames = 0
+        swappedFrames = 0
+    }
+
+    /// The hip axis (left → right thigh) in world space.
+    private static func lateral(of frame: MocapFrame) -> simd_float3? {
+        guard let l = frame.positions[.leftUpLeg], let r = frame.positions[.rightUpLeg] else { return nil }
+        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        let d = anchor.act(r - l)
+        return simd_length_squared(d) > 1e-6 ? simd_normalize(d) : nil
+    }
+
+    /// `frame` with every left joint's data on the right and vice versa.
+    public static func swappingSides(_ frame: MocapFrame) -> MocapFrame {
+        var swapped = frame
+        swapped.rotations = Dictionary(uniqueKeysWithValues: frame.rotations.map { ($0.key.mirrored, $0.value) })
+        swapped.positions = Dictionary(uniqueKeysWithValues: frame.positions.map { ($0.key.mirrored, $0.value) })
+        swapped.trackedJoints = Set(frame.trackedJoints.map(\.mirrored))
+        return swapped
+    }
+
+    /// Side-swap undo and jump rejection: the frame to smooth, or the last
+    /// accepted one while a glitch is held back.
+    private mutating func guardGlitches(_ frame: MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) -> MocapFrame {
+        guard let previous = lastAccepted, frame.sequence != previous.sequence else {
+            if lastAccepted == nil {
+                lastAccepted = frame
+                lastLateral = Self.lateral(of: frame)
+            }
+            return lastAccepted ?? frame
+        }
+        var candidate = sidesSwapped ? Self.swappingSides(frame) : frame
+        if let lateral = Self.lateral(of: candidate), let last = lastLateral {
+            if simd_dot(lateral, last) < -0.5 {
+                // Reversed in one frame: the tracker swapped the legs.
+                sidesSwapped.toggle()
+                candidate = Self.swappingSides(candidate)
+                swappedFrames += 1
+            }
+        }
+        var jump: Float = 0
+        for joint in MocapJoint.allCases where joint.isLowerBody {
+            if let a = candidate.positions[joint], let b = previous.positions[joint] {
+                jump = max(jump, simd_length(a - b))
+            }
+        }
+        if jump > options.maxJointStep {
+            if let holdUntil, time >= holdUntil {
+                // Held long enough: this is real motion after all.
+                self.holdUntil = nil
+            } else {
+                if holdUntil == nil {
+                    holdUntil = time + options.glitchHold
+                }
+                rejectedFrames += 1
+                return previous
+            }
+        } else {
+            holdUntil = nil
+        }
+        rejectedFrames = 0
+        lastAccepted = candidate
+        lastLateral = Self.lateral(of: candidate) ?? lastLateral
+        return candidate
     }
 
     /// The smoothed frame; untracked frames pass through untouched.
@@ -114,6 +198,7 @@ public struct MocapPoseFilter: Sendable {
         guard options.isEnabled, frame.isTracked else { return frame }
         let dt = Float(min(max(time - (lastTime ?? time), 0), 0.25))
         lastTime = time
+        let frame = guardGlitches(frame, at: time, options: options)
 
         var output = frame
         for (joint, rotation) in frame.rotations {
