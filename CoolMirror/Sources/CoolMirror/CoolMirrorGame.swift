@@ -223,6 +223,11 @@ public final class CoolMirrorGame {
         mocap.isCalibrated
     }
 
+    /// Link state in one line (connected, rate, body seen).
+    public func mocapConnectionSummary() -> String {
+        mocap.connectionSummary
+    }
+
     /// Whether the phone sees the whole body (calibrate only then).
     public func mocapIsFramed() -> Bool {
         mocap.isFramed

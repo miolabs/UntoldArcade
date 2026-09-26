@@ -149,6 +149,17 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         return nil
     }
 
+    /// One line on the link: connected or not, frame rate, body seen.
+    var connectionSummary: String {
+        guard lock.withLock({ enabled }) else { return "○ iPhone link off" }
+        guard receiver.isPeerConnected else { return "○ No iPhone connected — \(receiver.status)" }
+        let hz = receiver.framesPerSecond
+        guard hz > 0 else { return "◐ iPhone connected, no frames arriving" }
+        let tracked = receiver.latestFrame?.isTracked ?? false
+        let pictures = receiver.previewCounts.pictures
+        return "● iPhone connected · \(hz) frames/s · \(tracked ? "body seen" : "no body in view") · \(pictures) pictures"
+    }
+
     /// Newest camera preview from the phone.
     var preview: MocapPreviewFrame? {
         receiver.latestPreview

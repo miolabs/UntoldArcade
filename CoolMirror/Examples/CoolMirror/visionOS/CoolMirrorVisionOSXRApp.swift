@@ -101,6 +101,7 @@ final class MirrorControls {
     var mocapStatus = "off"
     var mocapCalibrated = false
     var mocapFramed = false
+    var mocapConnection = ""
     var mocapPreview: MocapPreviewFrame?
     var calibrationCountdown: Int?
 
@@ -116,6 +117,7 @@ final class MirrorControls {
         mocapStatus = game.mocapStatus()
         mocapCalibrated = game.mocapIsCalibrated()
         mocapFramed = game.mocapIsFramed()
+        mocapConnection = game.mocapConnectionSummary()
     }
 
     func refreshMocapPreview() {
@@ -363,6 +365,10 @@ struct CoolMirrorVisionOSXRApp: App {
                 }
 
                 if controls.mocapEnabled {
+                    Text(controls.mocapConnection)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(controls.mocapConnection.hasPrefix("●") ? Color.green : Color.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     MocapPreviewView(preview: controls.mocapPreview, framed: controls.mocapFramed)
                         .frame(height: 180)
                         .task {
