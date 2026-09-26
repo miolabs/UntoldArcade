@@ -244,6 +244,95 @@ final class CapeClothTests: XCTestCase {
 
     /// The device scenario: the scaled character with capsules on its
     /// bones and a collar that sways, 5 s at 30 fps.
+    func testCoarseningKeepsTheMeshAndCutsTheParticles() throws {
+        guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
+        var cloth = cape.cloth
+        let fine = cloth.stats
+        cloth.coarsen(spacing: CoolMirrorJoltCape.particleSpacing)
+        let stats = cloth.stats
+        print("cape cloth coarse: \(stats)")
+        XCTAssertLessThan(stats.particles, fine.particles / 3, "the solver must run on a fraction of the mesh")
+        XCTAssertGreaterThan(stats.particles, 100)
+        XCTAssertGreaterThan(stats.faces, 100)
+        XCTAssertGreaterThan(stats.pinned, 5, "the collar still pins")
+        XCTAssertLessThan(stats.pinned, stats.particles / 2)
+        XCTAssertEqual(cloth.vertexBindings.count, cloth.vertexIds.count)
+        XCTAssertEqual(cloth.inverseMasses.count, stats.particles)
+        XCTAssertEqual(cloth.pinBindings.count, cloth.pinned.count)
+        XCTAssertLessThan(stats.bindingError, 1e-3, "at rest, the mesh must come back from the coarse particles exactly")
+        // Every particle is held by at least one face: a free one would
+        // fall out of the cape (the 30 mm grid orphaned one this way).
+        var held = [Bool](repeating: false, count: stats.particles)
+        for face in cloth.faces {
+            held[Int(face.x)] = true
+            held[Int(face.y)] = true
+            held[Int(face.z)] = true
+        }
+        XCTAssertFalse(held.contains(false), "an unconstrained particle")
+        for face in cloth.faces {
+            XCTAssertLessThan(Int(face.max()), stats.particles)
+        }
+        // The bindings put every mesh vertex back where the mesh is at rest.
+        let (positions, normals) = cloth.deformedVertices(particles: cloth.particleRest)
+        var worst: Float = 0
+        for (slot, binding) in cloth.vertexBindings.enumerated() {
+            XCTAssertLessThan(abs(binding.weights.x + binding.weights.y + binding.weights.z - 1), 1e-4)
+            XCTAssertGreaterThanOrEqual(binding.weights.min(), -1e-4, "a closest point never extrapolates")
+            XCTAssertLessThan(simd_length(binding.local), 0.06, "an offset beyond a cell means a bad face was chosen")
+            XCTAssertEqual(simd_length(normals[slot]), 1, accuracy: 1e-3)
+            worst = max(worst, simd_length(positions[slot] - cape.cloth.particleRest[Int(cape.cloth.vertexBindings[slot].particles.x)]))
+        }
+        XCTAssertLessThan(worst, 1e-3, "rest reconstruction")
+        // A vertex whose authored normal opposes its faces' winding keeps
+        // the authored direction (a double-sided cape's back layer, or a
+        // mesh wound the other way).
+        let opposing = cloth.vertexBindings.filter { $0.normalSign < 0 }.count
+        print("cape cloth coarse: \(opposing) of \(cloth.vertexBindings.count) vertices' authored normals oppose the winding")
+        // Every coarse pin lands where its collar joints put it at rest.
+        let targets = cloth.pinTargets(joints: cape.restJoints)
+        for (slot, particle) in cloth.pinned.enumerated() {
+            XCTAssertLessThan(simd_length(targets[slot] - cloth.particleRest[Int(particle)]), 2e-3, "pin \(slot)")
+        }
+    }
+
+    /// Not a check: the cost and the particle count per spacing, for
+    /// choosing `CoolMirrorJoltCape.particleSpacing`.
+    func testCoarseningSweepReport() throws {
+        guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
+        for spacing: Float in [0, 0.03, 0.04, 0.05, 0.06, 0.08] {
+            var cloth = cape.cloth
+            cloth.coarsen(spacing: spacing)
+            var settings = JoltWorldSettings()
+            settings.workerThreads = 0
+            settings.collisionSteps = 2
+            let backend = JoltPhysicsBackend(settings: settings)
+            backend.configure(PhysicsWorldConfiguration())
+            var descriptor = JoltSoftBodyDescriptor(
+                vertices: cloth.startWorld, inverseMasses: cloth.inverseMasses, faces: cloth.faces,
+                compliance: 2e-6, shearCompliance: 2e-5, bendCompliance: 4e-4
+            )
+            descriptor.iterations = 4
+            descriptor.linearDamping = CoolMirrorJoltCape.damping
+            descriptor.vertexRadius = 0.012
+            descriptor.maxLinearVelocity = CoolMirrorJoltCape.maxParticleSpeed
+            descriptor.bendType = .distance
+            let body = try XCTUnwrap(backend.addSoftBody(descriptor))
+            var positions: [SIMD3<Float>] = []
+            let start = Date()
+            var farthest: Float = 0
+            for _ in 0 ..< 60 {
+                backend.setSoftBodyVertices(body, indices: cloth.pinned, worldPositions: cloth.pinTargets(joints: cape.restJoints))
+                backend.step(deltaTime: 1.0 / 30.0)
+                backend.readSoftBodyVertices(body, into: &positions)
+                _ = cloth.deformedVertices(particles: positions)
+                farthest = max(farthest, positions.map { simd_length($0 - Self.origin) }.max() ?? 0)
+            }
+            let ms = Date().timeIntervalSince(start) / 60 * 1000
+            print(String(format: "cape cloth sweep: spacing %.0f mm → %d particles, %d faces (%d folded dropped), %d pinned, %d non-manifold edges, binding error %.1f mm, %.2f ms per frame (step + skin), farthest %.2f m", spacing * 1000, cloth.particleRest.count, cloth.faces.count, cloth.stats.facesFolded, cloth.pinned.count, cloth.stats.nonManifoldEdges, cloth.stats.bindingError * 1000, ms, farthest))
+            backend.removeSoftBody(body)
+        }
+    }
+
     func testCapeSurvivesCollidersAndASwayingCollar() throws {
         guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
         var settings = JoltWorldSettings()
@@ -255,6 +344,7 @@ final class CapeClothTests: XCTestCase {
         let bones = CoolMirrorJoltCape.bones(rig)
         // Like the app: the cloth starts outside the colliders, with a speed ceiling.
         var cloth = cape.cloth
+        cloth.coarsen(spacing: CoolMirrorJoltCape.particleSpacing)
         cloth.pushStartOut(of: bones.compactMap { bone in
             guard let a = cape.jointIndex(bone.from), let b = cape.jointIndex(bone.to) else { return nil }
             return .init(start: cape.restJoints[a].position, end: cape.restJoints[b].position, radius: bone.radius)
@@ -264,8 +354,8 @@ final class CapeClothTests: XCTestCase {
             compliance: 2e-6, shearCompliance: 2e-5, bendCompliance: 4e-4
         )
         descriptor.iterations = 4
-        descriptor.linearDamping = 2.0
-        descriptor.vertexRadius = 0.008
+        descriptor.linearDamping = CoolMirrorJoltCape.damping
+        descriptor.vertexRadius = 0.012
         descriptor.maxLinearVelocity = CoolMirrorJoltCape.maxParticleSpeed
         descriptor.bendType = .distance
         let body = try XCTUnwrap(backend.addSoftBody(descriptor))
@@ -288,6 +378,7 @@ final class CapeClothTests: XCTestCase {
 
         var positions: [SIMD3<Float>] = []
         var farthestSeen: Float = 0
+        var stepTime: TimeInterval = 0
         for frame in 0 ..< 150 {
             // The wearer sways 8 cm sideways and turns ±15°: every joint moves.
             let t = Float(frame) / 30
@@ -301,17 +392,20 @@ final class CapeClothTests: XCTestCase {
                 let (position, rotation, _) = pose(joints[a].position, joints[b].position)
                 backend.setKinematicTarget(capsule, position: position, rotation: rotation)
             }
-            backend.setSoftBodyVertices(body, indices: cape.cloth.pinned, worldPositions: cape.cloth.pinTargets(joints: joints))
+            backend.setSoftBodyVertices(body, indices: cloth.pinned, worldPositions: cloth.pinTargets(joints: joints))
+            let stepStart = Date()
             backend.step(deltaTime: 1.0 / 30.0)
+            stepTime += Date().timeIntervalSince(stepStart)
             backend.readSoftBodyVertices(body, into: &positions)
-            let nonFinite = positions.filter { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) }.count
+            let deformed = cloth.deformedVertices(particles: positions)
+            let nonFinite = positions.filter { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) }.count + deformed.positions.filter { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) }.count
             let farthest = positions.map { simd_length($0 - Self.origin) }.max() ?? 0
             farthestSeen = max(farthestSeen, farthest)
             XCTAssertEqual(nonFinite, 0, "frame \(frame)")
             XCTAssertLessThan(farthest, 2.5, "frame \(frame): the cape flew to \(farthest) m")
             if nonFinite > 0 || farthest > 2.5 { break }
         }
-        print("cape cloth: with colliders and a swaying collar, farthest particle over 5 s = \(farthestSeen) m")
+        print(String(format: "cape cloth: with colliders and a swaying collar, farthest particle over 5 s = %.2f m, %d particles, %.2f ms per step", farthestSeen, cloth.particleRest.count, stepTime / 150 * 1000))
         for (capsule, _, _, _) in colliders {
             backend.removeKinematicBody(capsule)
         }

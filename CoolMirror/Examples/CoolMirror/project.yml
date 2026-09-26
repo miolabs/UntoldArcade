@@ -26,9 +26,7 @@ settings:
 
 targets:
   CoolMirrorVisionOS:
-    # Shared scheme, so xcodebuild and a fresh clone find the target.
-    scheme:
-      testTargets: []
+    # Its shared scheme is under `schemes` below.
     type: application
     platform: visionOS
     deploymentTarget: 2.0
@@ -101,3 +99,25 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.miolabs.coolmirrorcapture
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+
+schemes:
+  # Shared, so xcodebuild and a fresh clone find the target. Run and
+  # Profile build Release: in Debug the Swift packages compile at -Onone
+  # and Jolt at -O0 with its asserts on, which is ten to thirty times
+  # slower for the cape cloth and the mocap filters, and a Jolt assert
+  # aborts the app where Release carries on.
+  CoolMirrorVisionOS:
+    build:
+      targets:
+        CoolMirrorVisionOS: all
+    run:
+      config: Release
+    test:
+      config: Debug
+      targets: []
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

@@ -31,6 +31,14 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     /// Ceiling on a particle's speed: a cape never needs more, and it
     /// bounds what a resolved overlap or a tracking jump can throw in.
     static let maxParticleSpeed: Float = 4.0
+    /// The simulated cloth is one particle per this many metres of the
+    /// mesh (under a thousand particles instead of the mesh's four
+    /// thousand, a quarter of the solver cost); the mesh vertices ride on
+    /// the particle triangles.
+    static let particleSpacing: Float = 0.05
+    /// Velocity damping: a heavy cape that settles instead of swinging on
+    /// every wobble of the tracked collar.
+    static let damping: Float = 3.0
 
     private struct Slot {
         var entity: EntityID
@@ -154,24 +162,13 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
                 tearDown()
                 return
             }
-            var normals = [SIMD3<Float>](repeating: .zero, count: piece.cloth.particleRest.count)
-            for face in piece.cloth.faces {
-                let a = world[Int(face.x)], b = world[Int(face.y)], c = world[Int(face.z)]
-                let n = simd_cross(b - a, c - a)
-                normals[Int(face.x)] += n
-                normals[Int(face.y)] += n
-                normals[Int(face.z)] += n
+            // Every mesh vertex from the (coarser) particles, back in model space.
+            let deformed = piece.cloth.deformedVertices(particles: world)
+            let positions = deformed.positions.map { p -> simd_float3 in
+                let m = worldToModel * simd_float4(p, 1)
+                return simd_float3(m.x, m.y, m.z)
             }
-            var positions: [simd_float3] = []
-            var vertexNormals: [simd_float3] = []
-            positions.reserveCapacity(piece.cloth.vertexIds.count)
-            vertexNormals.reserveCapacity(piece.cloth.vertexIds.count)
-            for particle in piece.cloth.particleOfVertex {
-                let p = worldToModel * simd_float4(world[Int(particle)], 1)
-                positions.append(simd_float3(p.x, p.y, p.z))
-                let n = normals[Int(particle)]
-                vertexNormals.append(rotation.inverse.act(simd_length_squared(n) > 1e-12 ? simd_normalize(n) : SIMD3<Float>(0, 0, 1)))
-            }
+            let vertexNormals = deformed.normals.map { rotation.inverse.act($0) }
             setEntityDeformationOverride(
                 entityId: piece.slot.entity, meshIndex: piece.slot.mesh,
                 indices: piece.cloth.vertexIds, positions: positions, normals: vertexNormals
@@ -248,6 +245,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             collarJoints: collarJoints, collarWeight: Self.collarWeight,
             particleMass: Self.particleMass
         )
+        cloth.coarsen(spacing: Self.particleSpacing)
         print("CoolMirror jolt cape: \(cloth.stats)")
         guard !cloth.faces.isEmpty else { return nil }
         cloth.pushStartOut(of: startCapsules, margin: 0.012)
@@ -261,11 +259,10 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         )
         descriptor.position = origin
         // 4 iterations and 2 Jolt sub-steps hold (the headless scenario
-        // sweeps this) at a third of the solver cost of 8 × 3; the damping
-        // keeps the cape from swinging on every tracker wobble.
+        // sweeps this) at a third of the solver cost of 8 × 3.
         descriptor.iterations = 4
-        descriptor.linearDamping = 2.0
-        descriptor.vertexRadius = 0.008
+        descriptor.linearDamping = Self.damping
+        descriptor.vertexRadius = 0.012
         descriptor.friction = 0.5
         descriptor.maxLinearVelocity = Self.maxParticleSpeed
         // Dihedral bends diverge under a moving collar (the headless cape
