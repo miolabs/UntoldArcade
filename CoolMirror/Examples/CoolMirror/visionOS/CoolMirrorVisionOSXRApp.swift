@@ -80,6 +80,10 @@ final class MirrorControls {
         didSet { XRHolder.shared.game?.setMuscleCagesVisible(showCages) }
     }
     var showMuscleList = false
+    var hasCape = false
+    var capeEnabled = true {
+        didSet { XRHolder.shared.game?.setCapeEnabled(capeEnabled) }
+    }
 
     // iPhone motion capture
     var mocapEnabled = false {
@@ -178,6 +182,8 @@ final class MirrorControls {
         morphNames = game.morphTargetNames()
         muscleNames = game.muscleNames()
         hasMLDeformer = game.hasMLDeformer()
+        hasCape = game.hasCape()
+        game.setCapeEnabled(capeEnabled)
         clips = game.clipNames()
         clip = clips.first ?? ""
         paused = false
@@ -265,6 +271,13 @@ struct CoolMirrorVisionOSXRApp: App {
                         Toggle(controls.paused ? "Paused — compare skinning now" : "Playing", isOn: $controls.paused)
                             .toggleStyle(.button)
                             .disabled(controls.mocapEnabled)
+                    }
+                    if controls.hasCape {
+                        GridRow {
+                            Text("Cape")
+                            Toggle(controls.capeEnabled ? "Cloth simulation" : "Rigid (model)", isOn: $controls.capeEnabled)
+                                .toggleStyle(.button)
+                        }
                     }
                     GridRow {
                         Text("iPhone")
@@ -425,6 +438,7 @@ struct CoolMirrorVisionOSXRApp: App {
                     return
                 }
 
+                CoolMirrorGame.registerRenderPlugins()
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 XRHolder.shared.xr = xr
                 xr.setImmersionMode(xrImmersionMode: .mixed)

@@ -79,6 +79,7 @@ public final class CoolMirrorGame {
     private var muscleMode: CoolMirrorMuscleMode = .off
     private var pausedByUser = false
     private let mocap = CoolMirrorMocapController()
+    private let cape = CoolMirrorCape()
     private var muscleFlex: Float = 0
     private var mlDeformerWeight: Float = 1
     private var muscleCagesVisible = false
@@ -99,8 +100,25 @@ public final class CoolMirrorGame {
     // Called from the XR render thread, between the animation update and
     // the render: the mocap controller retargets the newest iPhone frame
     // onto the character here (its own state is lock-protected).
-    public nonisolated func update(deltaTime _: Float) {
+    public nonisolated func update(deltaTime: Float) {
         mocap.update()
+        cape.update(deltaTime: deltaTime)
+    }
+
+    /// Installs the cloth plugin the cape uses; call once before the XR
+    /// renderer is created.
+    public static func registerRenderPlugins() {
+        CoolMirrorCape.registerPlugin()
+    }
+
+    /// Batman's cape as simulated cloth hanging from his shoulders (no
+    /// effect on the other characters).
+    public func setCapeEnabled(_ enabled: Bool) {
+        cape.setEnabled(enabled)
+    }
+
+    public func hasCape() -> Bool {
+        CoolMirrorCapeRig.rig(for: character) != nil
     }
 
     public nonisolated func handleInput() {}
@@ -115,6 +133,7 @@ public final class CoolMirrorGame {
         onCharacterReady = nil
         mocap.setCharacter(nil, mapping: nil)
         mocap.setEnabled(false)
+        cape.setCharacter(nil, character: nil)
     }
 
     public func setCharacter(_ newCharacter: CoolMirrorCharacter) {
@@ -148,6 +167,7 @@ public final class CoolMirrorGame {
             self.applyClip()
             self.applySkinningPath()
             self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter), origin: self.characterPosition)
+            self.cape.setCharacter(characterId, character: newCharacter)
             self.applyMocapPause()
             self.onCharacterReady?()
         }

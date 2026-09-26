@@ -17,6 +17,8 @@ let package = Package(
     dependencies: [
         // Tracks the engine's deformation feature branch until it merges into develop.
         .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/mirror_mocap"),
+        // XPBD cloth for Batman's cape.
+        .package(path: "../CoolCloth"),
     ],
     targets: [
         .target(
@@ -30,6 +32,7 @@ let package = Package(
             dependencies: [
                 "CoolMirrorMocap",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
+                .product(name: "CoolCloth", package: "CoolCloth"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

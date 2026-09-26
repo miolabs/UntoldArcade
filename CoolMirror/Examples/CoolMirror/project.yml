@@ -10,6 +10,8 @@ packages:
   UntoldEngine:
     url: https://github.com/miolabs/UntoldEngine.git
     branch: feature/mirror_mocap
+  CoolCloth:
+    path: ../../../CoolCloth
 
 settings:
   base:
@@ -21,6 +23,9 @@ settings:
 
 targets:
   CoolMirrorVisionOS:
+    # Shared scheme, so xcodebuild and a fresh clone find the target.
+    scheme:
+      testTargets: []
     type: application
     platform: visionOS
     deploymentTarget: 2.0
@@ -35,6 +40,8 @@ targets:
     dependencies:
       - package: CoolMirror
         product: CoolMirror
+      - package: CoolCloth
+        product: CoolCloth
       - package: UntoldEngine
         product: UntoldEngine
       - package: UntoldEngine
@@ -61,6 +68,9 @@ targets:
           SWIFT_OPTIMIZATION_LEVEL: -O
 
   CoolMirrorCapture:
+    # Shared scheme, so xcodebuild and a fresh clone find the target.
+    scheme:
+      testTargets: []
     type: application
     platform: iOS
     deploymentTarget: 17.0

@@ -8,15 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		149C80F39DBDBFDC1590A680 /* Animations in Resources */ = {isa = PBXBuildFile; fileRef = 8B96D88176E9C169CD0FF9A5 /* Animations */; };
-		17B1320EA69FB1FCB2AFFD29 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = C428B307CE745CEF80EF6B99 /* UntoldEngineXR */; };
+		17B1320EA69FB1FCB2AFFD29 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = CDE0DFF20D7B4D2821567090 /* UntoldEngine */; };
 		2567033DC32C3B3AB6042452 /* CoolMirrorVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17E2CA908C23FF1D375561E2 /* CoolMirrorVisionOSXRApp.swift */; };
 		4DE9A936B8DA81A8A03BF71E /* BodyTrackingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC0B3962D7FB9668954CF795 /* BodyTrackingView.swift */; };
-		520F5BEDCAB1B0F7B1DDD830 /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = CDE0DFF20D7B4D2821567090 /* UntoldEngine */; };
+		520F5BEDCAB1B0F7B1DDD830 /* CoolCloth in Frameworks */ = {isa = PBXBuildFile; productRef = C06BC1F09B55FE748AC2D8E6 /* CoolCloth */; };
 		54DE0AE726556B834C4C8361 /* CaptureSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8154E6C4C318B6B7FE3CA66 /* CaptureSession.swift */; };
 		5615C8D6AAF7A3B31CA34144 /* Models in Resources */ = {isa = PBXBuildFile; fileRef = 71BD9E76868F9DFF037BB206 /* Models */; };
-		8ACBBEF4A2B652476433B61B /* UntoldEngineAR in Frameworks */ = {isa = PBXBuildFile; productRef = 0C7F387527CE8C4090842FA3 /* UntoldEngineAR */; };
+		8ACBBEF4A2B652476433B61B /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = C428B307CE745CEF80EF6B99 /* UntoldEngineXR */; };
+		8F57CD9F19F4EFD706955962 /* UntoldEngineShaderSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 5B80A9C24374E5B5F5FD1691 /* UntoldEngineShaderSupport */; };
 		D55645A1824BAEF10E90F1D7 /* CoolMirrorMocap in Frameworks */ = {isa = PBXBuildFile; productRef = BB853237F59FE3DB122736F6 /* CoolMirrorMocap */; };
-		D8F4358BFF1E79DFAD247F5F /* UntoldEngineShaderSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 5B80A9C24374E5B5F5FD1691 /* UntoldEngineShaderSupport */; };
+		D8F4358BFF1E79DFAD247F5F /* UntoldEngineAR in Frameworks */ = {isa = PBXBuildFile; productRef = 0C7F387527CE8C4090842FA3 /* UntoldEngineAR */; };
 		F5D7C0367157571EB51E4D72 /* CoolMirror in Frameworks */ = {isa = PBXBuildFile; productRef = DBB255704C65CDE15EB9548A /* CoolMirror */; };
 		F9CDA3310D3FA0EC6EE8BF69 /* CoolMirrorCaptureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489D56CB5721A170A952E64B /* CoolMirrorCaptureApp.swift */; };
 /* End PBXBuildFile section */
@@ -32,6 +33,7 @@
 		71BD9E76868F9DFF037BB206 /* Models */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Models; path = Assets/Models; sourceTree = SOURCE_ROOT; };
 		8B96D88176E9C169CD0FF9A5 /* Animations */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Animations; path = Assets/Animations; sourceTree = SOURCE_ROOT; };
 		C8154E6C4C318B6B7FE3CA66 /* CaptureSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSession.swift; sourceTree = "<group>"; };
+		F3E8E3CBCA2EA7EACF8DDEC0 /* CoolCloth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CoolCloth; path = ../../../CoolCloth; sourceTree = SOURCE_ROOT; };
 		FC0B3962D7FB9668954CF795 /* BodyTrackingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyTrackingView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -49,10 +51,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				F5D7C0367157571EB51E4D72 /* CoolMirror in Frameworks */,
-				520F5BEDCAB1B0F7B1DDD830 /* UntoldEngine in Frameworks */,
-				17B1320EA69FB1FCB2AFFD29 /* UntoldEngineXR in Frameworks */,
-				8ACBBEF4A2B652476433B61B /* UntoldEngineAR in Frameworks */,
-				D8F4358BFF1E79DFAD247F5F /* UntoldEngineShaderSupport in Frameworks */,
+				520F5BEDCAB1B0F7B1DDD830 /* CoolCloth in Frameworks */,
+				17B1320EA69FB1FCB2AFFD29 /* UntoldEngine in Frameworks */,
+				8ACBBEF4A2B652476433B61B /* UntoldEngineXR in Frameworks */,
+				D8F4358BFF1E79DFAD247F5F /* UntoldEngineAR in Frameworks */,
+				8F57CD9F19F4EFD706955962 /* UntoldEngineShaderSupport in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -62,6 +65,7 @@
 		259F3FAE58820DE706AADE47 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
+				F3E8E3CBCA2EA7EACF8DDEC0 /* CoolCloth */,
 				1510621811F4CF69EDC3E489 /* CoolMirror */,
 			);
 			name = Packages;
@@ -145,6 +149,7 @@
 			name = CoolMirrorVisionOS;
 			packageProductDependencies = (
 				DBB255704C65CDE15EB9548A /* CoolMirror */,
+				C06BC1F09B55FE748AC2D8E6 /* CoolCloth */,
 				CDE0DFF20D7B4D2821567090 /* UntoldEngine */,
 				C428B307CE745CEF80EF6B99 /* UntoldEngineXR */,
 				0C7F387527CE8C4090842FA3 /* UntoldEngineAR */,
@@ -184,6 +189,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				404CCDF6D0EF1CC51E5095C9 /* XCRemoteSwiftPackageReference "UntoldEngine" */,
+				625CAC09E80161E10599B41F /* XCLocalSwiftPackageReference "../../../CoolCloth" */,
 				3BAFCF81573AC04A2FEF35D6 /* XCLocalSwiftPackageReference "../.." */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -472,6 +478,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../..;
 		};
+		625CAC09E80161E10599B41F /* XCLocalSwiftPackageReference "../../../CoolCloth" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../CoolCloth;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -499,6 +509,10 @@
 		BB853237F59FE3DB122736F6 /* CoolMirrorMocap */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CoolMirrorMocap;
+		};
+		C06BC1F09B55FE748AC2D8E6 /* CoolCloth */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CoolCloth;
 		};
 		C428B307CE745CEF80EF6B99 /* UntoldEngineXR */ = {
 			isa = XCSwiftPackageProductDependency;

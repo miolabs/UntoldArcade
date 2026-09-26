@@ -15,6 +15,7 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
 
     private let encodeLock = NSLock()
     private var currentTextureIsA = true
+    private var solveBindings: SolveBindings?
     private var appliedResetGeneration: UInt64 = .max
     private var simulationTime: Float = 0
     private var geometryInitialized = false
@@ -225,6 +226,7 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
             snapshotPositions(from: currentSource(textures), model: model)
 
             var params = makeParams(state: state, model: model, invModel: invModel, dt: 0)
+            solveBindings = makeSolveBindings(state: state)
 
             if state.resetGeneration != appliedResetGeneration {
                 encodeInit(context, textures: textures, params: params)
@@ -287,15 +289,40 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
                 state.pinMode.rawValue,
                 state.grab != nil ? 1 : 0,
                 state.sphereActive ? 1 : 0,
-                0
+                state.pinTargets != nil ? 1 : 0
             ),
             grab: SIMD4<UInt32>(
                 UInt32(state.grab?.column ?? 0),
                 UInt32(state.grab?.row ?? 0),
                 grabRadiusInParticles(state.grabRadiusWorld, model: model),
-                0
+                UInt32(min(state.capsules.count, coolClothCapsuleCount))
             )
         )
+    }
+
+    /// Per-column attachment targets and capsule colliders, bound next to
+    /// the params on every simulation kernel (small enough for setBytes).
+    private struct SolveBindings {
+        var pinTargets: [SIMD4<Float>]
+        var capsules: [CoolClothCapsuleData]
+    }
+
+    private func makeSolveBindings(state: CoolClothSimulation.FrameState) -> SolveBindings {
+        var pins = [SIMD4<Float>](repeating: .zero, count: coolClothPinTargetCount)
+        if let targets = state.pinTargets {
+            for (column, target) in targets.prefix(coolClothPinTargetCount).enumerated() {
+                pins[column] = SIMD4<Float>(target, 1)
+            }
+        }
+        var capsules = [CoolClothCapsuleData](
+            repeating: CoolClothCapsuleData(a: .zero, b: .zero), count: coolClothCapsuleCount
+        )
+        for (index, capsule) in state.capsules.prefix(coolClothCapsuleCount).enumerated() {
+            capsules[index] = CoolClothCapsuleData(
+                a: SIMD4<Float>(capsule.start, capsule.radius), b: SIMD4<Float>(capsule.end, 0)
+            )
+        }
+        return SolveBindings(pinTargets: pins, capsules: capsules)
     }
 
     /// Converts the world-space grab radius into simulation-grid units using
@@ -344,6 +371,14 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
             length: MemoryLayout<CoolClothSimParams>.stride,
             index: CoolClothSimBufferIndex.params.rawValue
         )
+        if var bindings = solveBindings {
+            bindings.pinTargets.withUnsafeMutableBytes { raw in
+                encoder.setBytes(raw.baseAddress!, length: raw.count, index: CoolClothSimBufferIndex.pinTargets.rawValue)
+            }
+            bindings.capsules.withUnsafeMutableBytes { raw in
+                encoder.setBytes(raw.baseAddress!, length: raw.count, index: CoolClothSimBufferIndex.capsules.rawValue)
+            }
+        }
         return (encoder, pipeline)
     }
 
