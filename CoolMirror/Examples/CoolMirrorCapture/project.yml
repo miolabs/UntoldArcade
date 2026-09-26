@@ -1,0 +1,35 @@
+name: CoolMirrorCapture
+
+packages:
+  CoolMirror:
+    path: ../..
+
+targets:
+  CoolMirrorCapture:
+    type: application
+    platform: iOS
+    deploymentTarget: 17.0
+    sources:
+      - path: CoolMirrorCapture
+    dependencies:
+      - package: CoolMirror
+        product: CoolMirrorMocap
+    info:
+      path: CoolMirrorCapture/Info.plist
+      properties:
+        CFBundleDisplayName: CoolMirror Capture
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiredDeviceCapabilities: [arkit]
+        NSCameraUsageDescription: Tracks your body with the rear camera and streams the pose to the CoolMirror visionOS app.
+        NSLocalNetworkUsageDescription: Finds the CoolMirror visionOS app on your local network to stream your body pose to it.
+        NSBonjourServices: [_coolmirror._udp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miolabs.coolmirrorcapture
+        SWIFT_VERSION: 5.0
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES

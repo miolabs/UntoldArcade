@@ -79,6 +79,49 @@ final class MirrorControls {
         didSet { XRHolder.shared.game?.setMuscleCagesVisible(showCages) }
     }
     var showMuscleList = false
+
+    // iPhone motion capture
+    var mocapEnabled = false {
+        didSet {
+            XRHolder.shared.game?.setMocapEnabled(mocapEnabled)
+            refreshMocapStatus()
+        }
+    }
+    var mocapMirror = true { didSet { pushMocapOptions() } }
+    var mocapFlipFacing = false { didSet { pushMocapOptions() } }
+    var mocapRootMotion = true { didSet { pushMocapOptions() } }
+    var mocapWeight: Double = 1 { didSet { pushMocapOptions() } }
+    var mocapStatus = "off"
+    var mocapCalibrated = false
+    var calibrationCountdown: Int?
+
+    func pushMocapOptions() {
+        XRHolder.shared.game?.setMocapOptions(
+            mirror: mocapMirror, flipFacing: mocapFlipFacing, weight: Float(mocapWeight), rootMotion: mocapRootMotion
+        )
+    }
+
+    func refreshMocapStatus() {
+        guard let game = XRHolder.shared.game else { return }
+        mocapStatus = game.mocapStatus()
+        mocapCalibrated = game.mocapIsCalibrated()
+    }
+
+    /// Three-second countdown so the user can settle into the character's
+    /// rest pose, then the next tracked frame becomes the calibration.
+    func startCalibration() {
+        guard calibrationCountdown == nil else { return }
+        calibrationCountdown = 3
+        Task { @MainActor in
+            while let remaining = calibrationCountdown, remaining > 0 {
+                try? await Task.sleep(for: .seconds(1))
+                calibrationCountdown = remaining - 1
+            }
+            XRHolder.shared.game?.calibrateMocap()
+            calibrationCountdown = nil
+            refreshMocapStatus()
+        }
+    }
     var muscleNames: [String] = []
     var muscleEnabled: [String: Bool] = [:]
     var muscleActivation: [String: Double] = [:]
@@ -103,6 +146,8 @@ final class MirrorControls {
 
     func characterReady() {
         guard let game = XRHolder.shared.game else { return }
+        pushMocapOptions()
+        game.setMocapEnabled(mocapEnabled)
         morphNames = game.morphTargetNames()
         muscleNames = game.muscleNames()
         hasMLDeformer = game.hasMLDeformer()
@@ -190,6 +235,36 @@ struct CoolMirrorVisionOSXRApp: App {
                         Text("Playback")
                         Toggle(controls.paused ? "Paused — compare skinning now" : "Playing", isOn: $controls.paused)
                             .toggleStyle(.button)
+                            .disabled(controls.mocapEnabled)
+                    }
+                    GridRow {
+                        Text("iPhone")
+                        Toggle(controls.mocapEnabled ? "Mirroring your body" : "Use iPhone body tracking", isOn: $controls.mocapEnabled)
+                            .toggleStyle(.button)
+                    }
+                    if controls.mocapEnabled {
+                        GridRow {
+                            Text("Calibrate")
+                            HStack {
+                                Button {
+                                    controls.startCalibration()
+                                } label: {
+                                    if let remaining = controls.calibrationCountdown {
+                                        Text("Hold the pose… \(remaining)")
+                                    } else {
+                                        Text(controls.mocapCalibrated ? "Recalibrate" : "Stand like the character, then tap")
+                                    }
+                                }
+                                .disabled(controls.calibrationCountdown != nil)
+                                Toggle("Mirror", isOn: $controls.mocapMirror).toggleStyle(.button)
+                                Toggle("Flip", isOn: $controls.mocapFlipFacing).toggleStyle(.button)
+                                Toggle("Move", isOn: $controls.mocapRootMotion).toggleStyle(.button)
+                            }
+                        }
+                        GridRow {
+                            Text("Mocap blend")
+                            Slider(value: $controls.mocapWeight, in: 0 ... 1)
+                        }
                     }
                     GridRow {
                         Text("Skinning")
@@ -255,6 +330,17 @@ struct CoolMirrorVisionOSXRApp: App {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
+                if controls.mocapEnabled {
+                    Text("iPhone: \(controls.mocapStatus)")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .task {
+                            while !Task.isCancelled {
+                                controls.refreshMocapStatus()
+                                try? await Task.sleep(for: .milliseconds(500))
+                            }
+                        }
+                }
+
                 if controls.skinningPath == .vertexShader {
                     Text("Morphs need a compute skinning path (LBS/DQS/DDM).")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -263,7 +349,7 @@ struct CoolMirrorVisionOSXRApp: App {
             .padding(48)
         }
         .windowStyle(.plain)
-        .defaultSize(width: 640, height: 520)
+        .defaultSize(width: 640, height: 600)
 
         ImmersiveSpace(id: "Mirror") {
             CompositorLayer(configuration: MirrorLayerConfiguration()) { layerRenderer in

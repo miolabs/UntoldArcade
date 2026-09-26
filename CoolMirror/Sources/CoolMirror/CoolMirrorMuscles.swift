@@ -19,6 +19,7 @@ struct CoolMirrorRigProfile: Sendable {
     let chest: String
     let upperChest: String
     let neck: String
+    let head: String
     let clavicle: String
     let upperArm: String
     let forearm: String
@@ -30,12 +31,21 @@ struct CoolMirrorRigProfile: Sendable {
     /// Rewrites a left-side joint name into its right-side twin.
     let mirror: @Sendable (String) -> String
 
+    static func profile(for character: CoolMirrorCharacter) -> CoolMirrorRigProfile? {
+        switch character {
+        case .spiderman: .mixamo
+        case .batman: .biped
+        case .redplayer: nil
+        }
+    }
+
     static let mixamo = CoolMirrorRigProfile(
         pelvis: "mixamorig:Pelvis",
         spine: "mixamorig:Spine",
         chest: "mixamorig:Spine2",
         upperChest: "mixamorig:Spine3",
         neck: "mixamorig:Neck",
+        head: "mixamorig:Head",
         clavicle: "mixamorig:LeftShoulder",
         upperArm: "mixamorig:LeftArm",
         forearm: "mixamorig:LeftForeArm",
@@ -53,6 +63,7 @@ struct CoolMirrorRigProfile: Sendable {
         chest: "Bip01_Spine2",
         upperChest: "Bip01_Spine3",
         neck: "Bip01_Neck",
+        head: "Bip01_Head",
         clavicle: "Bip01_L_Clavicle",
         upperArm: "Bip01_L_UpperArm",
         forearm: "Bip01_L_Forearm",

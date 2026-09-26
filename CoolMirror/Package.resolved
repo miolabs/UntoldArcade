@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/miolabs/UntoldEngine.git",
       "state" : {
-        "branch" : "feature/ml_deformer",
-        "revision" : "c340089589b9b0e1ab5cf18c2f329335183cbd0b"
+        "branch" : "feature/mirror_mocap",
+        "revision" : "7472196a1a30106dd1b4ced2995a2303027813dc"
       }
     }
   ],

@@ -4,10 +4,14 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>CoolMirror Capture</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
@@ -20,14 +24,19 @@
 	<array>
 		<string>_coolmirror._udp</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Tracks your body with the rear camera and streams the pose to the CoolMirror visionOS app.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Receives body tracking from the CoolMirror Capture iPhone app on your local network.</string>
-	<key>NSWorldSensingUsageDescription</key>
-	<string>Detects the floor and nearby surfaces so the mirror character can stand in your room.</string>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
-	</dict>
+	<string>Finds the CoolMirror visionOS app on your local network to stream your body pose to it.</string>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arkit</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 </dict>
 </plist>

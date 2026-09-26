@@ -8,6 +8,7 @@
 //  engine draws the character; this class spawns it and forwards controls.
 //
 
+import CoolMirrorMocap
 import simd
 import UntoldEngine
 
@@ -76,6 +77,8 @@ public final class CoolMirrorGame {
     private var skinningPath: CoolMirrorSkinningPath = .vertexShader
     private var currentClip: String?
     private var muscleMode: CoolMirrorMuscleMode = .off
+    private var pausedByUser = false
+    private let mocap = CoolMirrorMocapController()
     private var muscleFlex: Float = 0
     private var mlDeformerWeight: Float = 1
     private var muscleCagesVisible = false
@@ -93,10 +96,12 @@ public final class CoolMirrorGame {
         setCharacter(character)
     }
 
-    // Called from the XR render thread; all mutable state stays on the main
-    // actor, so these are intentionally empty pass-throughs for now (live
-    // mocap will feed poses here in a later phase).
-    public nonisolated func update(deltaTime _: Float) {}
+    // Called from the XR render thread, between the animation update and
+    // the render: the mocap controller retargets the newest iPhone frame
+    // onto the character here (its own state is lock-protected).
+    public nonisolated func update(deltaTime _: Float) {
+        mocap.update()
+    }
 
     public nonisolated func handleInput() {}
 
@@ -108,6 +113,8 @@ public final class CoolMirrorGame {
         generation += 1
         characterId = nil
         onCharacterReady = nil
+        mocap.setCharacter(nil, mapping: nil)
+        mocap.setEnabled(false)
     }
 
     public func setCharacter(_ newCharacter: CoolMirrorCharacter) {
@@ -140,6 +147,8 @@ public final class CoolMirrorGame {
             setEntityMuscleRig(entityId: characterId, rig: CoolMirrorMuscles.rig(for: newCharacter))
             self.applyClip()
             self.applySkinningPath()
+            self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter))
+            self.applyMocapPause()
             self.onCharacterReady?()
         }
     }
@@ -157,8 +166,47 @@ public final class CoolMirrorGame {
     /// Freeze playback on the current frame so skinning paths can be
     /// compared on the exact same pose.
     public func setPaused(_ paused: Bool) {
+        pausedByUser = paused
+        applyMocapPause()
+    }
+
+    // MARK: - iPhone motion capture
+
+    /// Streams the user's body pose from the iPhone capture app onto the
+    /// character (the clip freezes underneath; joints the capture drives
+    /// follow the user, the rest keep the frozen pose).
+    public func setMocapEnabled(_ enabled: Bool) {
+        mocap.setEnabled(enabled)
+        applyMocapPause()
+    }
+
+    /// Captures the next tracked frame as the pose matching the character's
+    /// rest pose; call it while the user holds that pose.
+    public func calibrateMocap() {
+        mocap.requestCalibration()
+    }
+
+    public func setMocapOptions(mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool) {
+        var options = MocapRetargetOptions()
+        options.mirror = mirror
+        options.flipFacing = flipFacing
+        options.weight = weight
+        options.rootTranslationScale = rootMotion ? 1 : 0
+        mocap.options = options
+    }
+
+    public func mocapStatus() -> String {
+        mocap.status
+    }
+
+    public func mocapIsCalibrated() -> Bool {
+        mocap.isCalibrated
+    }
+
+    private func applyMocapPause() {
         guard let characterId else { return }
-        pauseAnimationComponent(entityId: characterId, isPaused: paused)
+        // Mocap needs a frozen base pose; otherwise the user's pause choice.
+        pauseAnimationComponent(entityId: characterId, isPaused: pausedByUser || mocap.isEnabled)
     }
 
     /// Pose-space deformation: authored drivers fire morphs from the pose

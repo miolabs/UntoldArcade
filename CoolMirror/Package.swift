@@ -11,15 +11,24 @@ let package = Package(
     ],
     products: [
         .library(name: "CoolMirror", targets: ["CoolMirror"]),
+        // Wire format + transport + retargeting shared with the iPhone capture app.
+        .library(name: "CoolMirrorMocap", targets: ["CoolMirrorMocap"]),
     ],
     dependencies: [
         // Tracks the engine's deformation feature branch until it merges into develop.
-        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/ml_deformer"),
+        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/mirror_mocap"),
     ],
     targets: [
         .target(
+            name: "CoolMirrorMocap",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .target(
             name: "CoolMirror",
             dependencies: [
+                "CoolMirrorMocap",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
             ],
             swiftSettings: [
@@ -42,6 +51,7 @@ let package = Package(
             name: "CoolMirrorTests",
             dependencies: [
                 "CoolMirror",
+                "CoolMirrorMocap",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
             ],
             swiftSettings: [
