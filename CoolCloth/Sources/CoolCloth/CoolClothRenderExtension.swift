@@ -15,6 +15,9 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
 
     private let encodeLock = NSLock()
     private var currentTextureIsA = true
+    /// The grid has been written at least once; before that the position
+    /// textures hold garbage and the sheet must not be drawn.
+    private var initializedOnce = false
     private var solveBindings: SolveBindings?
     private var appliedResetGeneration: UInt64 = .max
     private var simulationTime: Float = 0
@@ -228,9 +231,10 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
             var params = makeParams(state: state, model: model, invModel: invModel, dt: 0)
             solveBindings = makeSolveBindings(state: state)
 
-            if state.resetGeneration != appliedResetGeneration {
+            if state.resetGeneration != appliedResetGeneration || !initializedOnce {
                 encodeInit(context, textures: textures, params: params)
                 appliedResetGeneration = state.resetGeneration
+                initializedOnce = true
                 simulationTime = 0
             }
 
@@ -537,6 +541,7 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
         }
 
         encodeLock.withLock {
+            guard initializedOnce else { return }
             initializeGeometryIfNeeded(indexBuffer: indexBuffer, ballBuffer: ballVertices)
             ensureDefaultFabric(device: context.device)
             let appearance = CoolClothAppearance.shared.state()

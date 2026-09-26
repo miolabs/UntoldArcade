@@ -15,7 +15,7 @@ import simd
 import UntoldEngine
 
 /// Joint names the cape hangs from and collides with, per rig.
-struct CoolMirrorCapeRig: Sendable {
+struct CoolMirrorCapeRig {
     var neck: String
     var upperChest: String
     var chest: String
@@ -108,6 +108,18 @@ final class CoolMirrorCape: @unchecked Sendable {
                 sheen: simd_float3(0.12, 0.12, 0.16), sheenIntensity: 0.35
             )
             setCoolClothFloor(worldY: 0)
+            // Lay the sheet out at once (behind the character, hanging from
+            // shoulder height) so the first drawn frames are a cape, not the
+            // uninitialised grid; the first update refines the placement
+            // from the skeleton.
+            let origin = getPosition(entityId: characterId)
+            let facing = getRotationQuaternion(entityId: characterId)
+            let back = -simd_normalize(facing.act(simd_float3(0, 0, 1)))
+            let translation = Self.translation(origin + back * (Self.backOffset + 0.05) + simd_float3(0, 1.45 - Self.length / 2, 0))
+            let yaw = atan2(back.x, back.z)
+            setCoolClothModelMatrix(translation * Self.rotationY(yaw) * Self.scale(simd_float3(Self.width / 2, Self.length / 2, 1)))
+            setCoolClothPinTargets(worldPositions: nil)
+            resetCoolCloth(pinMode: .topEdge)
             hideModelCape(entityId: characterId, hidden: true)
         } else {
             setCoolClothPaused(true)
@@ -191,9 +203,16 @@ final class CoolMirrorCape: @unchecked Sendable {
     /// faded out while the cloth stands in for it.
     private func hideModelCape(entityId: EntityID, hidden: Bool) {
         let slot: (mesh: Int, submesh: Int)? = lock.withLock { hiddenCape } ?? Self.capeSlot(entityId: entityId)
-        guard let slot else { return }
+        guard let slot else {
+            print("CoolMirror cape: no submesh with a cape texture found; material slots: \(Self.describeMaterialSlots(entityId: entityId))")
+            return
+        }
         lock.withLock { hiddenCape = slot }
-        updateMaterialAlphaMode(entityId: entityId, mode: hidden ? .blend : .opaque, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+        print("CoolMirror cape: model cape is mesh \(slot.mesh) submesh \(slot.submesh), \(hidden ? "hidden" : "shown")")
+        // Mask with zero opacity: every fragment falls under the cutoff and is
+        // discarded in the main pass (blend would need the transparency pass).
+        updateMaterialAlphaMode(entityId: entityId, mode: hidden ? .mask : .opaque, meshIndex: slot.mesh, submeshIndex: slot.submesh)
+        updateMaterialAlphaCutoff(entityId: entityId, cutoff: 0.5, meshIndex: slot.mesh, submeshIndex: slot.submesh)
         updateMaterialOpacity(entityId: entityId, opacity: hidden ? 0 : 1, meshIndex: slot.mesh, submeshIndex: slot.submesh)
     }
 
@@ -210,6 +229,18 @@ final class CoolMirrorCape: @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    private static func describeMaterialSlots(entityId: EntityID) -> String {
+        var names: [String] = []
+        for mesh in 0 ..< 8 {
+            for submesh in 0 ..< 32 {
+                if let url = getMaterialTextureURL(entityId: entityId, type: .baseColor, meshIndex: mesh, submeshIndex: submesh) {
+                    names.append("\(mesh)/\(submesh)=\(url.lastPathComponent)")
+                }
+            }
+        }
+        return names.isEmpty ? "none with a base colour texture" : names.joined(separator: ", ")
     }
 
     private static func translation(_ t: simd_float3) -> simd_float4x4 {
