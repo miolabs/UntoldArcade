@@ -222,7 +222,11 @@ kernel void coolClothSolveKernel(texture2d<float, access::read> posSrc [[texture
             float3 d = xw - closest;
             float len = length(d);
             if (len < r && len > 1e-6) {
-                xw += d / len * (r - len);
+                // Soft push-out (b.w = fraction of the penetration removed
+                // per substep, 1 when unset): a full projection against
+                // pinned neighbours pumps energy into the sheet.
+                float soft = capsules[i].b.w > 0.0 ? capsules[i].b.w : 1.0;
+                xw += d / len * (r - len) * soft;
             }
         }
         x = (p.invModel * float4(xw, 1.0)).xyz;

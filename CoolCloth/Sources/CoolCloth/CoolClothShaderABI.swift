@@ -17,7 +17,7 @@ struct CoolClothSimParams {
 /// CPU representation of `CoolClothCapsule` in Metal.
 struct CoolClothCapsuleData {
     var a: SIMD4<Float>   // xyz start, w radius
-    var b: SIMD4<Float>   // xyz end, w unused
+    var b: SIMD4<Float>   // xyz end, w push-out fraction per substep (0 = 1)
 }
 
 /// Attachment targets per top-row column (world, w = 1 when active).

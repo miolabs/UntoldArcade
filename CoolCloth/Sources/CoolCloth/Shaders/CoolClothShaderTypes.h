@@ -48,7 +48,7 @@ enum CoolClothPinModeValue {
 
 struct CoolClothCapsule {
     metal::float4 a;   // xyz start, w radius
-    metal::float4 b;   // xyz end, w unused
+    metal::float4 b;   // xyz end, w push-out fraction per substep (0 = 1)
 };
 
 enum CoolClothSimBufferIndex {

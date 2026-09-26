@@ -82,7 +82,9 @@ final class CoolClothGPUTests: XCTestCase {
         _ pipeline: MTLComputePipelineState,
         _ commandBuffer: MTLCommandBuffer,
         params: inout CoolClothSimParams,
-        textures: [MTLTexture]
+        textures: [MTLTexture],
+        pinTargets: [SIMD4<Float>]? = nil,
+        capsules: [CoolClothCapsuleData]? = nil
     ) {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             return XCTFail("no compute encoder")
@@ -93,6 +95,16 @@ final class CoolClothGPUTests: XCTestCase {
             length: MemoryLayout<CoolClothSimParams>.stride,
             index: CoolClothSimBufferIndex.params.rawValue
         )
+        if var pins = pinTargets {
+            pins.withUnsafeMutableBytes { raw in
+                encoder.setBytes(raw.baseAddress!, length: raw.count, index: CoolClothSimBufferIndex.pinTargets.rawValue)
+            }
+        }
+        if var capsules {
+            capsules.withUnsafeMutableBytes { raw in
+                encoder.setBytes(raw.baseAddress!, length: raw.count, index: CoolClothSimBufferIndex.capsules.rawValue)
+            }
+        }
         for (index, texture) in textures.enumerated() {
             encoder.setTexture(texture, index: index)
         }
@@ -201,6 +213,153 @@ final class CoolClothGPUTests: XCTestCase {
         m.columns.2.z = s
         m.columns.3 = SIMD4<Float>(0, -1.2 + 1.85 - s, -1.2, 1)
         return m
+    }
+
+    // MARK: - Cape scenario (moving pin targets inside body capsules)
+
+    /// Runs the mirror's cape scenario: a sheet (non-uniform scale when
+    /// asked) whose pinned top row follows attachment targets behind the
+    /// shoulders while body capsules push the cloth away. Returns the
+    /// farthest particle from the shoulders over the run and the count of
+    /// non-finite particles at the end.
+    private func runCape(
+        pinTargets usePins: Bool, capsules useCapsules: Bool, nonUniform: Bool, frames: Int = 180,
+        modelOverride: simd_float4x4? = nil, materialOverride: CoolClothMaterialParameters? = nil, floorWorldY: Float = 0,
+        substeps: Int = 8, maxSpeed: Float = 25, softness: Float = 1, backOffset: Float = 0.10, torsoRadius: Float = 0.17
+    ) throws -> (farthest: Float, nonFinite: Int) {
+        let halfWidth: Float = nonUniform ? 0.31 : 0.4, halfLength: Float = nonUniform ? 0.575 : 0.4
+        let shoulders = SIMD3<Float>(0, 1.41, -1.70)
+        let back = SIMD3<Float>(0, 0, -1)
+        var model = matrix_identity_float4x4
+        model.columns.0 = SIMD4<Float>(halfWidth, 0, 0, 0)
+        model.columns.1 = SIMD4<Float>(0, halfLength, 0, 0)
+        model.columns.2 = SIMD4<Float>(0, 0, 1, 0)
+        model.columns.3 = SIMD4<Float>(shoulders + back * (backOffset + 0.05) - SIMD3<Float>(0, halfLength, 0), 1)
+        if let modelOverride { model = modelOverride }
+        let material = materialOverride ?? CoolClothMaterialParameters(stretchCompliance: 3e-7, shearCompliance: 3e-6, bendCompliance: 2e-5, damping: 1.4)
+
+        var sim = Sim(posA: try makeSimTexture(), posB: try makeSimTexture(), prev: try makeSimTexture(), vel: try makeSimTexture(), nrm: try makeSimTexture())
+        let initKernel = try kernel("coolClothInitKernel")
+        let predictKernel = try kernel("coolClothPredictKernel")
+        let solveKernel = try kernel("coolClothSolveKernel")
+        let finalizeKernel = try kernel("coolClothFinalizeKernel")
+        let normalKernel = try kernel("coolClothNormalKernel")
+        let frameDelta: Float = 1.0 / 90.0
+        let dt = frameDelta / Float(substeps)
+        var time: Float = 0
+        var params = makeParams(model: model, dt: dt, pinMode: .topEdge, material: material, floorWorldY: floorWorldY, time: time)
+        params.misc.w = maxSpeed
+        params.flags.w = usePins ? 1 : 0
+        params.grab.w = useCapsules ? 6 : 0
+
+        func pins(at t: Float) -> [SIMD4<Float>] {
+            let sway = SIMD3<Float>(0.05 * sin(t * 2), 0, 0)
+            let center = shoulders + back * backOffset + sway
+            return (0 ..< n).map { column in
+                let u = Float(column) / Float(n - 1) * 2 - 1
+                return SIMD4<Float>(center + SIMD3<Float>(u * halfWidth, -0.02 * abs(u), 0), 1)
+            }
+        }
+        func capsules(at t: Float) -> [CoolClothCapsuleData] {
+            let sway = SIMD3<Float>(0.05 * sin(t * 2), 0, 0)
+            let spine = SIMD3<Float>(0, 0, -1.70) + sway
+            func capsule(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ r: Float) -> CoolClothCapsuleData {
+                CoolClothCapsuleData(a: SIMD4<Float>(a, r), b: SIMD4<Float>(b, softness))
+            }
+            return [
+                capsule(spine + SIMD3(0, 0.85, 0), spine + SIMD3(0, 1.45, 0), torsoRadius),
+                capsule(spine + SIMD3(0, 1.45, 0), spine + SIMD3(0, 1.72, 0), 0.11),
+                capsule(spine + SIMD3(0.2, 1.4, 0), spine + SIMD3(0.25, 1.1, 0), 0.065),
+                capsule(spine + SIMD3(-0.2, 1.4, 0), spine + SIMD3(-0.25, 1.1, 0), 0.065),
+                capsule(spine + SIMD3(0.1, 0.9, 0), spine + SIMD3(0.12, 0.5, 0), 0.09),
+                capsule(spine + SIMD3(-0.1, 0.9, 0), spine + SIMD3(-0.12, 0.5, 0), 0.09),
+            ] + Array(repeating: capsule(.zero, .zero, 0), count: 2)
+        }
+
+        let initBuffer = try XCTUnwrap(queue.makeCommandBuffer())
+        dispatch(initKernel, initBuffer, params: &params, textures: [sim.current, sim.prev, sim.vel, sim.nrm], pinTargets: pins(at: 0), capsules: capsules(at: 0))
+        initBuffer.commit()
+        initBuffer.waitUntilCompleted()
+
+        var worst: Float = 0
+        var nonFinite = 0
+        for frame in 0 ..< frames {
+            let commandBuffer = try XCTUnwrap(queue.makeCommandBuffer())
+            let targets = pins(at: time)
+            let colliders = capsules(at: time)
+            for _ in 0 ..< substeps {
+                params.misc.z = time
+                dispatch(predictKernel, commandBuffer, params: &params, textures: [sim.current, sim.other, sim.prev, sim.vel, sim.nrm], pinTargets: targets, capsules: colliders)
+                sim.currentIsA.toggle()
+                dispatch(solveKernel, commandBuffer, params: &params, textures: [sim.current, sim.other, sim.prev], pinTargets: targets, capsules: colliders)
+                sim.currentIsA.toggle()
+                dispatch(finalizeKernel, commandBuffer, params: &params, textures: [sim.current, sim.prev, sim.vel], pinTargets: targets, capsules: colliders)
+                time += dt
+            }
+            dispatch(normalKernel, commandBuffer, params: &params, textures: [sim.current, sim.nrm], pinTargets: targets, capsules: colliders)
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+
+            if frame % 10 == 9 || frame == frames - 1 {
+                let particles = readParticles(sim.current)
+                nonFinite = 0
+                for p in particles {
+                    let world = model * SIMD4<Float>(p.x, p.y, p.z, 1)
+                    guard world.x.isFinite, world.y.isFinite, world.z.isFinite else {
+                        nonFinite += 1
+                        continue
+                    }
+                    worst = max(worst, simd_length(SIMD3<Float>(world.x, world.y, world.z) - shoulders))
+                }
+            }
+        }
+        return (worst, nonFinite)
+    }
+
+    /// Stability sweep for the cape scenario (printed, not asserted).
+    func testCapeStabilitySweep() throws {
+        let silk = CoolClothMaterialPreset.silk.parameters
+        let cape = CoolClothMaterialParameters(stretchCompliance: 3e-7, shearCompliance: 3e-6, bendCompliance: 2e-4, damping: 1.2)
+        let variants: [(String, CoolClothMaterialParameters, Int, Float, Float, Float, Float)] = [
+            ("silk, 8 substeps, hard, pins inside torso", silk, 8, 25, 1, 0.10, 0.17),
+            ("silk, 8 substeps, hard, pins outside torso", silk, 8, 25, 1, 0.15, 0.12),
+            ("silk, 8 substeps, soft 0.5, cap 6, pins outside", silk, 8, 6, 0.5, 0.15, 0.12),
+            ("silk, 12 substeps, soft 0.5, cap 6, pins outside", silk, 12, 6, 0.5, 0.15, 0.12),
+            ("cape bend 2e-4, 12 substeps, soft 0.5, cap 6, pins outside", cape, 12, 6, 0.5, 0.15, 0.12),
+            ("cape bend 2e-4, 16 substeps, soft 0.5, cap 6, pins outside", cape, 16, 6, 0.5, 0.15, 0.12),
+            ("cape bend 2e-4, 16 substeps, soft 0.3, cap 4, pins outside", cape, 16, 4, 0.3, 0.15, 0.12),
+        ]
+        for (name, material, substeps, maxSpeed, softness, backOffset, torso) in variants {
+            let result = try runCape(
+                pinTargets: true, capsules: true, nonUniform: true, frames: 180, materialOverride: material,
+                substeps: substeps, maxSpeed: maxSpeed, softness: softness, backOffset: backOffset, torsoRadius: torso
+            )
+            print("cape sweep \(name): farthest \(result.farthest) m, nonFinite \(result.nonFinite)")
+        }
+    }
+
+    /// The mirror's cape, with the settings it ships with (attachment line
+    /// outside the torso collider, soft push-out, 6 m/s cap, 12 substeps),
+    /// must stay finite and near the body; the attachment line inside the
+    /// torso collider is the known way to make it explode.
+    func testCapeStaysFiniteWithMovingPinsAndCapsules() throws {
+        let cape = CoolClothMaterialParameters(stretchCompliance: 3e-7, shearCompliance: 3e-6, bendCompliance: 2e-4, damping: 1.2)
+        let result = try runCape(
+            pinTargets: true, capsules: true, nonUniform: true, materialOverride: cape,
+            substeps: 12, maxSpeed: 6, softness: 0.5, backOffset: 0.15, torsoRadius: 0.12
+        )
+        XCTAssertEqual(result.nonFinite, 0)
+        XCTAssertLessThan(result.farthest, 1.6, "the cape reaches \(result.farthest) m from the shoulders")
+
+        // The failure mode that was seen on the device: hard push-out, the
+        // default 25 m/s cap and the attachment line inside the torso
+        // collider (with the soft push-out and low cap even that stays
+        // bounded, so those two are the real safety net).
+        let hardInside = try runCape(
+            pinTargets: true, capsules: true, nonUniform: true, frames: 90, materialOverride: cape,
+            substeps: 8, maxSpeed: 25, softness: 1, backOffset: 0.10, torsoRadius: 0.17
+        )
+        XCTAssertGreaterThan(hardInside.farthest, 5, "pins inside the torso collider with hard push-out throw the sheet about")
     }
 
     // MARK: - Simulation behavior

@@ -96,11 +96,15 @@ public final class CoolClothSimulation: @unchecked Sendable {
         public var start: SIMD3<Float>
         public var end: SIMD3<Float>
         public var radius: Float
+        /// Fraction of the penetration removed per substep (1 = hard
+        /// projection; lower is gentler on cloth pinned near the body).
+        public var softness: Float
 
-        public init(start: SIMD3<Float>, end: SIMD3<Float>, radius: Float) {
+        public init(start: SIMD3<Float>, end: SIMD3<Float>, radius: Float, softness: Float = 1) {
             self.start = start
             self.end = end
             self.radius = radius
+            self.softness = softness
         }
     }
 
@@ -186,6 +190,13 @@ public final class CoolClothSimulation: @unchecked Sendable {
 
     public func setMaterial(_ preset: CoolClothMaterialPreset) {
         setMaterial(preset.parameters)
+    }
+
+    /// Speed cap (m/s) for every particle; lower it for cloth attached to
+    /// a body, where collisions against pinned particles can throw energy in.
+    public func setMaxSpeed(_ metersPerSecond: Float) {
+        guard metersPerSecond.isFinite, metersPerSecond > 0 else { return }
+        lock.withLock { maxSpeed = metersPerSecond }
     }
 
     /// substeps 1...16, iterations 1...8. One iteration per substep is the XPBD
@@ -423,4 +434,9 @@ public func setCoolClothPinTargets(worldPositions: [SIMD3<Float>]?) {
 /// See `CoolClothSimulation.setCapsules(_:)`.
 public func setCoolClothCapsules(_ capsules: [CoolClothSimulation.Capsule]) {
     CoolClothSimulation.shared.setCapsules(capsules)
+}
+
+/// See `CoolClothSimulation.setMaxSpeed(_:)`.
+public func setCoolClothMaxSpeed(_ metersPerSecond: Float) {
+    CoolClothSimulation.shared.setMaxSpeed(metersPerSecond)
 }

@@ -323,7 +323,8 @@ final class CoolClothRenderExtension: RenderExtension, @unchecked Sendable {
         )
         for (index, capsule) in state.capsules.prefix(coolClothCapsuleCount).enumerated() {
             capsules[index] = CoolClothCapsuleData(
-                a: SIMD4<Float>(capsule.start, capsule.radius), b: SIMD4<Float>(capsule.end, 0)
+                a: SIMD4<Float>(capsule.start, capsule.radius),
+                b: SIMD4<Float>(capsule.end, min(max(capsule.softness, 0.05), 1))
             )
         }
         return SolveBindings(pinTargets: pins, capsules: capsules)

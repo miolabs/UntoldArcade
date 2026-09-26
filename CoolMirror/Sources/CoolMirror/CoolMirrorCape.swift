@@ -50,9 +50,15 @@ final class CoolMirrorCape: @unchecked Sendable {
     /// Cloth sheet: 128 particles per side over `width` × `length` metres.
     private static let width: Float = 0.62
     private static let length: Float = 1.15
-    /// How far behind the shoulder line the top row hangs.
-    private static let backOffset: Float = 0.10
+    /// How far behind the shoulder line the top row hangs. It must clear
+    /// the torso collider: a pinned row inside a capsule has its free
+    /// neighbours shoved out every substep and the sheet explodes (the
+    /// plugin's cape GPU test pins both cases).
+    private static let backOffset: Float = 0.15
+    private static let torsoRadius: Float = 0.12
     private static let shoulderDrop: Float = 0.02
+    /// Fraction of a collider penetration removed per substep.
+    private static let colliderSoftness: Float = 0.5
 
     private let lock = NSLock()
     private var characterId: EntityID?
@@ -107,10 +113,16 @@ final class CoolMirrorCape: @unchecked Sendable {
             setCoolClothBallVisible(false)
             setCoolClothGravity(simd_float3(0, -9.81, 0))
             setCoolClothLightDirection(simd_float3(0.3, 1.0, 0.6))
-            // Heavier than silk, lighter than denim: a leather-like cape.
+            // Heavier than silk, lighter than denim: a leather-like cape. The
+            // bend stiffness is the stiffest the solver holds at this scale
+            // (see the plugin's cape stability sweep); 12 substeps and a low
+            // speed cap keep collisions against the pinned row from throwing
+            // energy in.
             setCoolClothMaterial(CoolClothMaterialParameters(
-                stretchCompliance: 3e-7, shearCompliance: 3e-6, bendCompliance: 2e-5, damping: 1.4
+                stretchCompliance: 3e-7, shearCompliance: 3e-6, bendCompliance: 2e-4, damping: 1.2
             ))
+            setCoolClothSolverQuality(substeps: 12, iterations: 1)
+            setCoolClothMaxSpeed(6)
             setCoolClothWind(directionWorld: simd_float3(0, 0, 1), strength: 0.15, gustiness: 0.6)
             setCoolClothColors(
                 front: simd_float3(0.02, 0.02, 0.03), back: simd_float3(0.035, 0.035, 0.045),
@@ -201,20 +213,21 @@ final class CoolMirrorCape: @unchecked Sendable {
             setCoolClothPinTargets(worldPositions: [leftEnd, leftMid, center + up * 0.015, rightMid, rightEnd])
         }
 
+        let soft = Self.colliderSoftness
         var capsules: [CoolClothSimulation.Capsule] = [
-            .init(start: pelvis - up * 0.05, end: neck, radius: 0.17),
+            .init(start: pelvis - up * 0.05, end: neck, radius: Self.torsoRadius, softness: soft),
         ]
         if let head = position(rig.head) {
-            capsules.append(.init(start: neck, end: head + up * 0.08, radius: 0.11))
+            capsules.append(.init(start: neck, end: head + up * 0.08, radius: 0.11, softness: soft))
         }
         for (arm, forearm) in [(rig.leftUpperArm, rig.leftForearm), (rig.rightUpperArm, rig.rightForearm)] {
             if let a = position(arm), let b = position(forearm) {
-                capsules.append(.init(start: a, end: b, radius: 0.065))
+                capsules.append(.init(start: a, end: b, radius: 0.065, softness: soft))
             }
         }
         for (thigh, calf) in [(rig.leftThigh, rig.leftCalf), (rig.rightThigh, rig.rightCalf)] {
             if let a = position(thigh), let b = position(calf) {
-                capsules.append(.init(start: a, end: b, radius: 0.09))
+                capsules.append(.init(start: a, end: b, radius: 0.09, softness: soft))
             }
         }
         setCoolClothCapsules(capsules)
