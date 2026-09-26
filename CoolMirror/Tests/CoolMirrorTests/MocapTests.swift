@@ -414,6 +414,30 @@ final class MocapTests: XCTestCase {
         XCTAssertLessThan(simd_length(turnedHand - expected), 0.02)
     }
 
+    /// The headset's rotation drives the head like a mirror: a turn to one
+    /// side reads as the opposite turn in the character's space (which
+    /// faces the wearer), a nod stays a nod in the same direction.
+    func testHeadFollowsTheHeadsetLikeAMirror() {
+        let facingWearer = simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0))
+        let reference = simd_quatf(angle: 0.2, axis: simd_float3(0, 1, 0))
+        var options = MocapRetargetOptions()
+        options.mirror = true
+
+        let turn = simd_quatf(angle: 0.5, axis: simd_float3(0, 1, 0)) * reference
+        let turned = CoolMirrorMocapController.headDelta(pose: turn, reference: reference, entityRotation: facingWearer, options: options)
+        assertEqual(turned, simd_quatf(angle: -0.5, axis: simd_float3(0, 1, 0)))
+
+        let nod = simd_quatf(angle: 0.3, axis: simd_float3(1, 0, 0)) * reference
+        let nodded = CoolMirrorMocapController.headDelta(pose: nod, reference: reference, entityRotation: facingWearer, options: options)
+        assertEqual(nodded, simd_quatf(angle: 0.3, axis: simd_float3(1, 0, 0)))
+
+        // Mirror off: the plain rotation in the character's frame (a nod
+        // about world x is a nod about -x in a frame turned half a turn).
+        options.mirror = false
+        let direct = CoolMirrorMocapController.headDelta(pose: nod, reference: reference, entityRotation: facingWearer, options: options)
+        assertEqual(direct, simd_quatf(angle: -0.3, axis: simd_float3(1, 0, 0)))
+    }
+
     func testSwingAndTwistDecomposition() {
         let axis = simd_normalize(simd_float3(1, 2, 0))
         let twist = simd_quatf(angle: 0.7, axis: axis)

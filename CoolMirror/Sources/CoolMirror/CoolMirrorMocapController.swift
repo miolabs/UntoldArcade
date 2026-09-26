@@ -374,16 +374,26 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     // MARK: - Head from the headset
 
-    /// The headset's rotation since calibration, brought into the
-    /// character's model space (the entity is turned to face the wearer),
-    /// then mirrored and flipped like the captured joints.
+    /// The headset's rotation since calibration, mirrored in world space
+    /// across the plane between the wearer and the character (a real
+    /// mirror reflects the axis and reverses the angle), then brought into
+    /// the character's model space (the entity is turned to face the
+    /// wearer) and flipped like the captured joints.
     static func headDelta(pose: simd_quatf, reference: simd_quatf, characterId: EntityID, options: MocapRetargetOptions) -> simd_quatf {
-        let world = simd_normalize(pose * reference.inverse)
-        let entity = getRotationQuaternion(entityId: characterId)
-        var delta = simd_normalize(entity.inverse * world * entity)
+        headDelta(pose: pose, reference: reference, entityRotation: getRotationQuaternion(entityId: characterId), options: options)
+    }
+
+    static func headDelta(pose: simd_quatf, reference: simd_quatf, entityRotation entity: simd_quatf, options: MocapRetargetOptions) -> simd_quatf {
+        var delta = simd_normalize(pose * reference.inverse)
         if options.mirror {
-            delta = MocapRetargeter.reflectAcrossSagittalPlane(delta)
+            // Mirror plane normal: the character's facing axis (either sign
+            // gives the same reflection).
+            let n = simd_normalize(entity.act(simd_float3(0, 0, 1)))
+            let v = delta.imag
+            let reflected = -v + 2 * simd_dot(v, n) * n
+            delta = simd_quatf(ix: reflected.x, iy: reflected.y, iz: reflected.z, r: delta.real)
         }
+        delta = simd_normalize(entity.inverse * delta * entity)
         if options.flipFacing {
             let facing = simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0))
             delta = simd_normalize(facing * delta * facing.inverse)
