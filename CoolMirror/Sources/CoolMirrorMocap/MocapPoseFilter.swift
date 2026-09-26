@@ -140,6 +140,10 @@ public struct MocapPoseFilter: Sendable {
     private var lastTime: TimeInterval?
     private var lastAccepted: MocapFrame?
     private var holdUntil: TimeInterval?
+    /// After a hold expires, positions blend from the held frame to the
+    /// tracked ones over `holdReleaseBlend` seconds instead of snapping.
+    private var holdRelease: (start: TimeInterval, from: MocapFrame)?
+    public var holdReleaseBlend: TimeInterval = 0.2
     /// Frames the glitch guard rejected since the last accepted one.
     public private(set) var rejectedFrames = 0
     /// Frames whose sides were swapped back.
@@ -154,6 +158,7 @@ public struct MocapPoseFilter: Sendable {
         lastTime = nil
         lastAccepted = nil
         holdUntil = nil
+        holdRelease = nil
         plants.removeAll()
         plantedFeet.removeAll()
         rejectedFrames = 0
@@ -242,8 +247,9 @@ public struct MocapPoseFilter: Sendable {
         }
         if jump > 1 {
             if let holdUntil, time >= holdUntil {
-                // Held long enough: this is real motion after all.
+                // Held long enough: this is real motion after all; ease into it.
                 self.holdUntil = nil
+                holdRelease = (time, previous)
             } else {
                 if holdUntil == nil {
                     holdUntil = time + options.glitchHold
@@ -256,6 +262,20 @@ public struct MocapPoseFilter: Sendable {
         }
         rejectedFrames = 0
         lastAccepted = candidate
+        if let release = holdRelease {
+            let s = Float(min(max((time - release.start) / holdReleaseBlend, 0), 1))
+            if s < 1 {
+                var eased = candidate
+                for (joint, position) in candidate.positions {
+                    if let from = release.from.positions[joint] {
+                        eased.positions[joint] = from + s * (position - from)
+                    }
+                }
+                eased.rootPosition = release.from.rootPosition + s * (candidate.rootPosition - release.from.rootPosition)
+                return eased
+            }
+            holdRelease = nil
+        }
         return candidate
     }
 

@@ -75,8 +75,11 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     private var groundCorrection: Float = 0
     /// Rest height of every ankle and toe joint, by rig joint name.
     private var restFootHeights: [String: Float] = [:]
-    /// Root x/z held while the captured feet are planted.
+    /// Root x/z held while the captured feet are planted, and the blend
+    /// out of a hold (start time, held value) so a release never snaps.
     private var heldRootXZ: simd_float2?
+    private var rootHoldRelease: (start: TimeInterval, from: simd_float2)?
+    private static let rootHoldReleaseBlend: TimeInterval = 0.25
     private var lastFeet: (positions: [MocapJoint: simd_float3], time: TimeInterval)?
 
     var options: MocapRetargetOptions {
@@ -124,6 +127,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 if !newValue {
                     groundCorrection = 0
                     heldRootXZ = nil
+                    rootHoldRelease = nil
                 }
             }
         }
@@ -411,8 +415,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// cannot slide the character.
     private func grounded(_ result: MocapRetargetResult, characterId: EntityID, origin: simd_float3, time: TimeInterval) -> simd_float3 {
         var translation = result.rootTranslationDelta
-        let (enabled, restHeights, previous, held, lastFeet) = lock.withLock {
-            (groundLock, restFootHeights, groundCorrection, heldRootXZ, self.lastFeet)
+        let (enabled, restHeights, previous, held, lastFeet, release) = lock.withLock {
+            (groundLock, restFootHeights, groundCorrection, heldRootXZ, self.lastFeet, rootHoldRelease)
         }
         guard enabled else { return translation }
 
@@ -443,17 +447,33 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             }
         }
         var newHeld = held
+        var newRelease = release
+        let tracked = simd_float2(translation.x, translation.z)
         if planted {
             if newHeld == nil {
-                newHeld = simd_float2(translation.x, translation.z)
+                newHeld = tracked
+                newRelease = nil
             }
             translation.x = newHeld!.x
             translation.z = newHeld!.y
         } else {
+            if let held {
+                // Leaving a hold: ease from the held spot to the tracked one.
+                newRelease = (time, held)
+            }
             newHeld = nil
+            if let newRelease {
+                let s = Float(min(max((time - newRelease.start) / Self.rootHoldReleaseBlend, 0), 1))
+                if s < 1 {
+                    let eased = newRelease.from + s * (tracked - newRelease.from)
+                    translation.x = eased.x
+                    translation.z = eased.y
+                }
+            }
         }
         lock.withLock {
             heldRootXZ = newHeld
+            rootHoldRelease = newRelease
             self.lastFeet = (feet, time)
         }
         return translation

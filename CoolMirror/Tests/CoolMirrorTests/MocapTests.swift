@@ -265,6 +265,9 @@ final class MocapTests: XCTestCase {
         var filter = MocapPoseFilter()
         var options = MocapSmoothingOptions()
         options.medianWindow = 1 // this test exercises a later stage
+        options.bodyCutoff = 100 // no smoothing either: exact positions
+        options.legCutoff = 100
+        options.rootCutoff = 100
         func legs(_ left: simd_float3, _ right: simd_float3, sequence: UInt32) -> MocapFrame {
             var f = frame(sequence: sequence, rotations: [:])
             f.positions = [.leftUpLeg: left, .rightUpLeg: right, .leftFoot: left - simd_float3(0, 0.9, 0), .rightFoot: right - simd_float3(0, 0.9, 0)]
@@ -303,9 +306,14 @@ final class MocapTests: XCTestCase {
         let held = filter.filter(jumpy, at: 4 / 30, options: options)
         XCTAssertEqual(held.positions[.leftFoot], left - simd_float3(0, 0.9, 0))
         XCTAssertEqual(filter.rejectedFrames, 1)
-        // …until it lasts longer than the hold, when it is taken as motion.
-        _ = filter.filter({ var f = jumpy; f.sequence = 6; return f }(), at: 0.6, options: options)
+        // …until it lasts longer than the hold, when it is taken as motion,
+        // eased in over the release blend rather than snapped.
+        let released = filter.filter({ var f = jumpy; f.sequence = 6; return f }(), at: 0.6, options: options)
         XCTAssertEqual(filter.rejectedFrames, 0)
+        XCTAssertEqual(released.positions[.leftFoot], left - simd_float3(0, 0.9, 0), "starts from the held position")
+        let settled = filter.filter({ var f = jumpy; f.sequence = 7; return f }(), at: 0.6 + filter.holdReleaseBlend + 0.05, options: options)
+        // (the legs of these frames are relabelled, so the moved foot is the right one once swapped back)
+        XCTAssertLessThan(simd_length(settled.positions[.rightFoot]! - jumpy.positions[.leftFoot]!), 0.01, "reaches the tracked position after the blend")
     }
 
     func testPreviewFramesSplitIntoChunksAndReassemble() throws {
