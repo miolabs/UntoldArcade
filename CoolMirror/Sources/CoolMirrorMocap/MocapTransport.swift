@@ -18,6 +18,8 @@ public final class MocapReceiver: @unchecked Sendable {
     private var latest: MocapFrame?
     private var latestPreviewFrame: MocapPreviewFrame?
     private var previewAssembler = MocapPreviewAssembler()
+    private var previewChunks = 0
+    private var previewsAssembled = 0
     private var frameTimes: [TimeInterval] = []
     private var lastFrameTime: TimeInterval?
     private var statusText = "stopped"
@@ -33,6 +35,11 @@ public final class MocapReceiver: @unchecked Sendable {
     /// Newest complete camera preview, or nil before the first one.
     public var latestPreview: MocapPreviewFrame? {
         lock.withLock { latestPreviewFrame }
+    }
+
+    /// Preview datagrams received and pictures completed from them.
+    public var previewCounts: (chunks: Int, pictures: Int) {
+        lock.withLock { (previewChunks, previewsAssembled) }
     }
 
     /// Frames received during the last second.
@@ -145,8 +152,10 @@ public final class MocapReceiver: @unchecked Sendable {
             guard let self, let connection else { return }
             if let data, MocapPreviewFrame.isChunk(data) {
                 self.lock.withLock {
+                    self.previewChunks += 1
                     if let preview = self.previewAssembler.add(data) {
                         self.latestPreviewFrame = preview
+                        self.previewsAssembled += 1
                     }
                 }
             } else if let data, let frame = MocapFrame(data: data) {

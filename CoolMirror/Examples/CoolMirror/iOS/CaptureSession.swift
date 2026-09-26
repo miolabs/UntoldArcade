@@ -44,17 +44,25 @@ final class CaptureSession: NSObject {
     private var isRunning = false
     /// Set by the preview view from its layout.
     var viewportSize = CGSize.zero
-    var interfaceOrientation: UIInterfaceOrientation = .landscapeRight
+    var interfaceOrientation: UIInterfaceOrientation = .landscapeRight {
+        didSet { previewLock.withLock { sharedOrientation = interfaceOrientation } }
+    }
 
     let session = ARSession()
     private let sender = MocapSender()
-    /// Camera preview for the headset: this wide, this often.
+    /// Camera preview for the headset: this wide, this often. Encoded on
+    /// ARKit's delegate queue (holding frames for the main actor would make
+    /// ARKit stop delivering them); the state below belongs to that queue,
+    /// except what the lock guards, which the main actor writes.
     private static let previewWidth: CGFloat = 320
     private static let previewInterval: TimeInterval = 0.1
-    private let previewContext = CIContext(options: [.cacheIntermediates: false])
-    private var lastPreviewTime: TimeInterval = 0
-    private var previewId: UInt32 = 0
-    private var latestBody: ARBodyAnchor?
+    private nonisolated let previewContext = CIContext(options: [.cacheIntermediates: false])
+    private nonisolated(unsafe) var lastPreviewTime: TimeInterval = 0
+    private nonisolated(unsafe) var previewId: UInt32 = 0
+    private nonisolated let previewLock = NSLock()
+    private nonisolated(unsafe) var sharedOrientation: UIInterfaceOrientation = .landscapeRight
+    private nonisolated(unsafe) var sharedBody: ARBodyAnchor?
+    private(set) var previewsSent = 0
     private var sentTimes: [TimeInterval] = []
     private var statusTimer: Timer?
     private var jitter = MocapJitterMeter()
@@ -158,14 +166,16 @@ final class CaptureSession: NSObject {
     }
 
     /// Encodes and sends the small camera picture with the joints in it.
-    private func sendPreview(for frame: ARFrame) {
+    /// Runs on ARKit's delegate queue.
+    private nonisolated func sendPreview(for frame: ARFrame) {
         let now = frame.timestamp
         guard now - lastPreviewTime >= Self.previewInterval else { return }
         lastPreviewTime = now
+        let (orientation, body) = previewLock.withLock { (sharedOrientation, sharedBody) }
         var image = CIImage(cvPixelBuffer: frame.capturedImage)
         // The buffer is in the camera's native landscape (home button on
         // the right); the other landscape is the same picture upside down.
-        if interfaceOrientation == .landscapeLeft {
+        if orientation == .landscapeLeft {
             image = image.oriented(.down)
         }
         let scale = Self.previewWidth / image.extent.width
@@ -177,20 +187,22 @@ final class CaptureSession: NSObject {
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.4]
         ) else { return }
         var keypoints: [MocapJoint: SIMD2<Float>] = [:]
-        if let body = latestBody, body.isTracked {
+        if let body, body.isTracked {
             let mocap = Self.frame(from: body, timestamp: now)
             for (joint, position) in mocap.positions {
                 let world = body.transform * simd_float4(position, 1)
-                let point = frame.camera.projectPoint(simd_float3(world.x, world.y, world.z), orientation: interfaceOrientation, viewportSize: size)
+                let point = frame.camera.projectPoint(simd_float3(world.x, world.y, world.z), orientation: orientation, viewportSize: size)
                 if point.x.isFinite, point.y.isFinite {
                     keypoints[joint] = SIMD2(Float(point.x), Float(point.y))
                 }
             }
         }
         previewId &+= 1
-        sender.send(MocapPreviewFrame(
+        let preview = MocapPreviewFrame(
             id: previewId, width: UInt16(size.width), height: UInt16(size.height), jpeg: jpeg, keypoints: keypoints
-        ))
+        )
+        sender.send(preview)
+        Task { @MainActor in self.previewsSent += 1 }
     }
 
     /// Projects the body's joints into the preview for the overlay.
@@ -219,8 +231,8 @@ extension CaptureSession: ARSessionDelegate {
         guard let body = anchors.compactMap({ $0 as? ARBodyAnchor }).first else { return }
         let timestamp = Date().timeIntervalSinceReferenceDate
         var frame = Self.frame(from: body, timestamp: timestamp)
+        previewLock.withLock { sharedBody = body }
         Task { @MainActor in
-            self.latestBody = body
             self.isTracked = body.isTracked
             self.trackedJointCount = frame.trackedJoints.count
             self.sender.send(frame)
@@ -236,7 +248,7 @@ extension CaptureSession: ARSessionDelegate {
     }
 
     nonisolated func session(_: ARSession, didUpdate frame: ARFrame) {
-        Task { @MainActor in self.sendPreview(for: frame) }
+        sendPreview(for: frame)
     }
 
     nonisolated func session(_: ARSession, didFailWithError error: Error) {

@@ -173,7 +173,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         let sinceLastFrame = receiver.secondsSinceLastFrame
         let tracked = (receiver.latestFrame?.isTracked ?? false) && (sinceLastFrame ?? .infinity) < 1
         guard tracked else {
-            return "2 · iPhone connected but it sees no body: keep the phone in landscape and step back until you are fully in its view, feet included."
+            let counts = receiver.previewCounts
+            return "2 · iPhone connected but it sees no body: keep the phone in landscape and step back until you are fully in its view, feet included. (pictures \(counts.pictures), chunks \(counts.chunks))"
         }
         if pending {
             return "Hold still… capturing your pose as the character's rest pose."
@@ -184,7 +185,9 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         if !calibrated {
             return "4 · Whole body in view (\(receiver.framesPerSecond) Hz). Stand upright facing the phone, look at it, arms relaxed, then tap Calibrate and hold still."
         }
-        let seen = receiver.latestFrame.map { "\($0.trackedJoints.count)/\($0.rotations.count) joints seen" } ?? ""
+        let counts = receiver.previewCounts
+        let seen = (receiver.latestFrame.map { "\($0.trackedJoints.count)/\($0.rotations.count) joints seen" } ?? "")
+            + ", pictures \(counts.pictures) of \(counts.chunks) chunks"
         if driving {
             return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport) (stand still to read the tracker noise)"
         }

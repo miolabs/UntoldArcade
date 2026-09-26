@@ -58,7 +58,7 @@ struct ContentView: View {
                 }
                 Text("\(capture.status) · \(capture.videoFormat)")
                     .font(.footnote)
-                Text("\(capture.framesPerSecond) frames/s sent · \(capture.jitterReport)")
+                Text("\(capture.framesPerSecond) frames/s sent · \(capture.previewsSent) pictures sent · \(capture.jitterReport)")
                     .font(.footnote.monospacedDigit())
                 HStack {
                     Text("Since reset: \(capture.flipTotals)")
