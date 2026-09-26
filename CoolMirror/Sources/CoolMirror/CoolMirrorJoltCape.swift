@@ -27,6 +27,8 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     /// pinned to them.
     private static let collarWeight: Float = 0.45
     private static let weldTolerance: Float = 1e-4
+    /// A particle farther than this from the character is a blown-up cloth.
+    private static let runawayDistance: Float = 3.0
 
     private struct Slot {
         var entity: EntityID
@@ -153,6 +155,13 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             var world = lock.withLock { scratchPositions }
             let read = backend.readSoftBodyVertices(piece.body, into: &world)
             guard read == piece.particleCount else { continue }
+            // A runaway cloth (a bad step, a teleport) is rebuilt in the
+            // current pose rather than left to blow up Jolt's broadphase.
+            if world.contains(where: { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) || simd_length($0 - origin) > Self.runawayDistance }) {
+                print("CoolMirror jolt cape: cloth ran away; rebuilding it in the current pose")
+                tearDown()
+                return
+            }
             var normals = [SIMD3<Float>](repeating: .zero, count: piece.particleCount)
             for face in piece.faces {
                 let a = world[Int(face.x)], b = world[Int(face.y)], c = world[Int(face.z)]
@@ -201,16 +210,19 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
                   !geometry.triangles.isEmpty
             else { continue }
             guard let piece = makePiece(
-                slot: slot, geometry: geometry, backend: backend, restJoints: restJoints,
+                slot: slot, geometry: geometry, backend: backend, restJoints: restJoints, joints: joints,
                 collarJoints: collarJoints, origin: origin, rotation: rotation
             ) else { continue }
             pieces.append(piece)
         }
 
         var colliders: [Collider] = []
+        // The collar pins must never sit inside a collider (their free
+        // neighbours would be shoved out against fixed pins every step),
+        // so the torso stops at the chest and the upper back is thin.
         let bones: [(String, String, Float)] = [
-            (rig.pelvis, rig.neck, 0.13), (rig.neck, rig.head, 0.10),
-            (rig.leftUpperArm, rig.leftForearm, 0.06), (rig.rightUpperArm, rig.rightForearm, 0.06),
+            (rig.pelvis, rig.chest, 0.11), (rig.chest, rig.neck, 0.075), (rig.neck, rig.head, 0.08),
+            (rig.leftUpperArm, rig.leftForearm, 0.055), (rig.rightUpperArm, rig.rightForearm, 0.055),
             (rig.leftThigh, rig.leftCalf, 0.085), (rig.rightThigh, rig.rightCalf, 0.085),
         ]
         for (from, to, radius) in bones {
@@ -234,7 +246,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     /// its triangles and binds the collar particles to their joints.
     private func makePiece(
         slot: Slot, geometry: EntitySubmeshGeometry, backend: JoltPhysicsBackend, restJoints: [SkeletonRestJoint],
-        collarJoints: Set<Int>, origin: simd_float3, rotation: simd_quatf
+        joints: [SkeletonJointPose], collarJoints: Set<Int>, origin: simd_float3, rotation: simd_quatf
     ) -> Piece? {
         // Vertices used by this slot's triangles, welded by rest position.
         let vertexIds = Array(Set(geometry.triangles)).sorted()
@@ -275,26 +287,38 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         }
         guard !faces.isEmpty else { return nil }
 
-        // Pins: the collar, by skin weight.
+        // Every particle's skin binding: rest offsets in its joints' rest
+        // frames. Used to start the cloth in the current pose (skinned on
+        // the CPU) and, for the collar, to pin it to the joints.
         var inverseMasses = [Float](repeating: 1 / Self.particleMass, count: particleRest.count)
         var pinned: [UInt32] = []
         var pinBindings: [[(joint: Int, weight: Float, offset: simd_float3)]] = []
+        var startWorld = particleRest.map { origin + rotation.act($0) }
         let hasSkin = geometry.jointIndices.count == geometry.positions.count && geometry.jointWeights.count == geometry.positions.count
         if hasSkin {
             for (particle, source) in particleSourceVertex.enumerated() {
                 let ids = geometry.jointIndices[source]
                 let weights = geometry.jointWeights[source]
                 let entries: [(Int, Float)] = [(Int(ids.x), weights.x), (Int(ids.y), weights.y), (Int(ids.z), weights.z), (Int(ids.w), weights.w)]
-                let collar = entries.filter { collarJoints.contains($0.0) }.reduce(Float(0)) { $0 + $1.1 }
-                guard collar >= Self.collarWeight else { continue }
                 var bindings: [(joint: Int, weight: Float, offset: simd_float3)] = []
-                for (joint, weight) in entries where weight > 1e-3 && joint < restJoints.count {
-                    // Rest offset in the joint's rest frame (model space).
+                for (joint, weight) in entries where weight > 1e-3 && joint < restJoints.count && joint < joints.count {
                     let rest = restJoints[joint]
                     let offset = rest.modelRotation.inverse.act(particleRest[particle] - rest.modelPosition)
                     bindings.append((joint, weight, offset))
                 }
                 guard !bindings.isEmpty else { continue }
+                var skinned = simd_float3.zero
+                var total: Float = 0
+                for binding in bindings {
+                    let joint = joints[binding.joint]
+                    skinned += binding.weight * (joint.worldPosition + joint.worldRotation.act(binding.offset))
+                    total += binding.weight
+                }
+                if total > 0 {
+                    startWorld[particle] = skinned / total
+                }
+                let collar = entries.filter { collarJoints.contains($0.0) }.reduce(Float(0)) { $0 + $1.1 }
+                guard collar >= Self.collarWeight else { continue }
                 inverseMasses[particle] = 0
                 pinned.append(UInt32(particle))
                 pinBindings.append(bindings)
@@ -311,7 +335,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         }
 
         var descriptor = JoltSoftBodyDescriptor(
-            vertices: particleRest.map { rotation.act($0) },
+            vertices: startWorld.map { $0 - origin },
             inverseMasses: inverseMasses,
             faces: faces,
             compliance: Self.stretchCompliance, shearCompliance: Self.shearCompliance, bendCompliance: Self.bendCompliance
