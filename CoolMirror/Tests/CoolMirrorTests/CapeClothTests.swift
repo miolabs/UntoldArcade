@@ -161,6 +161,9 @@ final class CapeClothTests: XCTestCase {
         let variants: [(String, Float, Float, Float, UInt32, Float, JoltSoftBodyDescriptor.BendType)] = [
             ("sway+turn, dihedral, 8 it", 0.08, 0.26, 2e-6, 8, 0.6, .dihedral),
             ("sway+turn, distance, 8 it", 0.08, 0.26, 2e-6, 8, 0.6, .distance),
+            ("sway+turn, distance, 4 it, damping 2", 0.08, 0.26, 2e-6, 4, 2.0, .distance),
+            ("sway+turn, distance, 3 it, damping 2, 2 substeps", 0.08, 0.26, 2e-6, 3, 2.0, .distance),
+            ("fast sway 20 cm, distance, 4 it, damping 2, 2 substeps", 0.20, 0.5, 2e-6, 4, 2.0, .distance),
         ]
         var farthestByName: [String: Float] = [:]
         for (name, swayAmplitude, turnAmplitude, compliance, iterations, damping, bendType) in variants {
@@ -169,7 +172,7 @@ final class CapeClothTests: XCTestCase {
             let sway = true
             var settings = JoltWorldSettings()
             settings.workerThreads = 0
-            settings.collisionSteps = 3
+            settings.collisionSteps = name.contains("2 substeps") ? 2 : 3
             let backend = JoltPhysicsBackend(settings: settings)
             backend.configure(PhysicsWorldConfiguration())
             var cloth = cape.cloth
@@ -245,7 +248,7 @@ final class CapeClothTests: XCTestCase {
         guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
         var settings = JoltWorldSettings()
         settings.workerThreads = 0
-        settings.collisionSteps = 3
+        settings.collisionSteps = 2
         let backend = JoltPhysicsBackend(settings: settings)
         backend.configure(PhysicsWorldConfiguration())
         let rig = try XCTUnwrap(CoolMirrorCapeRig.rig(for: .batman))
@@ -260,8 +263,8 @@ final class CapeClothTests: XCTestCase {
             vertices: cloth.startWorld, inverseMasses: cloth.inverseMasses, faces: cloth.faces,
             compliance: 2e-6, shearCompliance: 2e-5, bendCompliance: 4e-4
         )
-        descriptor.iterations = 8
-        descriptor.linearDamping = 0.6
+        descriptor.iterations = 4
+        descriptor.linearDamping = 2.0
         descriptor.vertexRadius = 0.008
         descriptor.maxLinearVelocity = CoolMirrorJoltCape.maxParticleSpeed
         descriptor.bendType = .distance

@@ -99,6 +99,9 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         guard enabled, let characterId, let rig, let backend else { return }
         let joints = entitySkeletonJointPoses(entityId: characterId)
         guard !joints.isEmpty else { return }
+        // A glitched joint must not reach the physics world: a non-finite
+        // pin or collider target poisons Jolt's broadphase and crashes it.
+        guard joints.allSatisfy({ $0.worldPosition.x.isFinite && $0.worldPosition.y.isFinite && $0.worldPosition.z.isFinite && $0.worldRotation.vector.x.isFinite && $0.worldRotation.vector.w.isFinite }) else { return }
         let origin = getPosition(entityId: characterId)
         let rotation = getRotationQuaternion(entityId: characterId)
         let scale = getScale(entityId: characterId)
@@ -257,8 +260,11 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             compliance: Self.stretchCompliance, shearCompliance: Self.shearCompliance, bendCompliance: Self.bendCompliance
         )
         descriptor.position = origin
-        descriptor.iterations = 8
-        descriptor.linearDamping = 0.6
+        // 4 iterations and 2 Jolt sub-steps hold (the headless scenario
+        // sweeps this) at a third of the solver cost of 8 × 3; the damping
+        // keeps the cape from swinging on every tracker wobble.
+        descriptor.iterations = 4
+        descriptor.linearDamping = 2.0
         descriptor.vertexRadius = 0.008
         descriptor.friction = 0.5
         descriptor.maxLinearVelocity = Self.maxParticleSpeed

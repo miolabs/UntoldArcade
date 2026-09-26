@@ -453,9 +453,10 @@ struct CoolMirrorVisionOSXRApp: App {
                 }
 
                 CoolMirrorGame.registerRenderPlugins()
-                // The cape cloth needs a step around 10 ms; the frame can be 33 ms.
+                // The cape cloth holds with two sub-steps of a 33 ms frame
+                // (the headless cape scenario checks it).
                 var joltSettings = JoltWorldSettings()
-                joltSettings.collisionSteps = 3
+                joltSettings.collisionSteps = 2
                 let joltBackend = registerJoltPhysics(settings: joltSettings)
                 guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
                 XRHolder.shared.xr = xr
