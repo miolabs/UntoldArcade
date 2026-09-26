@@ -113,7 +113,14 @@ final class MirrorControls {
     }
 
     func refreshMocapStatus() {
-        guard let game = XRHolder.shared.game else { return }
+        guard let game = XRHolder.shared.game else {
+            // The mirror, and the iPhone link with it, run inside the
+            // immersive space.
+            mocapConnection = "○ Tap Enter Mixed Reality first: the mirror and the iPhone link run inside it."
+            mocapStatus = "Waiting for the mirror to open."
+            mocapFramed = false
+            return
+        }
         mocapStatus = game.mocapStatus()
         mocapCalibrated = game.mocapIsCalibrated()
         mocapFramed = game.mocapIsFramed()
