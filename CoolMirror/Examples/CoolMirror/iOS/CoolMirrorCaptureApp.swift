@@ -60,6 +60,13 @@ struct ContentView: View {
                     .font(.footnote)
                 Text("\(capture.framesPerSecond) frames/s sent · \(capture.jitterReport)")
                     .font(.footnote.monospacedDigit())
+                HStack {
+                    Text("Since reset: \(capture.flipTotals)")
+                        .font(.footnote.monospacedDigit())
+                    Spacer()
+                    Button("Reset counters") { capture.resetCounters() }
+                        .font(.footnote)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)

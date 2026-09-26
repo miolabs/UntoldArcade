@@ -268,12 +268,17 @@ public struct MocapJitterMeter: Sendable {
     private var previous: MocapFrame?
     private var samples: [Sample] = []
     private let window: TimeInterval = 1
+    /// Since the last reset: tracked frames seen and how many flipped.
+    public private(set) var totalFrames = 0
+    public private(set) var totalFlips = 0
 
     public init() {}
 
     public mutating func reset() {
         previous = nil
         samples.removeAll()
+        totalFrames = 0
+        totalFlips = 0
     }
 
     /// Records the step from the previous raw frame to `frame`.
@@ -301,6 +306,16 @@ public struct MocapJitterMeter: Sendable {
         }
         samples.append(Sample(time: time, root: root, feet: feetCount > 0 ? feet / feetCount : 0, hips: hips, flipped: flipped))
         samples.removeAll { time - $0.time > window }
+        totalFrames += 1
+        if flipped {
+            totalFlips += 1
+        }
+    }
+
+    /// e.g. "flips 12 in 1340 frames (0.9%)" since the last reset.
+    public var totals: String {
+        guard totalFrames > 0 else { return "no tracked frames yet" }
+        return String(format: "flips %d in %d frames (%.1f%%)", totalFlips, totalFrames, 100 * Float(totalFlips) / Float(totalFrames))
     }
 
     /// World-space left → right axis between two joints.

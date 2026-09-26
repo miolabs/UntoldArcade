@@ -26,6 +26,8 @@ final class CaptureSession: NSObject {
     private(set) var videoFormat = ""
     /// Raw motion between consecutive frames (see `MocapJitterMeter`).
     private(set) var jitterReport = ""
+    /// Flip count since the last reset, to read after stepping out of view.
+    private(set) var flipTotals = ""
 
     /// Skeleton overlay: joints projected into the preview view, in points.
     var showSkeleton = true
@@ -99,6 +101,12 @@ final class CaptureSession: NSObject {
         framesPerSecond = sentTimes.count
         status = sender.status
         jitterReport = jitter.report
+        flipTotals = jitter.totals
+    }
+
+    func resetCounters() {
+        jitter.reset()
+        flipTotals = jitter.totals
     }
 
     /// Builds the wire frame from the anchor: joint transforms in the
