@@ -331,8 +331,12 @@ struct CoolMirrorVisionOSXRApp: App {
                 }
 
                 if controls.mocapEnabled {
-                    Text("iPhone: \(controls.mocapStatus)")
-                        .font(.footnote).foregroundStyle(.secondary)
+                    Text(controls.mocapStatus)
+                        .font(.callout)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                         .task {
                             while !Task.isCancelled {
                                 controls.refreshMocapStatus()

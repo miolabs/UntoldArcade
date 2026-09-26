@@ -32,4 +32,5 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 53X2422NYU
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES

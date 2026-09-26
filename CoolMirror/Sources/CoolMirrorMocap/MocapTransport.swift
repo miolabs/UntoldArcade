@@ -17,6 +17,7 @@ public final class MocapReceiver: @unchecked Sendable {
     private var connections: [NWConnection] = []
     private var latest: MocapFrame?
     private var frameTimes: [TimeInterval] = []
+    private var lastFrameTime: TimeInterval?
     private var statusText = "stopped"
     private var peer: String?
 
@@ -44,6 +45,20 @@ public final class MocapReceiver: @unchecked Sendable {
                 return "receiving from \(peer) at \(frameTimes.count) Hz"
             }
             return statusText
+        }
+    }
+
+    /// Whether an iPhone has connected (frames may still be absent while it
+    /// sees no body).
+    public var isPeerConnected: Bool {
+        lock.withLock { peer != nil }
+    }
+
+    /// Seconds since the last frame arrived, or nil before the first one.
+    public var secondsSinceLastFrame: TimeInterval? {
+        lock.withLock {
+            guard let last = frameTimes.last ?? lastFrameTime else { return nil }
+            return Date().timeIntervalSinceReferenceDate - last
         }
     }
 
@@ -85,6 +100,7 @@ public final class MocapReceiver: @unchecked Sendable {
         lock.withLock {
             latest = nil
             frameTimes.removeAll()
+            lastFrameTime = nil
             peer = nil
             statusText = "stopped"
         }
@@ -123,7 +139,9 @@ public final class MocapReceiver: @unchecked Sendable {
                     if self.latest == nil || frame.sequence >= (self.latest?.sequence ?? 0) || frame.sequence < 16 {
                         self.latest = frame
                     }
-                    self.frameTimes.append(Date().timeIntervalSinceReferenceDate)
+                    let now = Date().timeIntervalSinceReferenceDate
+                    self.frameTimes.append(now)
+                    self.lastFrameTime = now
                 }
             }
             if error == nil {

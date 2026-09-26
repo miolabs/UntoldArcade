@@ -74,21 +74,32 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         lock.withLock { retargeter?.isCalibrated ?? false }
     }
 
+    /// Setup guidance for the person wearing the headset (the phone's screen
+    /// faces away from them): what to do next, in order.
     var status: String {
         let (enabled, calibrated, pending, driving, hasMapping) = lock.withLock {
             (self.enabled, retargeter?.isCalibrated ?? false, pendingCalibration, self.driving, retargeter != nil)
         }
         guard enabled else { return "off" }
-        guard hasMapping else { return "this character has no mocap mapping" }
-        var text = receiver.status
-        if pending {
-            text += " · calibrating on the next tracked frame"
-        } else if !calibrated {
-            text += " · not calibrated"
-        } else if driving {
-            text += " · driving the character"
+        guard hasMapping else { return "This character has no motion-capture mapping; pick Spider-Man or Batman." }
+        guard receiver.isPeerConnected else {
+            return "1 · Open CoolMirror Capture on the iPhone (same Wi-Fi) and put it on a stand with the back camera facing you, 2–3 m away."
         }
-        return text
+        let sinceLastFrame = receiver.secondsSinceLastFrame
+        let tracked = (receiver.latestFrame?.isTracked ?? false) && (sinceLastFrame ?? .infinity) < 1
+        guard tracked else {
+            return "2 · iPhone connected but it sees no body: step back until you are fully in its view, feet included."
+        }
+        if pending {
+            return "Hold still… capturing your pose as the character's rest pose."
+        }
+        if !calibrated {
+            return "3 · Body tracked (\(receiver.framesPerSecond) Hz). Stand like the character (arms as shown), then tap Calibrate and hold the pose."
+        }
+        if driving {
+            return "Mirroring you at \(receiver.framesPerSecond) Hz. Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time."
+        }
+        return "Body tracked (\(receiver.framesPerSecond) Hz), waiting for the next frame…"
     }
 
     func setCharacter(_ id: EntityID?, mapping: MocapRigMapping?) {
