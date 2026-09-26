@@ -47,6 +47,12 @@ struct ContentView: View {
                     Label(capture.isTracked ? "Body tracked (\(capture.trackedJointCount)/\(MocapJoint.allCases.count) joints seen)" : "Phone sideways, 3–4 m away, whole body in view", systemImage: capture.isTracked ? "figure.stand" : "figure.walk.motion")
                         .font(.headline)
                     Spacer()
+                    Picker("Rate", selection: $capture.preferredFrameRate) {
+                        Text("30 fps").tag(30)
+                        Text("60 fps").tag(60)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 160)
                     Toggle("Skeleton", isOn: $capture.showSkeleton)
                         .toggleStyle(.button)
                 }

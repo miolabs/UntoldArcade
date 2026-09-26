@@ -31,6 +31,13 @@ final class CaptureSession: NSObject {
     var showSkeleton = true
     private(set) var overlayPoints: [MocapJoint: CGPoint] = [:]
     private(set) var overlayTracked: Set<MocapJoint> = []
+    /// Camera frame rate to ask for (the tracker runs at the camera rate; a
+    /// lower rate gives each frame more exposure).
+    var preferredFrameRate = 60 {
+        didSet { if preferredFrameRate != oldValue, isRunning { start() } }
+    }
+
+    private var isRunning = false
     /// Set by the preview view from its layout.
     var viewportSize = CGSize.zero
     var interfaceOrientation: UIInterfaceOrientation = .landscapeRight
@@ -53,15 +60,24 @@ final class CaptureSession: NSObject {
         }
         let configuration = ARBodyTrackingConfiguration()
         configuration.automaticSkeletonScaleEstimationEnabled = true
-        // The fastest format the device offers: more samples per second for
-        // the mirror's smoothing to work with.
+        // Body tracking only: nothing else competes for the frame.
+        configuration.planeDetection = []
+        configuration.environmentTexturing = .none
+        configuration.frameSemantics = []
+        // The largest format at the requested rate (or the nearest rate
+        // the device offers).
         let formats = ARBodyTrackingConfiguration.supportedVideoFormats
-        if let fastest = formats.max(by: { ($0.framesPerSecond, $0.imageResolution.width) < ($1.framesPerSecond, $1.imageResolution.width) }) {
-            configuration.videoFormat = fastest
+        let rates = Set(formats.map(\.framesPerSecond))
+        let rate = rates.min { abs($0 - preferredFrameRate) < abs($1 - preferredFrameRate) } ?? preferredFrameRate
+        if let format = formats.filter({ $0.framesPerSecond == rate }).max(by: { $0.imageResolution.width < $1.imageResolution.width }) {
+            configuration.videoFormat = format
         }
         videoFormat = "\(Int(configuration.videoFormat.imageResolution.width))×\(Int(configuration.videoFormat.imageResolution.height)) @ \(configuration.videoFormat.framesPerSecond) fps"
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-        sender.start()
+        isRunning = true
+        if !sender.isConnected {
+            sender.start()
+        }
         statusTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshStatus() }
         }
@@ -72,6 +88,7 @@ final class CaptureSession: NSObject {
         statusTimer = nil
         sender.stop()
         session.pause()
+        isRunning = false
         status = "stopped"
     }
 
