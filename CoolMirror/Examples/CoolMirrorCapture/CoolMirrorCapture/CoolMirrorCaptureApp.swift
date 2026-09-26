@@ -2,9 +2,10 @@
 //  CoolMirrorCaptureApp.swift
 //  CoolMirrorCapture
 //
-//  Put the iPhone on a stand facing you: it tracks your body with ARKit and
-//  streams the pose over the local network to the CoolMirror visionOS app,
-//  which retargets it onto the character in front of you like a mirror.
+//  Put the iPhone sideways on a stand facing you (ARKit body tracking only
+//  works in landscape): it tracks your body and streams the pose over the
+//  local network to the CoolMirror visionOS app, which retargets it onto the
+//  character in front of you like a mirror.
 //
 
 import SwiftUI
@@ -35,7 +36,7 @@ struct ContentView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Label(capture.isTracked ? "Body tracked" : "Step back until your whole body is in view", systemImage: capture.isTracked ? "figure.stand" : "figure.walk.motion")
+                Label(capture.isTracked ? "Body tracked" : "Phone sideways, 3–4 m away, whole body in view", systemImage: capture.isTracked ? "figure.stand" : "figure.walk.motion")
                     .font(.headline)
                 Text(capture.status)
                     .font(.footnote)

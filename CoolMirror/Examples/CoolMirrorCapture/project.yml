@@ -19,7 +19,9 @@ targets:
       properties:
         CFBundleDisplayName: CoolMirror Capture
         UILaunchScreen: {}
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # ARKit body tracking only processes landscape frames
+        # ("ABPKPersonIDTracker: Portrait image is not supported").
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UIRequiredDeviceCapabilities: [arkit]
         NSCameraUsageDescription: Tracks your body with the rear camera and streams the pose to the CoolMirror visionOS app.
         NSLocalNetworkUsageDescription: Finds the CoolMirror visionOS app on your local network to stream your body pose to it.

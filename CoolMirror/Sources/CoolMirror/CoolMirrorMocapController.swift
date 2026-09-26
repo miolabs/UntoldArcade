@@ -83,12 +83,12 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         guard enabled else { return "off" }
         guard hasMapping else { return "This character has no motion-capture mapping; pick Spider-Man or Batman." }
         guard receiver.isPeerConnected else {
-            return "1 · Open CoolMirror Capture on the iPhone (same Wi-Fi) and put it on a stand with the back camera facing you, 2–3 m away."
+            return "1 · Open CoolMirror Capture on the iPhone (same Wi-Fi) and stand it sideways (landscape) with the back camera facing you, 3–4 m away."
         }
         let sinceLastFrame = receiver.secondsSinceLastFrame
         let tracked = (receiver.latestFrame?.isTracked ?? false) && (sinceLastFrame ?? .infinity) < 1
         guard tracked else {
-            return "2 · iPhone connected but it sees no body: step back until you are fully in its view, feet included."
+            return "2 · iPhone connected but it sees no body: keep the phone in landscape and step back until you are fully in its view, feet included."
         }
         if pending {
             return "Hold still… capturing your pose as the character's rest pose."
