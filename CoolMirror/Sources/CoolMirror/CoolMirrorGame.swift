@@ -224,6 +224,11 @@ public final class CoolMirrorGame {
         mocap.isCalibrated
     }
 
+    /// Whether an iPhone is connected to the mirror.
+    public func mocapIsConnected() -> Bool {
+        mocap.isConnected
+    }
+
     /// Link state in one line (connected, rate, body seen).
     public func mocapConnectionSummary() -> String {
         mocap.connectionSummary

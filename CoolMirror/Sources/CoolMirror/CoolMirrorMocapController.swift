@@ -149,6 +149,11 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         return nil
     }
 
+    /// An iPhone is connected and sending (frames within the last second).
+    var isConnected: Bool {
+        lock.withLock { enabled } && receiver.isPeerConnected && (receiver.secondsSinceLastFrame ?? .infinity) < 1
+    }
+
     /// One line on the link: connected or not, frame rate, body seen.
     var connectionSummary: String {
         guard lock.withLock({ enabled }) else { return "○ iPhone link off" }

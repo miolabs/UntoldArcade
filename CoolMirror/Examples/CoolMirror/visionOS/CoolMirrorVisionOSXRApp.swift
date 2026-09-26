@@ -103,7 +103,8 @@ final class MirrorControls {
     var mocapCalibrated = false
     var mocapFramed = false
     var mocapConnection = ""
-    var mocapPreview: MocapPreviewFrame?
+    /// An iPhone is connected: the preview window is open while this holds.
+    var mocapConnected = false
     var calibrationCountdown: Int?
 
     func pushMocapOptions() {
@@ -121,21 +122,16 @@ final class MirrorControls {
             mocapConnection = "○ Tap Enter Mixed Reality first: the mirror and the iPhone link run inside it."
             mocapStatus = "Waiting for the mirror to open."
             mocapFramed = false
+            mocapConnected = false
             return
         }
         mocapStatus = game.mocapStatus()
         mocapCalibrated = game.mocapIsCalibrated()
         mocapFramed = game.mocapIsFramed()
         mocapConnection = game.mocapConnectionSummary()
+        mocapConnected = mocapEnabled && game.mocapIsConnected()
     }
 
-    func refreshMocapPreview() {
-        guard let game = XRHolder.shared.game else { return }
-        let preview = game.mocapPreview()
-        if preview?.id != mocapPreview?.id {
-            mocapPreview = preview
-        }
-    }
 
     /// Three-second countdown so the user can settle into the character's
     /// rest pose, then the next tracked frame becomes the calibration.
@@ -191,6 +187,8 @@ final class MirrorControls {
 @main
 struct CoolMirrorVisionOSXRApp: App {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var immersionStyle: ImmersionStyle = .mixed
     @State private var controls = MirrorControls()
 
@@ -379,14 +377,6 @@ struct CoolMirrorVisionOSXRApp: App {
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(controls.mocapConnection.hasPrefix("●") ? Color.green : Color.orange)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    MocapPreviewView(preview: controls.mocapPreview, framed: controls.mocapFramed)
-                        .frame(height: 180)
-                        .task {
-                            while !Task.isCancelled {
-                                controls.refreshMocapPreview()
-                                try? await Task.sleep(for: .milliseconds(100))
-                            }
-                        }
                     Text(controls.mocapStatus)
                         .font(.callout)
                         .multilineTextAlignment(.leading)
@@ -407,9 +397,26 @@ struct CoolMirrorVisionOSXRApp: App {
                 }
             }
             .padding(48)
+            // The phone's picture lives in its own window, open while an
+            // iPhone is connected, so the controls and the picture move
+            // independently.
+            .onChange(of: controls.mocapConnected) { _, connected in
+                if connected {
+                    openWindow(id: "MocapPreview")
+                } else {
+                    dismissWindow(id: "MocapPreview")
+                }
+            }
         }
         .windowStyle(.plain)
         .defaultSize(width: 640, height: 600)
+
+        WindowGroup(id: "MocapPreview") {
+            MocapPreviewWindow()
+        }
+        .windowStyle(.plain)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 480, height: 300)
 
         ImmersiveSpace(id: "Mirror") {
             CompositorLayer(configuration: MirrorLayerConfiguration()) { layerRenderer in
@@ -457,6 +464,40 @@ struct CoolMirrorVisionOSXRApp: App {
             }
         }
         .immersionStyle(selection: $immersionStyle, in: .mixed)
+    }
+}
+
+/// The phone's picture in its own window: polls the mirror for the newest
+/// picture and the framing state; shows a hint when the link goes quiet.
+struct MocapPreviewWindow: View {
+    @State private var preview: MocapPreviewFrame?
+    @State private var framed = false
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("What the iPhone sees")
+                .font(.headline)
+            MocapPreviewView(preview: preview, framed: framed)
+                .frame(width: 432, height: 243)
+            Text(framed ? "Whole body in the picture" : "Get head, hands and feet inside the green frame")
+                .font(.footnote)
+                .foregroundStyle(framed ? Color.green : Color.orange)
+        }
+        .padding(16)
+        .frame(width: 480, height: 300)
+        .glassBackgroundEffect()
+        .task {
+            while !Task.isCancelled {
+                if let game = XRHolder.shared.game {
+                    let newest = game.mocapPreview()
+                    if newest?.id != preview?.id {
+                        preview = newest
+                    }
+                    framed = game.mocapIsFramed()
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
     }
 }
 
