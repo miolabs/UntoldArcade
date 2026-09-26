@@ -256,6 +256,9 @@ final class MocapTests: XCTestCase {
         func legs(_ left: simd_float3, _ right: simd_float3, sequence: UInt32) -> MocapFrame {
             var f = frame(sequence: sequence, rotations: [:])
             f.positions = [.leftUpLeg: left, .rightUpLeg: right, .leftFoot: left - simd_float3(0, 0.9, 0), .rightFoot: right - simd_float3(0, 0.9, 0)]
+            for joint in [MocapJoint.leftLeg, .rightLeg, .leftToes, .rightToes] {
+                f.positions[joint] = f.positions[joint.parent!]! - simd_float3(0, 0.05, 0)
+            }
             return f
         }
         let left = simd_float3(0.1, 0.95, 0), right = simd_float3(-0.1, 0.95, 0)
@@ -271,6 +274,9 @@ final class MocapTests: XCTestCase {
             f.positions[.rightShoulder] = rightArm
             f.positions[.leftHand] = leftArm - simd_float3(0, 0.6, 0)
             f.positions[.rightHand] = rightArm - simd_float3(0, 0.6, 0)
+            for joint in [MocapJoint.leftArm, .rightArm, .leftForearm, .rightForearm] {
+                f.positions[joint] = f.positions[joint.parent!]! - simd_float3(0, 0.2, 0)
+            }
             return f
         }
         let leftShoulder = simd_float3(0.2, 1.4, 0), rightShoulder = simd_float3(-0.2, 1.4, 0)
@@ -278,7 +284,7 @@ final class MocapTests: XCTestCase {
         let armsSwapped = filter.filter(withArms(legs(right, left, sequence: 4), leftArm: rightShoulder, rightArm: leftShoulder), at: 3 / 30, options: options)
         XCTAssertEqual(armsSwapped.positions[.leftHand], leftShoulder - simd_float3(0, 0.6, 0))
         XCTAssertEqual(armsSwapped.positions[.leftUpLeg], left, "legs untouched")
-        XCTAssertEqual(filter.swappedFrames, 2)
+        XCTAssertEqual(filter.swappedFrames, 4, "the legs stayed relabelled for three frames, the arms for one")
         // A jump of 40 cm on a foot is held back…
         var jumpy = withArms(legs(right, left, sequence: 5), leftArm: rightShoulder, rightArm: leftShoulder)
         jumpy.positions[.leftFoot]! += simd_float3(0.4, 0, 0)

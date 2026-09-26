@@ -100,9 +100,9 @@ struct OneEuroVector {
 
 /// Smooths successive frames; feed it the newest frame every render tick
 /// with the current time. Also undoes two ARKit body-tracking glitches
-/// before smoothing: a left/right swap (the hip axis reverses between two
-/// frames, faster than anyone can turn) is swapped back, and a frame in
-/// which a lower-body joint jumps implausibly is held back for a moment.
+/// before smoothing: a left/right relabelling of the arms or the legs is
+/// swapped back, and a frame in which a joint jumps farther than a body
+/// can move is held back for a moment (see `guardGlitches`).
 public struct MocapPoseFilter: Sendable {
     private var rotations: [MocapJoint: OneEuroQuaternion] = [:]
     private var positions: [MocapJoint: OneEuroVector] = [:]
@@ -123,15 +123,13 @@ public struct MocapPoseFilter: Sendable {
         root = OneEuroVector()
         lastTime = nil
         lastAccepted = nil
-        lastLateral.removeAll()
-        sidesSwapped.removeAll()
         holdUntil = nil
         rejectedFrames = 0
         swappedFrames = 0
     }
 
     /// A side of the body ARKit can relabel on its own: the arms (with the
-    /// shoulders) or the legs, and the left → right axis that shows it.
+    /// shoulders) or the legs.
     public enum SideGroup: CaseIterable, Sendable {
         case arms, legs
 
@@ -141,25 +139,6 @@ public struct MocapPoseFilter: Sendable {
             case .legs: [.leftUpLeg, .leftLeg, .leftFoot, .leftToes, .rightUpLeg, .rightLeg, .rightFoot, .rightToes]
             }
         }
-
-        var axisJoints: (MocapJoint, MocapJoint) {
-            switch self {
-            case .arms: (.leftShoulder, .rightShoulder)
-            case .legs: (.leftUpLeg, .rightUpLeg)
-            }
-        }
-    }
-
-    private var lastLateral: [SideGroup: simd_float3] = [:]
-    private var sidesSwapped: Set<SideGroup> = []
-
-    /// The group's left → right axis in world space.
-    private static func lateral(of frame: MocapFrame, group: SideGroup) -> simd_float3? {
-        let (left, right) = group.axisJoints
-        guard let l = frame.positions[left], let r = frame.positions[right] else { return nil }
-        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
-        let d = anchor.act(r - l)
-        return simd_length_squared(d) > 1e-6 ? simd_normalize(d) : nil
     }
 
     /// `frame` with the group's left joints' data on the right and vice versa.
@@ -177,37 +156,50 @@ public struct MocapPoseFilter: Sendable {
         return swapped
     }
 
-    /// Side-swap undo and jump rejection: the frame to smooth, or the last
-    /// accepted one while a glitch is held back.
+    /// World-space position of a joint.
+    private static func world(_ joint: MocapJoint, in frame: MocapFrame) -> simd_float3? {
+        guard let p = frame.positions[joint] else { return nil }
+        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        return anchor.act(p) + frame.rootPosition
+    }
+
+    /// Mean world distance of the group's joints between two frames.
+    private static func distance(_ a: MocapFrame, _ b: MocapFrame, group: SideGroup) -> Float {
+        var sum: Float = 0
+        var count: Float = 0
+        for joint in group.joints {
+            guard let pa = world(joint, in: a), let pb = world(joint, in: b) else { continue }
+            sum += simd_length(pa - pb)
+            count += 1
+        }
+        return count > 0 ? sum / count : 0
+    }
+
+    /// Side-swap undo and jump rejection. Motion is continuous, so of the
+    /// two readings of each limb group — as delivered, or with left and
+    /// right exchanged — the one nearer the previous accepted frame is
+    /// the true one; that undoes ARKit's relabelling without any state.
+    /// What still jumps farther than a body can move in one frame is a
+    /// glitch and the previous frame stands in for it, for up to
+    /// `glitchHold` seconds.
     private mutating func guardGlitches(_ frame: MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) -> MocapFrame {
         guard let previous = lastAccepted, frame.sequence != previous.sequence else {
             if lastAccepted == nil {
                 lastAccepted = frame
-                for group in SideGroup.allCases {
-                    lastLateral[group] = Self.lateral(of: frame, group: group)
-                }
             }
             return lastAccepted ?? frame
         }
         var candidate = frame
-        for group in SideGroup.allCases {
-            if sidesSwapped.contains(group) {
-                candidate = Self.swappingSides(candidate, group: group)
-            }
-            if let lateral = Self.lateral(of: candidate, group: group), let last = lastLateral[group], simd_dot(lateral, last) < -0.5 {
-                // Reversed in one frame: the tracker relabelled the sides.
-                if sidesSwapped.contains(group) {
-                    sidesSwapped.remove(group)
-                } else {
-                    sidesSwapped.insert(group)
-                }
-                candidate = Self.swappingSides(candidate, group: group)
+        for group in SideGroup.allCases where group.joints.allSatisfy({ frame.positions[$0] != nil && previous.positions[$0] != nil }) {
+            let swapped = Self.swappingSides(candidate, group: group)
+            if Self.distance(swapped, previous, group: group) < Self.distance(candidate, previous, group: group) {
+                candidate = swapped
                 swappedFrames += 1
             }
         }
         var jump: Float = 0
         for joint in MocapJoint.allCases {
-            guard let a = candidate.positions[joint], let b = previous.positions[joint] else { continue }
+            guard let a = Self.world(joint, in: candidate), let b = Self.world(joint, in: previous) else { continue }
             let limit = joint.isLowerBody ? options.maxJointStep : options.maxArmStep
             jump = max(jump, simd_length(a - b) / limit)
         }
@@ -227,9 +219,6 @@ public struct MocapPoseFilter: Sendable {
         }
         rejectedFrames = 0
         lastAccepted = candidate
-        for group in SideGroup.allCases {
-            lastLateral[group] = Self.lateral(of: candidate, group: group) ?? lastLateral[group]
-        }
         return candidate
     }
 
