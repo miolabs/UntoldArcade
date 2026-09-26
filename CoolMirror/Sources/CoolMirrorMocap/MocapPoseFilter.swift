@@ -32,6 +32,12 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var maxJointStep: Float = 0.25
     public var maxArmStep: Float = 0.4
     public var glitchHold: TimeInterval = 0.4
+    /// Median over the last `medianWindow` phone frames (odd; 1 = off):
+    /// a wrong detection shorter than half the window is dropped outright
+    /// instead of being smoothed into the motion, at (window − 1) / 2
+    /// frames of delay.
+    public var medianWindow = 5
+
     /// Body-yaw guard: the torso heading may turn at most `maxYawRate`
     /// (rad/s); a larger jump is held as a tracker error (the skeleton is
     /// turned back about the hips) until the tracked heading returns
@@ -156,6 +162,7 @@ public struct MocapPoseFilter: Sendable {
         yawHoldStart = nil
         yawLastTime = nil
         isYawHeld = false
+        recentRaw.removeAll()
     }
 
     /// A side of the body ARKit can relabel on its own: the arms (with the
@@ -250,6 +257,41 @@ public struct MocapPoseFilter: Sendable {
         rejectedFrames = 0
         lastAccepted = candidate
         return candidate
+    }
+
+    // MARK: - Median over recent frames
+
+    private var recentRaw: [MocapFrame] = []
+
+    /// `frame` with every joint position (and the root position) replaced
+    /// by the per-component median over the last `window` distinct phone
+    /// frames; the newest frame's rotations and flags are kept.
+    private mutating func median(_ frame: MocapFrame, window: Int) -> MocapFrame {
+        let window = max(1, window | 1)
+        guard window > 1 else { return frame }
+        if recentRaw.last?.sequence != frame.sequence {
+            recentRaw.append(frame)
+            if recentRaw.count > window {
+                recentRaw.removeFirst(recentRaw.count - window)
+            }
+        }
+        guard recentRaw.count >= 3 else { return frame }
+        func median(_ values: [Float]) -> Float {
+            let sorted = values.sorted()
+            return sorted[sorted.count / 2]
+        }
+        func median3(_ values: [simd_float3]) -> simd_float3 {
+            simd_float3(median(values.map(\.x)), median(values.map(\.y)), median(values.map(\.z)))
+        }
+        var output = frame
+        for joint in frame.positions.keys {
+            let samples = recentRaw.compactMap { $0.positions[joint] }
+            if samples.count == recentRaw.count {
+                output.positions[joint] = median3(samples)
+            }
+        }
+        output.rootPosition = median3(recentRaw.map(\.rootPosition))
+        return output
     }
 
     // MARK: - Body-yaw guard
@@ -454,7 +496,7 @@ public struct MocapPoseFilter: Sendable {
         guard options.isEnabled, frame.isTracked else { return frame }
         let dt = Float(min(max(time - (lastTime ?? time), 0), 0.25))
         lastTime = time
-        var frame = guardGlitches(frame, at: time, options: options)
+        var frame = guardGlitches(median(frame, window: options.medianWindow), at: time, options: options)
         if options.steadyYaw {
             steadyYaw(&frame, at: time, options: options)
         }

@@ -62,6 +62,7 @@ final class MocapTests: XCTestCase {
     func testFilterSteadiesNoiseButFollowsFastMotion() {
         var filter = MocapPoseFilter()
         var options = MocapSmoothingOptions()
+        options.medianWindow = 1 // this test exercises a later stage
         options.legCutoff = 1
         options.bodyCutoff = 2
         var generator = SystemRandomNumberGenerator()
@@ -262,7 +263,8 @@ final class MocapTests: XCTestCase {
 
     func testFilterUndoesASideSwapAndHoldsBackJumps() {
         var filter = MocapPoseFilter()
-        let options = MocapSmoothingOptions()
+        var options = MocapSmoothingOptions()
+        options.medianWindow = 1 // this test exercises a later stage
         func legs(_ left: simd_float3, _ right: simd_float3, sequence: UInt32) -> MocapFrame {
             var f = frame(sequence: sequence, rotations: [:])
             f.positions = [.leftUpLeg: left, .rightUpLeg: right, .leftFoot: left - simd_float3(0, 0.9, 0), .rightFoot: right - simd_float3(0, 0.9, 0)]
@@ -331,6 +333,7 @@ final class MocapTests: XCTestCase {
     func testStillFeetArePlantedAndStepsReleaseThem() {
         var filter = MocapPoseFilter()
         var options = MocapSmoothingOptions()
+        options.medianWindow = 1 // this test exercises a later stage
         options.plantFeet = true
         options.bodyCutoff = 100 // no smoothing: isolate the planting
         options.legCutoff = 100
@@ -375,6 +378,7 @@ final class MocapTests: XCTestCase {
     func testBodyYawJumpsAreHeldAndSlowTurnsFollow() throws {
         var filter = MocapPoseFilter()
         var options = MocapSmoothingOptions()
+        options.medianWindow = 1 // this test exercises a later stage
         options.bodyCutoff = 100
         options.legCutoff = 100
         options.rootCutoff = 100
@@ -436,6 +440,37 @@ final class MocapTests: XCTestCase {
         options.mirror = false
         let direct = CoolMirrorMocapController.headDelta(pose: nod, reference: reference, entityRotation: facingWearer, options: options)
         assertEqual(direct, simd_quatf(angle: -0.3, axis: simd_float3(1, 0, 0)))
+    }
+
+    /// A wrong detection lasting one or two frames never reaches the
+    /// output with a 5-frame median; a sustained move does, two frames late.
+    func testMedianDropsShortWrongDetections() {
+        var filter = MocapPoseFilter()
+        var options = MocapSmoothingOptions()
+        options.bodyCutoff = 100
+        options.legCutoff = 100
+        options.rootCutoff = 100
+        options.plantFeet = false
+        let rest = simd_float3(0.3, 1.0, 0)
+        func hand(_ p: simd_float3, sequence: UInt32) -> MocapFrame {
+            var f = frame(sequence: sequence, rotations: [:])
+            f.positions = [.leftHand: p]
+            return f
+        }
+        var maxDeviation: Float = 0
+        for i in 0 ..< 30 {
+            // Frames 10 and 11 are wrong by 30 cm.
+            let p = (i == 10 || i == 11) ? rest + simd_float3(0.3, 0, 0) : rest
+            let out = filter.filter(hand(p, sequence: UInt32(i + 1)), at: Double(i) / 60, options: options)
+            maxDeviation = max(maxDeviation, simd_length(out.positions[.leftHand]! - rest))
+        }
+        XCTAssertLessThan(maxDeviation, 0.01, "two wrong frames out of five never show")
+        // A real move is followed after the median delay.
+        var last = rest
+        for i in 30 ..< 40 {
+            last = filter.filter(hand(rest + simd_float3(0.3, 0, 0), sequence: UInt32(i + 1)), at: Double(i) / 60, options: options).positions[.leftHand]!
+        }
+        XCTAssertLessThan(simd_length(last - (rest + simd_float3(0.3, 0, 0))), 0.03)
     }
 
     func testSwingAndTwistDecomposition() {
