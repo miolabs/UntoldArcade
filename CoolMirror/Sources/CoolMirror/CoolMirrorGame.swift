@@ -202,6 +202,7 @@ public final class CoolMirrorGame {
         options.smoothing.bodyCutoff = Self.smoothingCutoff(bodySmoothing)
         options.smoothing.legCutoff = Self.smoothingCutoff(legSmoothing)
         options.smoothing.rootCutoff = options.smoothing.legCutoff * 0.6
+        options.smoothing.plantFeet = groundLock
         mocap.options = options
     }
 

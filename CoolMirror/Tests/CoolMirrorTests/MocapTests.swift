@@ -326,6 +326,44 @@ final class MocapTests: XCTestCase {
         XCTAssertEqual(decoded.keypoints[.leftFoot], SIMD2(150, 170))
     }
 
+    /// A foot that only wobbles is pinned and the knee re-solved for it;
+    /// a real step releases it.
+    func testStillFeetArePlantedAndStepsReleaseThem() {
+        var filter = MocapPoseFilter()
+        var options = MocapSmoothingOptions()
+        options.bodyCutoff = 100 // no smoothing: isolate the planting
+        options.legCutoff = 100
+        options.rootCutoff = 100
+        // A clearly bent knee (a straight leg cannot keep both bone lengths for a moved foot).
+        let hip = simd_float3(0.1, 0.9, 0), knee = simd_float3(0.1, 0.5, 0.15), foot = simd_float3(0.1, 0.1, 0)
+        func leg(_ footPosition: simd_float3, sequence: UInt32) -> MocapFrame {
+            var f = frame(sequence: sequence, rotations: [:])
+            f.positions = [.leftUpLeg: hip, .leftLeg: knee, .leftFoot: footPosition, .leftToes: footPosition + simd_float3(0, -0.05, 0.15)]
+            return f
+        }
+        var generator = SystemRandomNumberGenerator()
+        var last = foot
+        for i in 0 ..< 60 {
+            let wobble = simd_float3(Float.random(in: -0.015 ... 0.015, using: &generator), Float.random(in: -0.015 ... 0.015, using: &generator), 0)
+            let out = filter.filter(leg(foot + wobble, sequence: UInt32(i + 1)), at: Double(i) / 60, options: options)
+            last = out.positions[.leftFoot]!
+        }
+        XCTAssertTrue(filter.plantedFeet.contains(.leftFoot))
+        XCTAssertLessThan(simd_length(last - foot), 0.01, "pinned near the mean of the wobble")
+        let pinned = last
+        let held = filter.filter(leg(foot + simd_float3(0.02, 0.01, 0), sequence: 61), at: 61 / 60, options: options)
+        XCTAssertEqual(held.positions[.leftFoot], pinned, "still pinned")
+        let heldKnee = held.positions[.leftLeg]!
+        XCTAssertEqual(simd_length(heldKnee - hip), simd_length(knee - hip), accuracy: 1e-4, "thigh length kept")
+        // (the residual smoothing at a 100 Hz cut-off moves the tracked foot by a millimetre or two)
+        XCTAssertEqual(simd_length(pinned - heldKnee), simd_length(foot + simd_float3(0.02, 0.01, 0) - knee), accuracy: 0.005, "shin length kept")
+        // A 20 cm step (a real move, under the glitch limit) releases the
+        // pin: the foot follows again.
+        let stepped = filter.filter(leg(foot + simd_float3(0.2, 0, 0), sequence: 62), at: 62 / 60, options: options)
+        XCTAssertFalse(filter.plantedFeet.contains(.leftFoot))
+        XCTAssertLessThan(simd_length(stepped.positions[.leftFoot]! - (foot + simd_float3(0.2, 0, 0))), 0.03, "follows the step (minus the residual smoothing)")
+    }
+
     func testSwingAndTwistDecomposition() {
         let axis = simd_normalize(simd_float3(1, 2, 0))
         let twist = simd_quatf(angle: 0.7, axis: axis)

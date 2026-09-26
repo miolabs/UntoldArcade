@@ -32,6 +32,13 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var maxJointStep: Float = 0.25
     public var maxArmStep: Float = 0.4
     public var glitchHold: TimeInterval = 0.4
+    /// Foot planting: a foot slower than `plantSpeed` (m/s) for
+    /// `plantDelay` seconds is pinned where it is, the knee re-solved for
+    /// it, until the tracked foot moves `releaseDistance` from the pin.
+    public var plantFeet = true
+    public var plantSpeed: Float = 0.3
+    public var plantDelay: TimeInterval = 0.12
+    public var releaseDistance: Float = 0.1
 
     public init() {}
 
@@ -124,6 +131,8 @@ public struct MocapPoseFilter: Sendable {
         lastTime = nil
         lastAccepted = nil
         holdUntil = nil
+        plants.removeAll()
+        plantedFeet.removeAll()
         rejectedFrames = 0
         swappedFrames = 0
     }
@@ -222,6 +231,91 @@ public struct MocapPoseFilter: Sendable {
         return candidate
     }
 
+    // MARK: - Foot planting
+
+    private struct FootPlant {
+        /// Pinned world position while planted.
+        var locked: simd_float3?
+        /// Recent tracked world positions, for the speed estimate.
+        var history: [(time: TimeInterval, position: simd_float3)] = []
+        var stillSince: TimeInterval?
+    }
+
+    private var plants: [MocapJoint: FootPlant] = [:]
+    /// Feet currently pinned.
+    public private(set) var plantedFeet: Set<MocapJoint> = []
+
+    private static let legs: [(hip: MocapJoint, knee: MocapJoint, foot: MocapJoint, toes: MocapJoint)] = [
+        (.leftUpLeg, .leftLeg, .leftFoot, .leftToes), (.rightUpLeg, .rightLeg, .rightFoot, .rightToes),
+    ]
+
+    /// Pins still feet and re-solves their knees (two-bone IK on the
+    /// captured leg, keeping the bend plane), so tracker wobble on a
+    /// standing foot never reaches the rig.
+    private mutating func plantFeet(_ frame: inout MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) {
+        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        let root = frame.rootPosition
+        for leg in Self.legs {
+            guard let foot = frame.positions[leg.foot], let knee = frame.positions[leg.knee], let hip = frame.positions[leg.hip] else { continue }
+            var plant = plants[leg.foot, default: FootPlant()]
+            let worldFoot = anchor.act(foot) + root
+            plant.history.append((time, worldFoot))
+            plant.history.removeAll { time - $0.time > 0.15 }
+            let span = time - (plant.history.first?.time ?? time)
+            let speed: Float = span >= 0.08 ? simd_length(worldFoot - plant.history[0].position) / Float(span) : .infinity
+
+            if let locked = plant.locked {
+                if simd_length(worldFoot - locked) > options.releaseDistance {
+                    plant.locked = nil
+                    plant.stillSince = nil
+                }
+            } else if speed < options.plantSpeed {
+                if plant.stillSince == nil {
+                    plant.stillSince = time
+                }
+                if let since = plant.stillSince, time - since >= options.plantDelay {
+                    let mean = plant.history.reduce(simd_float3.zero) { $0 + $1.position } / Float(plant.history.count)
+                    plant.locked = mean
+                }
+            } else {
+                plant.stillSince = nil
+            }
+
+            if let locked = plant.locked {
+                let target = anchor.inverse.act(locked - root)
+                let offset = target - foot
+                frame.positions[leg.foot] = target
+                if let toes = frame.positions[leg.toes] {
+                    frame.positions[leg.toes] = toes + offset
+                }
+                // Knee: same thigh and shin lengths, same bend plane, new foot.
+                let thigh = simd_length(knee - hip)
+                let shin = simd_length(foot - knee)
+                let toTarget = target - hip
+                let distance = simd_length(toTarget)
+                if distance > 1e-4, thigh > 1e-4, shin > 1e-4 {
+                    let u = toTarget / distance
+                    let reach = min(distance, thigh + shin - 1e-3)
+                    let a = (thigh * thigh - shin * shin + reach * reach) / (2 * reach)
+                    let b = sqrt(max(thigh * thigh - a * a, 0))
+                    var bend = (knee - hip) - simd_dot(knee - hip, u) * u
+                    if simd_length_squared(bend) < 1e-6 {
+                        // Straight leg: bend the knee toward the body's front.
+                        let forward = anchor.inverse.act(anchor.act(simd_float3(0, 0, 1)))
+                        bend = forward - simd_dot(forward, u) * u
+                    }
+                    if simd_length_squared(bend) > 1e-8 {
+                        frame.positions[leg.knee] = hip + a * u + b * simd_normalize(bend)
+                    }
+                }
+                plantedFeet.insert(leg.foot)
+            } else {
+                plantedFeet.remove(leg.foot)
+            }
+            plants[leg.foot] = plant
+        }
+    }
+
     /// The smoothed frame; untracked frames pass through untouched.
     public mutating func filter(_ frame: MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) -> MocapFrame {
         guard options.isEnabled, frame.isTracked else { return frame }
@@ -243,6 +337,12 @@ public struct MocapPoseFilter: Sendable {
         output.rootPosition = root.filter(
             frame.rootPosition, dt: dt, minCutoff: options.rootCutoff, beta: options.beta, derivativeCutoff: options.derivativeCutoff
         )
+        if options.plantFeet {
+            plantFeet(&output, at: time, options: options)
+        } else if !plantedFeet.isEmpty {
+            plants.removeAll()
+            plantedFeet.removeAll()
+        }
         return output
     }
 }
