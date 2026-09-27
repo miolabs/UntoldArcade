@@ -43,6 +43,110 @@ final class MocapTests: XCTestCase {
         XCTAssertNil(MocapFrame(data: Data([1, 2, 3, 4])))
     }
 
+    func testRecordingRoundTripsAndReportsMotion() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mocap-test-\(UUID().uuidString).cmr")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let writer = try MocapRecordingWriter(url: url)
+        var frames: [MocapFrame] = []
+        for index in 0 ..< 5 {
+            var f = frame(sequence: UInt32(index), rotations: [.root: simd_quatf(angle: Float(index) * 0.1, axis: simd_float3(0, 1, 0))], root: simd_float3(Float(index) * 0.01, 0, 0))
+            f.timestamp = 12.5 + Double(index) / 30
+            f.positions = [.leftHand: simd_float3(0, Float(index) * 0.05, 0)]
+            frames.append(f)
+            writer.append(f)
+        }
+        writer.close()
+        XCTAssertEqual(writer.frameCount, 5)
+        let read = try MocapRecording.read(url: url)
+        XCTAssertEqual(read.count, 5)
+        for (a, b) in zip(read, frames) {
+            XCTAssertEqual(a.sequence, b.sequence)
+            XCTAssertEqual(a.rootPosition, b.rootPosition)
+            XCTAssertEqual(a.positions[.leftHand], b.positions[.leftHand])
+        }
+        let report = MocapRecording.report(read)
+        print(report)
+        XCTAssertTrue(report.contains("5 frames"))
+        XCTAssertTrue(report.contains("root travel per frame: median 10.0 mm"))
+        XCTAssertTrue(report.contains("leftHand 50.0 mm"))
+        XCTAssertEqual(MocapRecording.frames(in: Data([1, 2, 3])).count, 0, "not a recording")
+    }
+
+    /// The character stands on its planted foot: the tracked root may
+    /// wobble all it likes, the rig's anchor ankle stays put; a step moves
+    /// the other foot and the hips while the stance foot holds, with no
+    /// jump; a lifted foot is simply not the anchor; with root motion off
+    /// only the floor holds.
+    func testFootAnchorHoldsThePlantedFootAndHandsOverOnAStep() {
+        var anchor = MocapFootAnchor()
+        let floor: [MocapJoint: Float] = [.leftFoot: 0.08, .rightFoot: 0.08]
+        // The rig hangs from the tracked root: its ankle lands where the
+        // captured ankle is, plus the correction — as the engine composed
+        // it last frame, from last frame's capture and correction.
+        var correction = simd_float3.zero
+        var trueLeft = simd_float3(-0.1, 0.08, 0), trueRight = simd_float3(0.1, 0.08, 0)
+        var trueRoot = simd_float3(0, 0.9, 0)
+        var composed: [MocapJoint: simd_float3] = [:]
+        func step(_ frame: Int, jitter: simd_float3, lift: simd_float3 = .zero, horizontal: Bool = true) {
+            let captured: [MocapJoint: simd_float3] = [.leftFoot: trueLeft + jitter + lift, .rightFoot: trueRight + jitter]
+            let rig = composed.isEmpty ? captured : composed
+            correction = anchor.update(captured: captured, root: trueRoot + jitter, rig: rig, floor: floor, time: TimeInterval(frame) / 60, horizontal: horizontal)
+            composed = [.leftFoot: captured[.leftFoot]! + correction, .rightFoot: captured[.rightFoot]! + correction]
+        }
+        // Standing still while the tracker's root wanders by centimetres.
+        var anchoredRig: [simd_float3] = []
+        for frame in 0 ..< 120 {
+            let w = 0.03 * sin(Float(frame) * 0.7)
+            let jitter = simd_float3(w, 0.5 * w, -w)
+            step(frame, jitter: jitter)
+            if frame > 30, let foot = anchor.anchor, let placed = composed[foot] {
+                anchoredRig.append(placed)
+            }
+        }
+        XCTAssertNotNil(anchor.anchor, "standing still, a foot is planted")
+        let spread = anchoredRig.map { simd_length($0 - anchoredRig[0]) }.max() ?? 1
+        XCTAssertLessThan(spread, 0.006, "the anchored ankle stays within millimetres despite a 3 cm root wobble")
+
+        // A step with the left foot: it lifts, lands 30 cm ahead, the hips
+        // follow half way; the right foot stays on the floor.
+        var maxJump: Float = 0
+        var lastCorrection = correction
+        for frame in 120 ..< 200 {
+            let s = min(max(Float(frame - 120) / 30, 0), 1)
+            trueLeft = simd_float3(-0.1, 0.08, -0.3 * s)
+            trueRoot = simd_float3(0, 0.9, -0.15 * s)
+            let lift = simd_float3(0, 0.06 * sin(.pi * s), 0)
+            step(frame, jitter: .zero, lift: lift)
+            // (The first frames cancel the wobble the last phase ended on.)
+            if frame > 125 {
+                maxJump = max(maxJump, simd_length(correction - lastCorrection))
+            }
+            lastCorrection = correction
+        }
+        XCTAssertLessThan(maxJump, 0.01, "the step never snaps the root")
+        XCTAssertEqual(anchor.anchor, .rightFoot, "the foot that stayed down carried the step")
+        // Lifting the left foot straight up and holding it: still on the right.
+        for frame in 200 ..< 260 {
+            step(frame, jitter: .zero, lift: simd_float3(0, frame < 215 ? 0.2 * Float(frame - 200) / 15 : 0.2, 0))
+        }
+        XCTAssertEqual(anchor.anchor, .rightFoot, "a lifted foot is not the anchor")
+
+        // Root motion off: the anchor holds the floor only.
+        anchor = MocapFootAnchor()
+        correction = .zero
+        composed = [:]
+        trueLeft = simd_float3(-0.1, 0.1, 0)
+        trueRight = simd_float3(0.1, 0.1, 0)
+        for frame in 0 ..< 90 {
+            let drift = simd_float3(0.001 * Float(frame), 0, 0)
+            trueRoot = simd_float3(0, 0.9, 0) + drift
+            step(frame, jitter: drift, horizontal: false)
+        }
+        XCTAssertEqual(correction.x, 0)
+        XCTAssertEqual(correction.z, 0)
+        XCTAssertLessThan(correction.y, -0.015, "the ankles 2 cm above the floor are brought down")
+    }
+
     func testEveryJointButTheRootHasAParentInTheSet() {
         for joint in MocapJoint.allCases {
             if joint == .root {

@@ -72,15 +72,11 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     private var headPoseProvider: (@Sendable () -> simd_quatf?)?
     private var headReference: simd_quatf?
     private var groundLock = true
-    private var groundCorrection: Float = 0
-    /// Rest height of every ankle and toe joint, by rig joint name.
-    private var restFootHeights: [String: Float] = [:]
-    /// Root x/z held while the captured feet are planted, and the blend
-    /// out of a hold (start time, held value) so a release never snaps.
-    private var heldRootXZ: simd_float2?
-    private var rootHoldRelease: (start: TimeInterval, from: simd_float2)?
-    private static let rootHoldReleaseBlend: TimeInterval = 0.25
-    private var lastFeet: (positions: [MocapJoint: simd_float3], time: TimeInterval)?
+    /// The character stands on its planted foot (see `MocapFootAnchor`).
+    private var footAnchor = MocapFootAnchor()
+    /// Rest height of every ankle and toe joint (model space), by the
+    /// captured joint it answers for.
+    private var restFootHeights: [MocapJoint: Float] = [:]
 
     var options: MocapRetargetOptions {
         get { lock.withLock { storedOptions } }
@@ -116,18 +112,16 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         }
     }
 
-    /// Keeps the character's lowest foot on the floor: the root translation
-    /// is corrected by whatever the lowest ankle has risen above its rest
-    /// height (no jumping, no floating).
+    /// Builds the character from the feet up: the planted foot's ankle is
+    /// held where it landed, on the floor, and the root follows from it
+    /// (see `MocapFootAnchor`). Off, the root is the tracked hips.
     var isGroundLockEnabled: Bool {
         get { lock.withLock { groundLock } }
         set {
             lock.withLock {
                 groundLock = newValue
                 if !newValue {
-                    groundCorrection = 0
-                    heldRootXZ = nil
-                    rootHoldRelease = nil
+                    footAnchor.reset()
                 }
             }
         }
@@ -248,9 +242,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 restFootHeights = [:]
             }
             driving = false
-            groundCorrection = 0
-            heldRootXZ = nil
-            lastFeet = nil
+            footAnchor.reset()
             jitter.reset()
         }
         hideDebugLines()
@@ -271,11 +263,11 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     /// Rest heights of the ankles and toes: whichever of them ends lowest
     /// in a pose is the floor contact.
-    private static func restFootHeights(of positions: [String: simd_float3], mapping: MocapRigMapping) -> [String: Float] {
-        var heights: [String: Float] = [:]
+    private static func restFootHeights(of positions: [String: simd_float3], mapping: MocapRigMapping) -> [MocapJoint: Float] {
+        var heights: [MocapJoint: Float] = [:]
         for joint in [MocapJoint.leftFoot, .rightFoot, .leftToes, .rightToes] {
             if let name = mapping.referenceJoints[joint], let position = positions[name] {
-                heights[name] = position.y
+                heights[joint] = position.y
             }
         }
         return heights
@@ -407,76 +399,33 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     // MARK: - Ground lock
 
-    /// The root translation with the feet kept on the floor: vertically,
-    /// the lowest ankle or toe is held at its rest height (reading the pose
-    /// the engine composed last frame, which already holds the previous
-    /// correction, and closing the remaining error); horizontally, the root
-    /// stays put while both captured feet are planted, so tracker noise
-    /// cannot slide the character.
+    /// The root translation with the character standing on its planted
+    /// foot: the rig's ankles as the engine composed them last frame (which
+    /// already hold the previous correction), brought into the character's
+    /// model space, drive `MocapFootAnchor`; its correction is added to the
+    /// tracked root translation. With root motion off the anchor only
+    /// holds the floor, so the character walks in place.
     private func grounded(_ result: MocapRetargetResult, characterId: EntityID, origin: simd_float3, time: TimeInterval) -> simd_float3 {
-        var translation = result.rootTranslationDelta
-        let (enabled, restHeights, previous, held, lastFeet, release) = lock.withLock {
-            (groundLock, restFootHeights, groundCorrection, heldRootXZ, self.lastFeet, rootHoldRelease)
+        let translation = result.rootTranslationDelta
+        let (enabled, floor, mapping, horizontal) = lock.withLock {
+            (groundLock, restFootHeights, retargeter?.mapping, storedOptions.rootTranslationScale > 0)
         }
-        guard enabled else { return translation }
+        guard enabled, let mapping, !floor.isEmpty else { return translation }
 
-        if !restHeights.isEmpty {
-            let joints = entitySkeletonJointPoses(entityId: characterId)
-            var lowest: Float?
-            for joint in joints {
-                guard let name = joint.path.split(separator: "/").last.map(String.init), let rest = restHeights[name] else { continue }
-                let rise = joint.worldPosition.y - origin.y - rest
-                lowest = min(lowest ?? rise, rise)
-            }
-            var correction = previous
-            if let lowest {
-                correction = previous - 0.8 * lowest
-            }
-            lock.withLock { groundCorrection = correction }
-            translation.y += correction
+        // The rig's ankles and toes, model space.
+        let rotation = getRotationQuaternion(entityId: characterId)
+        let scale = max(getScale(entityId: characterId).y, 1e-4)
+        var rig: [MocapJoint: simd_float3] = [:]
+        let joints = entitySkeletonJointPoses(entityId: characterId)
+        for (captured, name) in mapping.referenceJoints where floor[captured] != nil {
+            guard let joint = joints.first(where: { $0.path == name || $0.path.hasSuffix("/" + name) }) else { continue }
+            rig[captured] = rotation.inverse.act(joint.worldPosition - origin) / scale
         }
-
-        // Planted: both feet below 0.15 m/s since the last check.
-        let feet = [MocapJoint.leftFoot, .rightFoot].reduce(into: [MocapJoint: simd_float3]()) { $0[$1] = result.capturedJointPositions[$1] }
-        var planted = false
-        if feet.count == 2, let lastFeet, time > lastFeet.time {
-            let dt = Float(time - lastFeet.time)
-            planted = feet.allSatisfy { joint, position in
-                guard let last = lastFeet.positions[joint] else { return false }
-                return simd_length(position - last) / dt < 0.15
-            }
+        let captured = MocapFootAnchor.feet.reduce(into: [MocapJoint: simd_float3]()) { $0[$1] = result.capturedJointPositions[$1] }
+        let correction = lock.withLock {
+            footAnchor.update(captured: captured, root: translation, rig: rig, floor: floor, time: time, horizontal: horizontal)
         }
-        var newHeld = held
-        var newRelease = release
-        let tracked = simd_float2(translation.x, translation.z)
-        if planted {
-            if newHeld == nil {
-                newHeld = tracked
-                newRelease = nil
-            }
-            translation.x = newHeld!.x
-            translation.z = newHeld!.y
-        } else {
-            if let held {
-                // Leaving a hold: ease from the held spot to the tracked one.
-                newRelease = (time, held)
-            }
-            newHeld = nil
-            if let newRelease {
-                let s = Float(min(max((time - newRelease.start) / Self.rootHoldReleaseBlend, 0), 1))
-                if s < 1 {
-                    let eased = newRelease.from + s * (tracked - newRelease.from)
-                    translation.x = eased.x
-                    translation.z = eased.y
-                }
-            }
-        }
-        lock.withLock {
-            heldRootXZ = newHeld
-            rootHoldRelease = newRelease
-            self.lastFeet = (feet, time)
-        }
-        return translation
+        return translation + correction
     }
 
     // MARK: - Debug overlay

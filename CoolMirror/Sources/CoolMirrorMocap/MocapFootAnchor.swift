@@ -1,0 +1,129 @@
+//
+//  MocapFootAnchor.swift
+//  CoolMirrorMocap
+//
+//  The character built from the feet up. The phone's skeleton hangs from
+//  its hips: every wobble of the tracked root carries the feet with it,
+//  and the person feels driven from the hip. Here the planted foot is the
+//  fixed point instead — its rig ankle is held where it landed, on the
+//  floor, and the root translation is corrected so the hips move relative
+//  to that foot exactly as captured. A step hands the anchor to the other
+//  foot where it lands, so nothing jumps. Pure and testable.
+//
+
+import Foundation
+import simd
+
+public struct MocapFootAnchor: Sendable {
+    /// A foot is planted once its captured speed over `window` seconds
+    /// stays below this (m/s), and lifted as soon as its speed since the
+    /// last frame exceeds twice it: planting is slow and sure, lifting is
+    /// immediate, so an anchor never holds a foot down that is leaving.
+    /// Speed is the smaller of the foot's travel in the world and its
+    /// travel relative to the root: a root that wobbles carries both feet
+    /// with it, which is no step.
+    public var plantedSpeed: Float = 0.15
+    public var window: TimeInterval = 0.2
+    /// Fraction of the remaining error closed per update (the rig pose read
+    /// each frame already carries the previous correction).
+    public var gain: Float = 0.8
+
+    /// The root translation correction, in the space of the positions given.
+    public private(set) var correction = simd_float3.zero
+    /// The foot the character stands on, and where its ankle is held.
+    public private(set) var anchor: MocapJoint?
+    public private(set) var anchorPosition = simd_float3.zero
+
+    private var planted: Set<MocapJoint> = []
+    private var history: [(time: TimeInterval, feet: [MocapJoint: simd_float3], root: simd_float3)] = []
+
+    public static let feet: [MocapJoint] = [.leftFoot, .rightFoot]
+
+    public init() {}
+
+    /// `captured`: the captured ankles and `root` the captured root, in
+    /// one consistent space (only their travel matters). `rig`: the rig's
+    /// ankle (and toe) positions as composed last frame, `floor`: each
+    /// one's height when standing, both in the space of the correction.
+    /// `horizontal`: whether the anchor may correct sideways too (off, the
+    /// character walks in place: only the floor holds).
+    public mutating func update(
+        captured: [MocapJoint: simd_float3], root: simd_float3, rig: [MocapJoint: simd_float3], floor: [MocapJoint: Float],
+        time: TimeInterval, horizontal: Bool
+    ) -> simd_float3 {
+        // Planted feet, from the captured travel.
+        history.removeAll { $0.time > time || time - $0.time > window * 1.5 }
+        func speed(of foot: MocapJoint, since sample: (time: TimeInterval, feet: [MocapJoint: simd_float3], root: simd_float3)) -> Float? {
+            guard let now = captured[foot], let was = sample.feet[foot], time > sample.time else { return nil }
+            let world = simd_length(now - was)
+            let relative = simd_length((now - root) - (was - sample.root))
+            return min(world, relative) / Float(time - sample.time)
+        }
+        for foot in Self.feet {
+            guard captured[foot] != nil else {
+                planted.remove(foot)
+                continue
+            }
+            if let last = history.last, let recent = speed(of: foot, since: last), recent > 2 * plantedSpeed {
+                planted.remove(foot)
+            } else if let oldest = history.first, time - oldest.time >= window * 0.5, let slow = speed(of: foot, since: oldest), slow < plantedSpeed {
+                planted.insert(foot)
+            }
+        }
+        history.append((time, captured, root))
+
+        // The anchor: the current foot while it stays planted, else the
+        // lower planted foot, held where its ankle is now, on the floor.
+        if let current = anchor, !planted.contains(current) || rig[current] == nil {
+            anchor = nil
+        }
+        if anchor == nil {
+            let candidates = Self.feet.filter { planted.contains($0) && rig[$0] != nil && floor[$0] != nil }
+            if let foot = candidates.min(by: { rig[$0]!.y < rig[$1]!.y }) {
+                anchor = foot
+                anchorPosition = rig[foot]!
+                anchorPosition.y = floor[foot]!
+            }
+        }
+
+        if let anchor, let position = rig[anchor] {
+            // The rig ankle hangs from the tracked root: this frame it will
+            // move by whatever the captured ankle moved since the frame the
+            // rig pose was composed from. Cancel that in full, and close a
+            // fraction of what remained.
+            var error = anchorPosition - position
+            var travel = simd_float3.zero
+            if let previous = history.dropLast().last?.feet[anchor], let now = captured[anchor] {
+                travel = now - previous
+            }
+            if !horizontal {
+                error.x = 0
+                error.z = 0
+                travel.x = 0
+                travel.z = 0
+            }
+            correction += gain * error - travel
+        } else {
+            // In the air: only keep the lowest foot from sinking below the floor.
+            var lowest: Float?
+            for (foot, position) in rig {
+                guard let height = floor[foot] else { continue }
+                let rise = position.y - height
+                lowest = min(lowest ?? rise, rise)
+            }
+            if let lowest, lowest < 0 {
+                correction.y -= gain * lowest
+            }
+        }
+        return correction
+    }
+
+    public mutating func reset() {
+        self = MocapFootAnchor(plantedSpeed: plantedSpeed, gain: gain)
+    }
+
+    init(plantedSpeed: Float, gain: Float) {
+        self.plantedSpeed = plantedSpeed
+        self.gain = gain
+    }
+}
