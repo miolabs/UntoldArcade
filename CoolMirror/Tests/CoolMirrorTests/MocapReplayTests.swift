@@ -121,11 +121,38 @@ final class MocapReplayTests: XCTestCase {
         let turn = session.stretch("Turn to your left")
         let turnRaw = Self.headings(session.raw[turn]), turnFiltered = Self.headings(session.filtered[turn])
         XCTAssertGreaterThan(Self.range(turnRaw), 90)
-        XCTAssertGreaterThan(Self.range(turnFiltered), 0.85 * Self.range(turnRaw), "a real turn is not a glitch")
+        // (The last twenty degrees of this turn came slowly, at 10°/s, and
+        // are followed only after two seconds: the price of not following
+        // the tracker's wander with the arms up, which drifts at that rate.)
+        XCTAssertGreaterThan(Self.range(turnFiltered), 0.7 * Self.range(turnRaw), "a real turn is not a glitch")
 
         // Nowhere does the heading step by more than a few degrees between frames.
         let whole = Self.headings(session.filtered[...])
         XCTAssertLessThan(Self.largestStep(whole), 9)
+    }
+
+    /// Session of 2026-09-27, latest: the tracker's heading drifted 27°
+    /// and back over three seconds with the arms going up, at 20°/s, with
+    /// both feet on the floor; a real 70° turn on the spot at 45°/s.
+    func testThirdSessionIgnoresTheArmsUpWanderAndFollowsTheTurn() throws {
+        guard let session = try replay("session-20260927-202923") else { throw XCTSkip("recording not present") }
+
+        let still = session.stretch("Stand still, arms down")
+        XCTAssertLessThan(Self.range(Self.headings(session.filtered[still])), 6)
+        XCTAssertLessThan(Self.largestStep(Self.headings(session.filtered[still])), 0.5)
+
+        // With the arms going up (20–24 s) the tracker wandered 27°; the character stays put.
+        let t0 = session.raw[0].timestamp
+        let wander = session.raw.indices.filter { session.raw[$0].timestamp - t0 > 20 && session.raw[$0].timestamp - t0 < 24 }
+        let wanderRaw = Self.headings(ArraySlice(wander.map { session.raw[$0] }))
+        let wanderFiltered = Self.headings(ArraySlice(wander.map { session.filtered[$0] }))
+        XCTAssertGreaterThan(Self.range(wanderRaw), 20, "the tracker did wander")
+        XCTAssertLessThan(Self.range(wanderFiltered), 12, "the character does not")
+
+        // The turn on the spot is followed, within a few frames.
+        let turn = session.stretch("Turn to your left")
+        XCTAssertGreaterThan(Self.range(Self.headings(session.filtered[turn])), 50)
+        XCTAssertLessThan(Self.largestStep(Self.headings(session.filtered[turn])), 4)
     }
 
     /// Session of 2026-09-27, later: ten frames the tracker lost (they

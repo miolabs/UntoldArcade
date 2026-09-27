@@ -54,10 +54,14 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     /// whole skeleton under planted feet is its commonest error), and the
     /// heading follows through a low-pass of `yawCutoffPlanted` (Hz) at
     /// no more than `maxYawRatePlanted`, which takes the tracker's wander
-    /// (twenty degrees over two seconds, standing still) out — unless the
-    /// tracked heading stays more than `yawBiasThreshold` away for
-    /// `yawBiasTime` seconds, a slow real turn (a pivot on the heels),
-    /// which is then followed at `maxYawRate`.
+    /// (twenty degrees over two seconds, standing still) out — unless it
+    /// is a real turn on the spot, which is then followed at `maxYawRate`:
+    /// the tracked heading turning at `yawMomentumRate` or more toward
+    /// where it sits, or staying away by `yawBiasThresholdLarge` or more
+    /// for `yawBiasTime` seconds, or by `yawBiasThreshold` or more for
+    /// `yawBiasTimeSmall` seconds (a slow pivot — longer than the
+    /// tracker's wander of twenty-odd degrees with the arms going up,
+    /// which drifts at half that rate and comes back before that).
     public var steadyYaw = true
     public var maxYawRate: Float = 4.0 // ~230°/s
     public var yawJumpThreshold: Float = 0.3 // ~17°
@@ -70,9 +74,11 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var yawHoldPlanted: TimeInterval = 12.0
     public var yawAdoptRate: Float = 0.5 // ~30°/s
     public var maxYawRatePlanted: Float = 0.35 // ~20°/s
-    public var yawCutoffPlanted: Float = 0.1
+    public var yawCutoffPlanted: Float = 0.03
     public var yawBiasThreshold: Float = 0.21 // ~12°
+    public var yawBiasThresholdLarge: Float = 0.52 // ~30°
     public var yawBiasTime: TimeInterval = 0.5
+    public var yawBiasTimeSmall: TimeInterval = 2.0
     /// A foot counts as planted (for the yaw guard) while, over
     /// `plantedWindow`, either foot travels slower than `plantedFootSpeed`
     /// (m/s) in the world (a body standing on one foot cannot turn its
@@ -373,8 +379,8 @@ public struct MocapPoseFilter: Sendable {
     /// The last measured hip heading (rad) and the correction applied to it.
     public private(set) var lastMeasuredYaw: Float?
     public private(set) var lastYawCorrection: Float = 0
-    /// Whether both feet were planted at the last update (the heading
-    /// then follows only slowly).
+    /// Whether a foot was planted at the last update (the heading then
+    /// follows only slowly).
     public private(set) var feetPlanted = false
 
     /// Heading of the hips in world space (the hip axis; the shoulders
@@ -449,6 +455,11 @@ public struct MocapPoseFilter: Sendable {
         let jumpSample = rawYawHistory.last { time - $0.time >= options.yawJumpWindow } ?? rawYawHistory.first
         let rawStep = jumpSample.map { unwrappedRaw - $0.yaw } ?? 0
         let momentumSample = rawYawHistory.first
+        // How fast the tracked heading has been turning over the momentum window (rad/s).
+        let rawRate: Float = momentumSample.map { sample in
+            let span = Float(time - sample.time)
+            return span > 0.05 ? (unwrappedRaw - sample.yaw) / span : 0
+        } ?? 0
         rawYawHistory.append((time, unwrappedRaw))
         guard let trusted = trustedYaw else {
             trustedYaw = raw
@@ -500,8 +511,10 @@ public struct MocapPoseFilter: Sendable {
                 } else {
                     yawBiasSince = nil
                 }
-                let biased = yawBiasSince.map { time - $0 >= options.yawBiasTime } ?? false
-                if !biased {
+                let biasTime = abs(delta) >= options.yawBiasThresholdLarge ? options.yawBiasTime : options.yawBiasTimeSmall
+                let biased = yawBiasSince.map { time - $0 >= biasTime } ?? false
+                let turning = abs(rawRate) >= options.yawMomentumRate && (rawRate > 0) == (delta > 0) && abs(delta) > options.yawBiasThreshold
+                if !biased, !turning {
                     wanted = delta * lowPassAlpha(cutoff: options.yawCutoffPlanted, dt: step)
                     maxStep = options.maxYawRatePlanted * step
                 }
