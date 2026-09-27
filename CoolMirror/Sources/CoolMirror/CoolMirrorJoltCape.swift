@@ -257,6 +257,11 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             colliders.append(Collider(body: body, fit: fit))
         }
 
+        // The floor: the character stands on its origin's height (the
+        // ground lock keeps the lowest foot there).
+        let origin = simd_float3(modelToWorld.columns.3.x, modelToWorld.columns.3.y, modelToWorld.columns.3.z)
+        backend.setEnvironmentBoxes([Self.floor(under: origin)])
+
         lock.withLock {
             self.pieces = pieces
             self.colliders = colliders
@@ -334,6 +339,14 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         for collider in colliders {
             backend?.removeKinematicBody(collider.body)
         }
+        if !pieces.isEmpty {
+            backend?.setEnvironmentBoxes([])
+        }
+    }
+
+    /// A slab whose top is the floor under the character.
+    static func floor(under origin: simd_float3) -> JoltEnvironmentBox {
+        JoltEnvironmentBox(center: origin - simd_float3(0, 0.25, 0), halfExtents: simd_float3(4, 0.25, 4), friction: 0.6)
     }
 
     // MARK: - Helpers

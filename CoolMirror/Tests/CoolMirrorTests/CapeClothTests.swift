@@ -163,6 +163,18 @@ final class CapeClothTests: XCTestCase {
         XCTAssertGreaterThan(foot.radius, 0.09, "the heel behind the ankle")
         let upperArm = try XCTUnwrap(cape.fits.first { $0.from == rig.leftUpperArm })
         XCTAssertGreaterThan(upperArm.radius, 0.035, "the arm must keep a body after the pin clearance")
+        XCTAssertLessThanOrEqual(upperArm.radius, 0.08)
+        let forearm = try XCTUnwrap(cape.fits.first { $0.from == rig.leftForearm })
+        XCTAssertLessThanOrEqual(forearm.radius, 0.06, "the gauntlet's fins must not shove the cape's front")
+        // The shoulder blades are covered, just under the collar.
+        let upperBack = try XCTUnwrap(cape.fits.first { $0.from == rig.chest })
+        XCTAssertGreaterThan(upperBack.radius, 0.06, "the upper back")
+        // The collar pins sit right on the shoulders: their capsules are
+        // shrunk almost away, and it is the upper back that covers the
+        // shoulder blades.
+        let shoulder = try XCTUnwrap(cape.fits.first { $0.from == rig.leftClavicle })
+        XCTAssertGreaterThanOrEqual(shoulder.radius, CoolMirrorCapeColliders.radiusRange.lowerBound)
+        XCTAssertGreaterThan(upperBack.radius, 0.1, "the shoulder blades")
         // The capsules are the body: at rest, no collar pin sits inside
         // one (a pinned particle inside a collider explodes the cloth),
         // and the feet have their own.
@@ -407,10 +419,12 @@ final class CapeClothTests: XCTestCase {
             colliders.append(body)
         }
         XCTAssertEqual(colliders.count, cape.fits.count, "every segment found")
+        backend.setEnvironmentBoxes([CoolMirrorJoltCape.floor(under: Self.origin)])
 
         var positions: [SIMD3<Float>] = []
         var farthestSeen: Float = 0
         var stepTime: TimeInterval = 0
+        var lowest: Float = .greatestFiniteMagnitude
         for frame in 0 ..< 150 {
             // The wearer sways 8 cm sideways and turns ±15°: every joint moves.
             let t = Float(frame) / 30
@@ -433,11 +447,13 @@ final class CapeClothTests: XCTestCase {
             let nonFinite = positions.filter { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) }.count + deformed.positions.filter { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) }.count
             let farthest = positions.map { simd_length($0 - Self.origin) }.max() ?? 0
             farthestSeen = max(farthestSeen, farthest)
+            lowest = min(lowest, positions.map(\.y).min() ?? 0)
             XCTAssertEqual(nonFinite, 0, "frame \(frame)")
             XCTAssertLessThan(farthest, 2.5, "frame \(frame): the cape flew to \(farthest) m")
             if nonFinite > 0 || farthest > 2.5 { break }
         }
-        print(String(format: "cape cloth: with colliders and a swaying collar, farthest particle over 5 s = %.2f m, %d particles, %.2f ms per step", farthestSeen, cloth.particleRest.count, stepTime / 150 * 1000))
+        print(String(format: "cape cloth: with colliders and a swaying collar, farthest particle over 5 s = %.2f m, lowest %.3f m above the floor, %d particles, %.2f ms per step", farthestSeen, lowest - Self.origin.y, cloth.particleRest.count, stepTime / 150 * 1000))
+        XCTAssertGreaterThan(lowest, Self.origin.y - 0.03, "the cape must not fall through the floor")
         for body in colliders {
             backend.removeKinematicBody(body)
         }

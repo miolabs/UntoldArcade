@@ -25,6 +25,10 @@ enum CoolMirrorCapeColliders {
         /// Where along the bone the capsule starts (0 = at `from`): an
         /// upper arm starts below the shoulder, which the collar sits on.
         var startFraction: Float = 0
+        /// Ceiling on the fitted radius: a gauntlet's fins or a boot's
+        /// top must not make an arm or a foot a barrel that shoves the
+        /// cape about when the limb comes near it.
+        var maxRadius: Float = CoolMirrorCapeColliders.radiusRange.upperBound
     }
 
     /// A fitted capsule: `shift` is the axis offset in the `from` joint's
@@ -49,32 +53,35 @@ enum CoolMirrorCapeColliders {
     /// A capsule stays at least this far from every pinned particle.
     static let pinClearance: Float = 0.02
 
-    /// Nothing above the chest: a pinned collar particle inside a
-    /// collider is shoved out against a pin that cannot move, every
-    /// step, and the cloth explodes.
+    /// The upper back and the shoulders (the shoulder blades the cape
+    /// sank into) are wrapped too; `keep(_:awayFrom:joints:)` then
+    /// shrinks them clear of the collar pins they carry, since a pinned
+    /// particle inside a collider is shoved out against a pin that cannot
+    /// move, every step, and the cloth explodes.
     static func segments(_ rig: CoolMirrorCapeRig) -> [Segment] {
         [
             Segment(from: rig.pelvis, to: rig.spine, fallbackRadius: 0.11),
             Segment(from: rig.spine, to: rig.chest, fallbackRadius: 0.1),
-            Segment(from: rig.leftUpperArm, to: rig.leftForearm, fallbackRadius: 0.05, startFraction: 0.35),
-            Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.05, startFraction: 0.35),
-            Segment(from: rig.leftForearm, to: rig.leftHand, fallbackRadius: 0.04),
-            Segment(from: rig.rightForearm, to: rig.rightHand, fallbackRadius: 0.04),
+            Segment(from: rig.chest, to: rig.upperChest, fallbackRadius: 0.1),
+            Segment(from: rig.leftClavicle, to: rig.leftUpperArm, fallbackRadius: 0.06),
+            Segment(from: rig.rightClavicle, to: rig.rightUpperArm, fallbackRadius: 0.06),
+            Segment(from: rig.leftUpperArm, to: rig.leftForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.08),
+            Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.08),
+            Segment(from: rig.leftForearm, to: rig.leftHand, fallbackRadius: 0.04, maxRadius: 0.06),
+            Segment(from: rig.rightForearm, to: rig.rightHand, fallbackRadius: 0.04, maxRadius: 0.06),
             Segment(from: rig.leftThigh, to: rig.leftCalf, fallbackRadius: 0.08),
             Segment(from: rig.rightThigh, to: rig.rightCalf, fallbackRadius: 0.08),
             Segment(from: rig.leftCalf, to: rig.leftFoot, fallbackRadius: 0.06),
             Segment(from: rig.rightCalf, to: rig.rightFoot, fallbackRadius: 0.06),
-            Segment(from: rig.leftFoot, to: rig.leftToe, fallbackRadius: 0.05),
-            Segment(from: rig.rightFoot, to: rig.rightToe, fallbackRadius: 0.05),
+            Segment(from: rig.leftFoot, to: rig.leftToe, fallbackRadius: 0.05, maxRadius: 0.12),
+            Segment(from: rig.rightFoot, to: rig.rightToe, fallbackRadius: 0.05, maxRadius: 0.12),
         ]
     }
 
-    /// Joints whose vertices size no segment: the upper chest, neck,
-    /// head, shoulders and hands, and everything under them. The collar
-    /// hangs from the first four (no collider may hold a pin), and a
-    /// glove would swell the forearm.
+    /// Joints whose vertices size no segment: the neck, head and hands,
+    /// and everything under them (a glove would swell the forearm).
     static func excludedJoints(_ rig: CoolMirrorCapeRig) -> [String] {
-        [rig.upperChest, rig.neck, rig.head, rig.leftClavicle, rig.rightClavicle, rig.leftHand, rig.rightHand]
+        [rig.neck, rig.head, rig.leftHand, rig.rightHand]
     }
 
     /// Fits the segments to a mesh at rest: `positions` in the space of
@@ -160,7 +167,7 @@ enum CoolMirrorCapeColliders {
                 }
                 spread.sort()
                 let index = min(spread.count - 1, Int(Float(spread.count - 1) * radiusPercentile))
-                fit.radius = spread[index].clamped(to: radiusRange)
+                fit.radius = min(spread[index].clamped(to: radiusRange), segment.maxRadius)
                 fit.shift = restJoints[a].rotation.inverse.act(mean)
             }
             fits.append(fit)
