@@ -11,16 +11,31 @@ let package = Package(
     ],
     products: [
         .library(name: "CoolMirror", targets: ["CoolMirror"]),
+        // Wire format + transport + retargeting shared with the iPhone capture app.
+        .library(name: "CoolMirrorMocap", targets: ["CoolMirrorMocap"]),
     ],
     dependencies: [
         // Tracks the engine's deformation feature branch until it merges into develop.
-        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/ml_deformer"),
+        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/mirror_mocap"),
+        // XPBD cloth for Batman's cape (GPU sheet) …
+        .package(path: "../CoolCloth"),
+        // … and Jolt cloth on the cape mesh itself.
+        .package(url: "https://github.com/miolabs/UntoldJoltPhysics.git", branch: "feature/soft_body_cloth"),
     ],
     targets: [
         .target(
+            name: "CoolMirrorMocap",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .target(
             name: "CoolMirror",
             dependencies: [
+                "CoolMirrorMocap",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
+                .product(name: "CoolCloth", package: "CoolCloth"),
+                .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
@@ -42,8 +57,12 @@ let package = Package(
             name: "CoolMirrorTests",
             dependencies: [
                 "CoolMirror",
+                "CoolMirrorMocap",
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
+                .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
+            // Raw capture recordings the replay tests read by path.
+            exclude: ["Recordings"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

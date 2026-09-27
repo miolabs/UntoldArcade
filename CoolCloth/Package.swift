@@ -13,7 +13,9 @@ let package = Package(
         .library(name: "CoolCloth", targets: ["CoolCloth"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/untoldengine/UntoldEngine.git", branch: "develop"),
+        // On this branch the plugin builds against the fork's deformation
+        // stack, like CoolMirror, which depends on it for Batman's cape.
+        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/mirror_mocap"),
     ],
     targets: [
         .target(

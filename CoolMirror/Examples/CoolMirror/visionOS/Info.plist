@@ -16,8 +16,18 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_coolmirror._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Receives body tracking from the CoolMirror Capture iPhone app on your local network.</string>
 	<key>NSWorldSensingUsageDescription</key>
 	<string>Detects the floor and nearby surfaces so the mirror character can stand in your room.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

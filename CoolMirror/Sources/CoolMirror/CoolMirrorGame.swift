@@ -8,8 +8,11 @@
 //  engine draws the character; this class spawns it and forwards controls.
 //
 
+import CoolMirrorMocap
+import Foundation
 import simd
 import UntoldEngine
+import UntoldJoltPhysics
 
 /// Characters bundled with the demo, each with its own rig and clips.
 public enum CoolMirrorCharacter: String, CaseIterable, Sendable {
@@ -76,6 +79,11 @@ public final class CoolMirrorGame {
     private var skinningPath: CoolMirrorSkinningPath = .vertexShader
     private var currentClip: String?
     private var muscleMode: CoolMirrorMuscleMode = .off
+    private var pausedByUser = false
+    private let mocap = CoolMirrorMocapController()
+    private let cape = CoolMirrorCape()
+    private let joltCape = CoolMirrorJoltCape()
+    private var capeMode: CoolMirrorCapeMode = .jolt
     private var muscleFlex: Float = 0
     private var mlDeformerWeight: Float = 1
     private var muscleCagesVisible = false
@@ -93,10 +101,46 @@ public final class CoolMirrorGame {
         setCharacter(character)
     }
 
-    // Called from the XR render thread; all mutable state stays on the main
-    // actor, so these are intentionally empty pass-throughs for now (live
-    // mocap will feed poses here in a later phase).
-    public nonisolated func update(deltaTime _: Float) {}
+    // Called from the XR render thread, between the animation update and
+    // the render: the mocap controller retargets the newest iPhone frame
+    // onto the character here (its own state is lock-protected).
+    public nonisolated func update(deltaTime: Float) {
+        mocap.update()
+        cape.update(deltaTime: deltaTime)
+        joltCape.update(deltaTime: deltaTime)
+    }
+
+    /// Installs the cloth plugin the cape uses; call once before the XR
+    /// renderer is created.
+    public static func registerRenderPlugins() {
+        CoolMirrorCape.registerPlugin()
+    }
+
+    /// The Jolt backend the cape cloth lives in (registered by the app
+    /// before the renderer is created).
+    public func setJoltBackend(_ backend: JoltPhysicsBackend?) {
+        joltCape.setBackend(backend)
+    }
+
+    /// How Batman's cape is done (no effect on the other characters): the
+    /// model's rigid cape, the GPU sheet, or the cape mesh as Jolt cloth.
+    public func setCapeMode(_ mode: CoolMirrorCapeMode) {
+        capeMode = mode
+        cape.setEnabled(mode == .sheet)
+        joltCape.setEnabled(mode == .jolt)
+        if mode == .jolt, skinningPath == .vertexShader {
+            // The cloth writes into the deformation pass's output.
+            setSkinningPath(.computeLBS)
+        }
+    }
+
+    public func setCapeEnabled(_ enabled: Bool) {
+        setCapeMode(enabled ? .jolt : .rigid)
+    }
+
+    public func hasCape() -> Bool {
+        CoolMirrorCapeRig.rig(for: character) != nil
+    }
 
     public nonisolated func handleInput() {}
 
@@ -108,6 +152,10 @@ public final class CoolMirrorGame {
         generation += 1
         characterId = nil
         onCharacterReady = nil
+        mocap.setCharacter(nil, mapping: nil)
+        mocap.setEnabled(false)
+        cape.setCharacter(nil, character: nil)
+        joltCape.setCharacter(nil, character: nil)
     }
 
     public func setCharacter(_ newCharacter: CoolMirrorCharacter) {
@@ -140,6 +188,10 @@ public final class CoolMirrorGame {
             setEntityMuscleRig(entityId: characterId, rig: CoolMirrorMuscles.rig(for: newCharacter))
             self.applyClip()
             self.applySkinningPath()
+            self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter), origin: self.characterPosition)
+            self.cape.setCharacter(characterId, character: newCharacter)
+            self.joltCape.setCharacter(characterId, character: newCharacter)
+            self.applyMocapPause()
             self.onCharacterReady?()
         }
     }
@@ -157,8 +209,128 @@ public final class CoolMirrorGame {
     /// Freeze playback on the current frame so skinning paths can be
     /// compared on the exact same pose.
     public func setPaused(_ paused: Bool) {
+        pausedByUser = paused
+        applyMocapPause()
+    }
+
+    // MARK: - iPhone motion capture
+
+    /// Streams the user's body pose from the iPhone capture app onto the
+    /// character (the clip freezes underneath; joints the capture drives
+    /// follow the user, the rest keep the frozen pose).
+    public func setMocapEnabled(_ enabled: Bool) {
+        mocap.setEnabled(enabled)
+        applyMocapPause()
+    }
+
+    /// Captures the next tracked frame as the pose matching the character's
+    /// rest pose; call it while the user holds that pose.
+    public func calibrateMocap() {
+        mocap.requestCalibration()
+    }
+
+    /// `bodySmoothing` and `legSmoothing` go from 0 (raw tracker, shaky)
+    /// to 1 (very steady, laggy); the legs setting also steadies the hips
+    /// and where the character stands.
+    public func setMocapOptions(
+        mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
+        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false
+    ) {
+        mocap.isGroundLockEnabled = groundLock
+        var options = MocapRetargetOptions()
+        options.mirror = mirror
+        options.flipFacing = flipFacing
+        options.weight = weight
+        options.rootTranslationScale = rootMotion ? 1 : 0
+        options.smoothing.bodyCutoff = Self.smoothingCutoff(bodySmoothing)
+        options.smoothing.legCutoff = Self.smoothingCutoff(legSmoothing)
+        options.smoothing.rootCutoff = options.smoothing.legCutoff * 0.6
+        options.smoothing.plantFeet = plantFeet
+        mocap.options = options
+    }
+
+    /// 0 → 8 Hz (hardly any smoothing), 1 → 0.24 Hz, exponential in between.
+    static func smoothingCutoff(_ amount: Float) -> Float {
+        8 * powf(0.03, min(max(amount, 0), 1))
+    }
+
+    /// Draws the captured skeleton and the rig bones over the character.
+    public func setMocapDebugOverlay(_ enabled: Bool) {
+        mocap.isDebugOverlayEnabled = enabled
+    }
+
+    public func mocapStatus() -> String {
+        mocap.status
+    }
+
+    public func mocapIsCalibrated() -> Bool {
+        mocap.isCalibrated
+    }
+
+    /// Drives the character's head from the headset's own orientation
+    /// (the phone cannot see the head under the Vision Pro). The provider
+    /// runs on the render thread every frame; nil goes back to the neck.
+    public func setMocapHeadPoseProvider(_ provider: (@Sendable () -> simd_quatf?)?) {
+        mocap.setHeadPoseProvider(provider)
+    }
+
+    /// Whether an iPhone is connected to the mirror.
+    public func mocapIsConnected() -> Bool {
+        mocap.isConnected
+    }
+
+    /// Link state in one line (connected, rate, body seen).
+    public func mocapConnectionSummary() -> String {
+        mocap.connectionSummary
+    }
+
+    /// Whether the phone sees the whole body (calibrate only then).
+    public func mocapIsFramed() -> Bool {
+        mocap.isFramed
+    }
+
+    /// The phone's camera picture with the tracked joints, a few times a
+    /// second, so the wearer can check the framing.
+    public func mocapPreview() -> MocapPreviewFrame? {
+        mocap.preview
+    }
+
+    /// Records the raw frames the phone sends into a new file in the app's
+    /// Documents folder (shown in the Files app), for replaying on a Mac.
+    /// Returns the file.
+    public func startMocapRecording() -> URL? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let url = documents.appendingPathComponent("mocap-\(formatter.string(from: Date())).\(MocapRecording.fileExtension)")
+        do {
+            try mocap.startRecording(to: url)
+            return url
+        } catch {
+            print("CoolMirror mocap: could not record to \(url.path): \(error)")
+            return nil
+        }
+    }
+
+    /// Notes what the wearer does from now on, in the recording.
+    public func markMocapRecording(_ label: String) {
+        mocap.markRecording(label)
+    }
+
+    /// Closes the recording; the file and how many frames it holds.
+    @discardableResult
+    public func stopMocapRecording() -> (url: URL, frames: Int)? {
+        mocap.stopRecording()
+    }
+
+    public func mocapRecordingFrameCount() -> Int? {
+        mocap.recordingFrameCount
+    }
+
+    private func applyMocapPause() {
         guard let characterId else { return }
-        pauseAnimationComponent(entityId: characterId, isPaused: paused)
+        // Mocap needs a frozen base pose; otherwise the user's pause choice.
+        pauseAnimationComponent(entityId: characterId, isPaused: pausedByUser || mocap.isEnabled)
     }
 
     /// Pose-space deformation: authored drivers fire morphs from the pose
@@ -273,4 +445,14 @@ public final class CoolMirrorGame {
         guard let characterId, let currentClip else { return }
         changeAnimation(entityId: characterId, name: currentClip)
     }
+}
+
+/// How Batman's cape is done.
+public enum CoolMirrorCapeMode: String, CaseIterable, Sendable {
+    /// The model's own cape, skinned like the rest.
+    case rigid
+    /// The CoolCloth GPU sheet hanging from the shoulders.
+    case sheet
+    /// The cape mesh itself as Jolt cloth.
+    case jolt
 }
