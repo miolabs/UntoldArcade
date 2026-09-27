@@ -368,7 +368,7 @@ final class CapeClothTests: XCTestCase {
             )
             descriptor.iterations = 4
             descriptor.linearDamping = CoolMirrorJoltCape.damping
-            descriptor.vertexRadius = 0.012
+            descriptor.vertexRadius = 0.02
             descriptor.maxLinearVelocity = CoolMirrorJoltCape.maxParticleSpeed
             descriptor.bendType = .distance
             let body = try XCTUnwrap(backend.addSoftBody(descriptor))
@@ -386,6 +386,40 @@ final class CapeClothTests: XCTestCase {
             print(String(format: "cape cloth sweep: spacing %.0f mm → %d particles, %d faces (%d folded dropped), %d pinned, %d non-manifold edges, binding error %.1f mm, %.2f ms per frame (step + skin), farthest %.2f m", spacing * 1000, cloth.particleRest.count, cloth.faces.count, cloth.stats.facesFolded, cloth.pinned.count, cloth.stats.nonManifoldEdges, cloth.stats.bindingError * 1000, ms, farthest))
             backend.removeSoftBody(body)
         }
+    }
+
+    /// The mesh push-out: a vertex inside a hull or a capsule lands on its
+    /// surface plus the clearance, one outside stays put, and the cape at
+    /// rest is barely touched (it was modelled on the body).
+    func testMeshVerticesArePushedOutOfTheColliders() throws {
+        guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
+        let rig = try XCTUnwrap(CoolMirrorCapeRig.rig(for: .batman))
+        let forearm = try XCTUnwrap(cape.fits.first { $0.from == rig.leftForearm })
+        let joint = cape.restJoints[forearm.fromJoint]
+        // The hull's centre, in world.
+        let centre = joint.position + joint.rotation.act((forearm.hullBounds.min + forearm.hullBounds.max) * 0.5)
+        let far = centre + simd_float3(0, 1, 0)
+        var points = [centre, far]
+        CoolMirrorCapeColliders.pushOut(&points, fits: cape.fits, joints: cape.restJoints)
+        XCTAssertEqual(points[1], far, "a vertex outside every collider stays")
+        XCTAssertGreaterThan(simd_length(points[0] - centre), 0.02, "the centre of the forearm is pushed to its surface")
+        // Now on the surface: pushing again barely moves it.
+        var again = [points[0]]
+        CoolMirrorCapeColliders.pushOut(&again, fits: cape.fits, joints: cape.restJoints)
+        XCTAssertLessThan(simd_length(again[0] - points[0]), 0.01)
+        // A capsule segment (a calf, whose middle no other collider reaches).
+        let calf = try XCTUnwrap(cape.fits.first { $0.from == rig.leftCalf })
+        XCTAssertTrue(calf.hull.isEmpty)
+        let calfCentre = (cape.restJoints[calf.fromJoint].position + cape.restJoints[calf.toJoint].position) * 0.5
+        var inCalf = [calfCentre + simd_float3(0.01, 0, 0)]
+        CoolMirrorCapeColliders.pushOut(&inCalf, fits: cape.fits, joints: cape.restJoints)
+        XCTAssertGreaterThan(simd_length(inCalf[0] - calfCentre), calf.radius - 1e-3)
+        // The cape's own rest vertices: most are already outside.
+        var rest = cape.cloth.particleRest
+        CoolMirrorCapeColliders.pushOut(&rest, fits: cape.fits, joints: cape.restJoints)
+        let moved = zip(rest, cape.cloth.particleRest).filter { simd_length($0 - $1) > 0.02 }.count
+        print("cape push-out: \(moved) of \(rest.count) rest vertices sat more than 2 cm inside a collider")
+        XCTAssertLessThan(moved, rest.count / 10)
     }
 
     /// A collider may hold collar pins: Jolt leaves a pinned vertex where
@@ -421,7 +455,7 @@ final class CapeClothTests: XCTestCase {
             var descriptor = JoltSoftBodyDescriptor(vertices: cloth.startWorld, inverseMasses: cloth.inverseMasses, faces: cloth.faces, compliance: 2e-6, shearCompliance: 2e-5, bendCompliance: 4e-4)
             descriptor.iterations = 4
             descriptor.linearDamping = CoolMirrorJoltCape.damping
-            descriptor.vertexRadius = 0.012
+            descriptor.vertexRadius = 0.02
             descriptor.maxLinearVelocity = CoolMirrorJoltCape.maxParticleSpeed
             descriptor.bendType = .distance
             let body = try XCTUnwrap(backend.addSoftBody(descriptor))
@@ -487,7 +521,7 @@ final class CapeClothTests: XCTestCase {
         )
         descriptor.iterations = 4
         descriptor.linearDamping = CoolMirrorJoltCape.damping
-        descriptor.vertexRadius = 0.012
+        descriptor.vertexRadius = 0.02
         descriptor.maxLinearVelocity = CoolMirrorJoltCape.maxParticleSpeed
         descriptor.bendType = .distance
         let body = try XCTUnwrap(backend.addSoftBody(descriptor))

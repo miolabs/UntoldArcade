@@ -157,9 +157,13 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
                 tearDown()
                 return
             }
-            // Every mesh vertex from the (coarser) particles, back in model space.
+            // Every mesh vertex from the (coarser) particles, pushed out
+            // of the body where a collider slipped between particles,
+            // back in model space.
             let deformed = piece.cloth.deformedVertices(particles: world)
-            let positions = deformed.positions.map { p -> simd_float3 in
+            var pushed = deformed.positions
+            CoolMirrorCapeColliders.pushOut(&pushed, fits: colliders.map(\.fit), joints: frames)
+            let positions = pushed.map { p -> simd_float3 in
                 let m = worldToModel * simd_float4(p, 1)
                 return simd_float3(m.x, m.y, m.z)
             }
@@ -300,7 +304,9 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         // sweeps this) at a third of the solver cost of 8 × 3.
         descriptor.iterations = 4
         descriptor.linearDamping = Self.damping
-        descriptor.vertexRadius = 0.012
+        // Particles keep 2 cm off the body: the mesh between them sags
+        // less onto it.
+        descriptor.vertexRadius = 0.02
         descriptor.friction = 0.5
         descriptor.maxLinearVelocity = Self.maxParticleSpeed
         // Dihedral bends diverge under a moving collar (the headless cape

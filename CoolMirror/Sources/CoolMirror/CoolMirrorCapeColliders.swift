@@ -59,6 +59,12 @@ enum CoolMirrorCapeColliders {
         var shift: simd_float3
         var radius: Float
         var hull: [simd_float3]
+        /// The hull's bounding slab along every `directions` entry (joint
+        /// frame): the farthest hull point's extent. A cheap
+        /// inside/outside test for the mesh vertices.
+        var slabs: [Float]
+        /// The hull's bounds in the joint frame.
+        var hullBounds: (min: simd_float3, max: simd_float3)
         var vertices: Int
     }
 
@@ -68,12 +74,27 @@ enum CoolMirrorCapeColliders {
         var rotation: simd_quatf
     }
 
+    /// The margin the mesh vertices keep off a collider when they are
+    /// pushed out of it after the cloth step (see `pushOut`).
+    static let meshClearance: Float = 0.006
+
     /// The hull keeps the vertices farthest along this many directions
     /// (about twenty points describe a limb; Jolt builds the hull). Cost
     /// grows with the planes: the headless scenario steps in 2.0 ms at 24
     /// directions, 1.6 at 16, 2.9 with hulls on the legs too, 0.5 with
     /// capsules everywhere (Release, this Mac).
     static let hullDirections = 24
+
+    /// `hullDirections` unit directions spread over the sphere.
+    static let directions: [simd_float3] = {
+        let golden = Float.pi * (3 - sqrt(5))
+        return (0 ..< hullDirections).map { index in
+            let y = 1 - 2 * (Float(index) + 0.5) / Float(hullDirections)
+            let r = sqrt(max(0, 1 - y * y))
+            let angle = golden * Float(index)
+            return simd_float3(r * cos(angle), y, r * sin(angle))
+        }
+    }()
 
     /// Radii from the mesh are clamped to this range: an outlier vertex
     /// (a glove skinned to the forearm) must not swell a limb, and a
@@ -189,7 +210,7 @@ enum CoolMirrorCapeColliders {
             let lengthSquared = simd_length_squared(axis)
             guard lengthSquared > 1e-6 else { continue }
             let vertices = verticesOfSegment[index]
-            var fit = Fit(from: segment.from, to: segment.to, fromJoint: a, toJoint: b, startFraction: segment.startFraction, endFraction: segment.endFraction, shift: .zero, radius: segment.fallbackRadius, hull: [], vertices: vertices.count)
+            var fit = Fit(from: segment.from, to: segment.to, fromJoint: a, toJoint: b, startFraction: segment.startFraction, endFraction: segment.endFraction, shift: .zero, radius: segment.fallbackRadius, hull: [], slabs: [], hullBounds: (.zero, .zero), vertices: vertices.count)
             if vertices.count >= 24 {
                 // Sideways offsets of the vertices from the axis; the
                 // capsule's axis moves to their mean, its radius covers
@@ -207,6 +228,10 @@ enum CoolMirrorCapeColliders {
                     local.append(inverseRest.act(p - start))
                 }
                 fit.hull = segment.hull ? hullPoints(local) : []
+                if !fit.hull.isEmpty {
+                    fit.slabs = directions.map { d in fit.hull.reduce(-Float.greatestFiniteMagnitude) { max($0, simd_dot($1, d)) } }
+                    fit.hullBounds = (fit.hull.reduce(fit.hull[0], simd_min), fit.hull.reduce(fit.hull[0], simd_max))
+                }
                 var mean = simd_float3.zero
                 var spread: [Float]
                 let band = segment.allAround ? [] : back.map { back in offsets.filter { simd_length_squared($0) > 1e-8 && simd_dot(simd_normalize($0), back) >= 0.7071 } } ?? []
@@ -232,12 +257,7 @@ enum CoolMirrorCapeColliders {
     static func hullPoints(_ points: [simd_float3]) -> [simd_float3] {
         guard points.count >= 4 else { return [] }
         var chosen = Set<Int>()
-        let golden = Float.pi * (3 - sqrt(5))
-        for index in 0 ..< hullDirections {
-            let y = 1 - 2 * (Float(index) + 0.5) / Float(hullDirections)
-            let r = sqrt(max(0, 1 - y * y))
-            let angle = golden * Float(index)
-            let direction = simd_float3(r * cos(angle), y, r * sin(angle))
+        for direction in directions {
             var best = 0
             var bestDot = -Float.greatestFiniteMagnitude
             for (i, p) in points.enumerated() {
@@ -264,6 +284,61 @@ enum CoolMirrorCapeColliders {
         normal = simd_normalize(normal)
         guard hull.contains(where: { abs(simd_dot($0 - a, normal)) > 1e-3 }) else { return [] }
         return hull
+    }
+
+    /// Moves every point of `points` (world) that is inside a collider out
+    /// to its surface plus `meshClearance`. Jolt collides the cloth
+    /// particles only, and they sit centimetres apart: an elbow's point
+    /// slips between three particles that are all outside it and shows
+    /// through the mesh triangle they span. So the mesh vertices, skinned
+    /// from the particles, are pushed out themselves. A hull is tested as
+    /// the intersection of its `directions` slabs (a hair larger than the
+    /// hull at its corners), a capsule as itself.
+    static func pushOut(_ points: inout [simd_float3], fits: [Fit], joints: [CoolMirrorCapeCloth.JointFrame]) {
+        let capsules = capsules(fits, joints: joints)
+        for (fit, capsule) in zip(fits, capsules) {
+            if !fit.hull.isEmpty, fit.fromJoint < joints.count {
+                let joint = joints[fit.fromJoint]
+                let inverse = joint.rotation.inverse
+                let lo = fit.hullBounds.min - meshClearance, hi = fit.hullBounds.max + meshClearance
+                for index in points.indices {
+                    let local = inverse.act(points[index] - joint.position)
+                    guard local.x > lo.x, local.y > lo.y, local.z > lo.z, local.x < hi.x, local.y < hi.y, local.z < hi.z else { continue }
+                    // Inside every slab: push out through the nearest one.
+                    var nearest = 0
+                    var nearestDistance = -Float.greatestFiniteMagnitude
+                    var inside = true
+                    for (slot, direction) in directions.enumerated() {
+                        let distance = simd_dot(local, direction) - fit.slabs[slot]
+                        if distance >= meshClearance {
+                            inside = false
+                            break
+                        }
+                        if distance > nearestDistance {
+                            nearestDistance = distance
+                            nearest = slot
+                        }
+                    }
+                    guard inside else { continue }
+                    let moved = local + directions[nearest] * (meshClearance - nearestDistance)
+                    points[index] = joint.position + joint.rotation.act(moved)
+                }
+            } else {
+                let axis = capsule.end - capsule.start
+                let lengthSquared = max(simd_length_squared(axis), 1e-8)
+                let wanted = capsule.radius + meshClearance
+                for index in points.indices {
+                    let p = points[index]
+                    let t = simd_clamp(simd_dot(p - capsule.start, axis) / lengthSquared, 0, 1)
+                    let closest = capsule.start + axis * t
+                    let d = p - closest
+                    let distance = simd_length(d)
+                    if distance < wanted, distance > 1e-6 {
+                        points[index] = closest + d / distance * wanted
+                    }
+                }
+            }
+        }
     }
 
     /// The kinematic pose of every fit for the current joints: a hull sits
