@@ -17,6 +17,7 @@ public final class MocapReceiver: @unchecked Sendable {
     private var connections: [NWConnection] = []
     private var latest: MocapFrame?
     private var latestPreviewFrame: MocapPreviewFrame?
+    private var sink: (@Sendable (MocapFrame) -> Void)?
     private var previewAssembler = MocapPreviewAssembler()
     private var previewChunks = 0
     private var previewsAssembled = 0
@@ -28,6 +29,13 @@ public final class MocapReceiver: @unchecked Sendable {
     public init() {}
 
     /// Newest decoded frame, or nil before the first one.
+    /// Called with every frame as it arrives (network queue), whether or
+    /// not the mirror gets to use it: for recording.
+    public var frameSink: (@Sendable (MocapFrame) -> Void)? {
+        get { lock.withLock { sink } }
+        set { lock.withLock { sink = newValue } }
+    }
+
     public var latestFrame: MocapFrame? {
         lock.withLock { latest }
     }
@@ -159,14 +167,16 @@ public final class MocapReceiver: @unchecked Sendable {
                     }
                 }
             } else if let data, let frame = MocapFrame(data: data) {
-                self.lock.withLock {
+                let sink = self.lock.withLock { () -> (@Sendable (MocapFrame) -> Void)? in
                     if self.latest == nil || frame.sequence >= (self.latest?.sequence ?? 0) || frame.sequence < 16 {
                         self.latest = frame
                     }
                     let now = Date().timeIntervalSinceReferenceDate
                     self.frameTimes.append(now)
                     self.lastFrameTime = now
+                    return self.sink
                 }
+                sink?(frame)
             }
             if error == nil {
                 self.receive(on: connection)

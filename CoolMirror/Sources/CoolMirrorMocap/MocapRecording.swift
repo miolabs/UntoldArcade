@@ -12,17 +12,38 @@ import Foundation
 import simd
 
 public enum MocapRecording {
-    /// File magic, "CMR1"; then, per frame, a little-endian 32-bit length
-    /// and the frame's wire form.
+    /// File magic, "CMR1"; then records, each a little-endian 32-bit
+    /// length and either a frame's wire form or a marker ("CMRK", the
+    /// time as a double, a UTF-8 label): what the wearer was asked to do
+    /// from then on.
     public static let magic: UInt32 = 0x3152_4D43
+    public static let markerMagic: UInt32 = 0x4B52_4D43
     public static let fileExtension = "cmr"
 
+    public struct Marker: Equatable, Sendable {
+        public var time: Double
+        public var label: String
+
+        public init(time: Double, label: String) {
+            self.time = time
+            self.label = label
+        }
+    }
+
     public static func read(url: URL) throws -> [MocapFrame] {
+        try readAll(url: url).frames
+    }
+
+    public static func readAll(url: URL) throws -> (frames: [MocapFrame], markers: [Marker]) {
         let data = try Data(contentsOf: url)
-        return frames(in: data)
+        return records(in: data)
     }
 
     public static func frames(in data: Data) -> [MocapFrame] {
+        records(in: data).frames
+    }
+
+    public static func records(in data: Data) -> (frames: [MocapFrame], markers: [Marker]) {
         var cursor = data.startIndex
         func read32() -> UInt32? {
             guard cursor + 4 <= data.endIndex else { return nil }
@@ -30,21 +51,58 @@ public enum MocapRecording {
             cursor += 4
             return UInt32(littleEndian: value)
         }
-        guard read32() == magic else { return [] }
+        guard read32() == magic else { return ([], []) }
         var frames: [MocapFrame] = []
+        var markers: [Marker] = []
         while let length = read32(), length > 0, cursor + Int(length) <= data.endIndex {
-            if let frame = MocapFrame(data: data[cursor ..< cursor + Int(length)]) {
+            let record = data[cursor ..< cursor + Int(length)]
+            if let frame = MocapFrame(data: record) {
                 frames.append(frame)
+            } else if let marker = marker(in: record) {
+                markers.append(marker)
             }
             cursor += Int(length)
         }
-        return frames
+        return (frames, markers)
+    }
+
+    static func markerData(_ marker: Marker) -> Data {
+        var data = Data()
+        var magic = markerMagic.littleEndian
+        data.append(Data(bytes: &magic, count: 4))
+        var time = marker.time.bitPattern.littleEndian
+        data.append(Data(bytes: &time, count: 8))
+        data.append(Data(marker.label.utf8))
+        return data
+    }
+
+    static func marker(in record: Data) -> Marker? {
+        guard record.count >= 12 else { return nil }
+        let start = record.startIndex
+        let magic = UInt32(littleEndian: record[start ..< start + 4].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
+        guard magic == markerMagic else { return nil }
+        let bits = UInt64(littleEndian: record[start + 4 ..< start + 12].withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) })
+        return Marker(time: Double(bitPattern: bits), label: String(decoding: record[(start + 12)...], as: UTF8.self))
     }
 
     /// How the raw skeleton moves from frame to frame: what a jump on the
     /// headset looks like at the source. Per frame, the root's travel and
     /// turn and the largest travel of any joint relative to the root; the
     /// summary names the frames that moved most.
+    /// With markers, the report is given per marked stretch as well.
+    public static func report(_ frames: [MocapFrame], markers: [Marker], worst: Int = 6) -> String {
+        var lines = ["whole recording:", report(frames, worst: worst)]
+        let sorted = markers.sorted { $0.time < $1.time }
+        for (index, marker) in sorted.enumerated() {
+            let end = index + 1 < sorted.count ? sorted[index + 1].time : .infinity
+            let stretch = frames.filter { $0.timestamp >= marker.time && $0.timestamp < end }
+            lines.append("")
+            lines.append("\(marker.label):")
+            lines.append(report(stretch, worst: worst))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     public static func report(_ frames: [MocapFrame], worst: Int = 12) -> String {
         guard frames.count > 1 else { return "\(frames.count) frame(s)" }
         struct Step {
@@ -121,12 +179,20 @@ public final class MocapRecordingWriter: @unchecked Sendable {
     }
 
     public func append(_ frame: MocapFrame) {
-        let payload = frame.encode()
+        write(frame.encode())
+        lock.withLock { count += 1 }
+    }
+
+    /// Notes what the wearer does from `time` on (the frames' clock).
+    public func mark(_ label: String, at time: Double) {
+        write(MocapRecording.markerData(.init(time: time, label: label)))
+    }
+
+    private func write(_ payload: Data) {
         var length = UInt32(payload.count).littleEndian
         lock.withLock {
             handle.write(Data(bytes: &length, count: 4))
             handle.write(payload)
-            count += 1
         }
     }
 

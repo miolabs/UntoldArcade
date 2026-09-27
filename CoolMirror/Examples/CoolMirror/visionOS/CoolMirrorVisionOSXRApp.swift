@@ -159,6 +159,72 @@ final class MirrorControls {
             refreshMocapStatus()
         }
     }
+    // MARK: Recording a session
+
+    /// The guided recording: what the wearer is asked to do, for how long.
+    /// Each step is marked in the file, so a stretch can be replayed alone.
+    static let recordingSteps: [(label: String, seconds: Int)] = [
+        ("Stand still, arms down", 8),
+        ("Lift your LEFT foot and hold it up", 5),
+        ("Put it down. Lift your RIGHT foot and hold it up", 5),
+        ("Raise both arms slowly over your head, then lower them", 8),
+        ("Take two steps forward, then two steps back", 8),
+        ("Turn to your left, then back to the phone", 6),
+        ("Stand still", 4),
+    ]
+    var recordingStep: String?
+    var recordingCountdown = 0
+    var recordingFrames = 0
+    /// The last finished recording, to share.
+    var recordingFile: URL?
+    var recordingNote = ""
+    private var recordingTask: Task<Void, Never>?
+
+    var isRecording: Bool { recordingStep != nil }
+
+    func startRecordingSession() {
+        guard !isRecording, let game = XRHolder.shared.game else { return }
+        guard let url = game.startMocapRecording() else {
+            recordingNote = "Could not start the recording."
+            return
+        }
+        recordingFile = nil
+        recordingNote = "Recording to \(url.lastPathComponent)"
+        recordingTask = Task { @MainActor in
+            for step in Self.recordingSteps {
+                guard !Task.isCancelled else { break }
+                recordingStep = step.label
+                game.markMocapRecording(step.label)
+                for remaining in stride(from: step.seconds, to: 0, by: -1) {
+                    guard !Task.isCancelled else { break }
+                    recordingCountdown = remaining
+                    recordingFrames = game.mocapRecordingFrameCount() ?? 0
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+            finishRecording()
+        }
+    }
+
+    func stopRecordingSession() {
+        recordingTask?.cancel()
+        recordingTask = nil
+        finishRecording()
+    }
+
+    private func finishRecording() {
+        guard isRecording else { return }
+        recordingStep = nil
+        recordingCountdown = 0
+        if let result = XRHolder.shared.game?.stopMocapRecording() {
+            recordingFile = result.url
+            recordingFrames = result.frames
+            recordingNote = "Saved \(result.frames) frames to \(result.url.lastPathComponent). Share it (AirDrop to the Mac), or find it in Files → On My Apple Vision Pro → CoolMirror."
+        } else {
+            recordingNote = "Nothing recorded."
+        }
+    }
+
     var muscleNames: [String] = []
     var muscleEnabled: [String: Bool] = [:]
     var muscleActivation: [String: Double] = [:]
@@ -317,6 +383,34 @@ struct CoolMirrorVisionOSXRApp: App {
                                 Toggle("Move", isOn: $controls.mocapRootMotion).toggleStyle(.button)
                                 Toggle("Ground", isOn: $controls.mocapGroundLock).toggleStyle(.button)
                                 Toggle("Plant", isOn: $controls.mocapPlantFeet).toggleStyle(.button)
+                            }
+                        }
+                        GridRow {
+                            Text("Record")
+                            VStack(alignment: .leading, spacing: 6) {
+                                if let step = controls.recordingStep {
+                                    Text(step)
+                                        .font(.title2.bold())
+                                    HStack {
+                                        Text("\(controls.recordingCountdown) s · \(controls.recordingFrames) frames")
+                                            .monospacedDigit()
+                                        Button("Stop") { controls.stopRecordingSession() }
+                                    }
+                                } else {
+                                    HStack {
+                                        Button("Record a guided session (~45 s)") { controls.startRecordingSession() }
+                                            .disabled(!controls.mocapConnected)
+                                        if let file = controls.recordingFile {
+                                            ShareLink(item: file) {
+                                                Label("Share recording", systemImage: "square.and.arrow.up")
+                                            }
+                                        }
+                                    }
+                                }
+                                if !controls.recordingNote.isEmpty {
+                                    Text(controls.recordingNote)
+                                        .font(.footnote)
+                                }
                             }
                         }
                         GridRow {

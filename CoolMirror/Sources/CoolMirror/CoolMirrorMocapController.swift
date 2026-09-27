@@ -61,6 +61,9 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     private var pendingCalibration = false
     private var lastSequence: UInt32?
     private var lastFrameDate = Date.distantPast
+    /// The last frame's own timestamp (the phone's clock, which the
+    /// recording's markers use).
+    private var lastFrameTime: Double?
     private var driving = false
     private var storedOptions = MocapRetargetOptions()
     private var jitter = MocapJitterMeter()
@@ -74,6 +77,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     private var groundLock = true
     /// The character stands on its planted foot (see `MocapFootAnchor`).
     private var footAnchor = MocapFootAnchor()
+    /// Raw frames from the phone written to a file while recording.
+    private var recording: MocapRecordingWriter?
     /// Rest height of every ankle and toe joint (model space), by the
     /// captured joint it answers for.
     private var restFootHeights: [MocapJoint: Float] = [:]
@@ -101,6 +106,38 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     var isDebugOverlayEnabled: Bool {
         get { lock.withLock { debugOverlay } }
         set { lock.withLock { debugOverlay = newValue } }
+    }
+
+    // MARK: - Recording
+
+    /// Starts writing every frame the phone sends to `url` (see
+    /// `MocapRecording`); a recording already running is closed first.
+    func startRecording(to url: URL) throws {
+        stopRecording()
+        let writer = try MocapRecordingWriter(url: url)
+        lock.withLock { recording = writer }
+        receiver.frameSink = { frame in writer.append(frame) }
+    }
+
+    /// Notes what the wearer does from now on, in the recording.
+    func markRecording(_ label: String) {
+        let (writer, time) = lock.withLock { (recording, lastFrameTime) }
+        writer?.mark(label, at: time ?? Date().timeIntervalSinceReferenceDate)
+    }
+
+    @discardableResult
+    func stopRecording() -> (url: URL, frames: Int)? {
+        receiver.frameSink = nil
+        guard let writer = lock.withLock({ () -> MocapRecordingWriter? in
+            defer { recording = nil }
+            return recording
+        }) else { return nil }
+        writer.close()
+        return (writer.url, writer.frameCount)
+    }
+
+    var recordingFrameCount: Int? {
+        lock.withLock { recording?.frameCount }
     }
 
     /// Supplies the headset's world orientation; the head then follows the
@@ -315,6 +352,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             guard frame.sequence != lastSequence else { return false }
             lastSequence = frame.sequence
             lastFrameDate = now
+            lastFrameTime = frame.timestamp
             jitter.add(frame, at: time)
             return true
         }

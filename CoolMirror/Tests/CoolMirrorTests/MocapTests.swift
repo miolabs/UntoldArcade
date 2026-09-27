@@ -70,6 +70,28 @@ final class MocapTests: XCTestCase {
         XCTAssertTrue(report.contains("root travel per frame: median 10.0 mm"))
         XCTAssertTrue(report.contains("leftHand 50.0 mm"))
         XCTAssertEqual(MocapRecording.frames(in: Data([1, 2, 3])).count, 0, "not a recording")
+
+        // Markers: what the wearer was asked to do, kept with the frames
+        // and reported per stretch.
+        let marked = FileManager.default.temporaryDirectory.appendingPathComponent("mocap-test-\(UUID().uuidString).cmr")
+        defer { try? FileManager.default.removeItem(at: marked) }
+        let markedWriter = try MocapRecordingWriter(url: marked)
+        markedWriter.mark("Stand still", at: 12.5)
+        for f in frames.prefix(3) {
+            markedWriter.append(f)
+        }
+        markedWriter.mark("Lift your LEFT foot", at: 12.5 + 3.0 / 30)
+        for f in frames.dropFirst(3) {
+            markedWriter.append(f)
+        }
+        markedWriter.close()
+        let all = try MocapRecording.readAll(url: marked)
+        XCTAssertEqual(all.frames.count, 5)
+        XCTAssertEqual(all.markers, [.init(time: 12.5, label: "Stand still"), .init(time: 12.5 + 3.0 / 30, label: "Lift your LEFT foot")])
+        let perStretch = MocapRecording.report(all.frames, markers: all.markers)
+        print(perStretch)
+        XCTAssertTrue(perStretch.contains("Stand still:\n3 frames"))
+        XCTAssertTrue(perStretch.contains("Lift your LEFT foot:\n2 frames"))
     }
 
     /// The character stands on its planted foot: the tracked root may

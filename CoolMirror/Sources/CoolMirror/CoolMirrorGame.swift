@@ -9,6 +9,7 @@
 //
 
 import CoolMirrorMocap
+import Foundation
 import simd
 import UntoldEngine
 import UntoldJoltPhysics
@@ -292,6 +293,38 @@ public final class CoolMirrorGame {
     /// second, so the wearer can check the framing.
     public func mocapPreview() -> MocapPreviewFrame? {
         mocap.preview
+    }
+
+    /// Records the raw frames the phone sends into a new file in the app's
+    /// Documents folder (shown in the Files app), for replaying on a Mac.
+    /// Returns the file.
+    public func startMocapRecording() -> URL? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let url = documents.appendingPathComponent("mocap-\(formatter.string(from: Date())).\(MocapRecording.fileExtension)")
+        do {
+            try mocap.startRecording(to: url)
+            return url
+        } catch {
+            print("CoolMirror mocap: could not record to \(url.path): \(error)")
+            return nil
+        }
+    }
+
+    /// Notes what the wearer does from now on, in the recording.
+    public func markMocapRecording(_ label: String) {
+        mocap.markRecording(label)
+    }
+
+    /// Closes the recording; the file and how many frames it holds.
+    @discardableResult
+    public func stopMocapRecording() -> (url: URL, frames: Int)? {
+        mocap.stopRecording()
+    }
+
+    public func mocapRecordingFrameCount() -> Int? {
+        mocap.recordingFrameCount
     }
 
     private func applyMocapPause() {
