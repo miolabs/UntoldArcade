@@ -4,8 +4,8 @@
 //
 //  Batman's own cape mesh as cloth: its vertices become a Jolt soft body
 //  (XPBD with stretch, shear and bend constraints from the triangles),
-//  the collar vertices ride on the shoulder joints, capsules fitted to
-//  the body mesh keep the cloth off the body, and every frame the
+//  the collar vertices ride on the shoulder joints, convex hulls of the
+//  body mesh's own bones keep the cloth off the body, and every frame the
 //  particles' positions are written over the skinned mesh through the
 //  engine's deformation override. The cape keeps its authored silhouette,
 //  texture and shading.
@@ -136,10 +136,8 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         let frames = joints.map { CoolMirrorCapeCloth.JointFrame(position: $0.worldPosition, rotation: $0.worldRotation) }
 
         // Colliders follow the bones.
-        let capsules = CoolMirrorCapeColliders.capsules(colliders.map(\.fit), joints: frames)
-        for (collider, capsule) in zip(colliders, capsules) {
-            let (position, orientation) = Self.capsulePose(from: capsule.start, to: capsule.end)
-            backend.setKinematicTarget(collider.body, position: position, rotation: orientation)
+        for (collider, pose) in zip(colliders, CoolMirrorCapeColliders.poses(colliders.map(\.fit), joints: frames)) {
+            backend.setKinematicTarget(collider.body, position: pose.position, rotation: pose.rotation)
         }
 
         // The collar rides on its joints.
@@ -239,7 +237,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         )
         let startCapsules = CoolMirrorCapeColliders.capsules(fits, joints: frames)
         for fit in fits {
-            print(String(format: "CoolMirror jolt cape: collider %@ → %@ radius %.0f mm, shift %.0f mm, %d vertices", fit.from, fit.to, fit.radius * 1000, simd_length(fit.shift) * 1000, fit.vertices))
+            print(String(format: "CoolMirror jolt cape: collider %@ → %@ %@, capsule radius %.0f mm, %d vertices", fit.from, fit.to, fit.hull.isEmpty ? "capsule" : "hull of \(fit.hull.count) points", fit.radius * 1000, fit.vertices))
         }
         var pieces: [Piece] = []
         for (slot, cloth) in cloths {
@@ -247,13 +245,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             pieces.append(piece)
         }
 
-        var colliders: [Collider] = []
-        for (fit, capsule) in zip(fits, startCapsules) {
-            let (position, orientation) = Self.capsulePose(from: capsule.start, to: capsule.end)
-            let length = simd_length(capsule.end - capsule.start)
-            guard let body = backend.addKinematicCapsule(radius: fit.radius, height: max(length + 2 * fit.radius, 2 * fit.radius + 0.01), position: position, rotation: orientation) else { continue }
-            colliders.append(Collider(body: body, fit: fit))
-        }
+        let colliders = Self.addColliders(fits, joints: frames, backend: backend).map { Collider(body: $0.body, fit: $0.fit) }
 
         // The floor: the character stands on its origin's height (the
         // ground lock keeps the lowest foot there).
@@ -349,19 +341,27 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
 
     // MARK: - Helpers
 
-    private static func capsulePose(from a: simd_float3, to b: simd_float3) -> (simd_float3, simd_quatf) {
-        let axis = b - a
-        let length = simd_length(axis)
-        guard length > 1e-5 else { return ((a + b) * 0.5, simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))) }
-        let direction = axis / length
-        let up = simd_float3(0, 1, 0)
-        let rotation: simd_quatf
-        if simd_dot(up, direction) < -0.9999 {
-            rotation = simd_quatf(angle: .pi, axis: simd_float3(1, 0, 0))
-        } else {
-            rotation = simd_normalize(simd_quatf(from: up, to: direction))
+    /// One kinematic body per fit: its hull on its joint, or the fallback
+    /// capsule on the bone. A fit Jolt rejects is skipped.
+    static func addColliders(_ fits: [CoolMirrorCapeColliders.Fit], joints: [CoolMirrorCapeCloth.JointFrame], backend: JoltPhysicsBackend) -> [(fit: CoolMirrorCapeColliders.Fit, body: JoltKinematicBody)] {
+        var result: [(CoolMirrorCapeColliders.Fit, JoltKinematicBody)] = []
+        let capsules = CoolMirrorCapeColliders.capsules(fits, joints: joints)
+        let poses = CoolMirrorCapeColliders.poses(fits, joints: joints)
+        for ((fit, capsule), pose) in zip(zip(fits, capsules), poses) {
+            let body: JoltKinematicBody?
+            if !fit.hull.isEmpty {
+                body = backend.addKinematicConvexHull(points: fit.hull, position: pose.position, rotation: pose.rotation)
+            } else {
+                let length = simd_length(capsule.end - capsule.start)
+                body = backend.addKinematicCapsule(radius: fit.radius, height: max(length + 2 * fit.radius, 2 * fit.radius + 0.01), position: pose.position, rotation: pose.rotation)
+            }
+            if let body {
+                result.append((fit, body))
+            } else {
+                print("CoolMirror jolt cape: Jolt rejected the \(fit.from) collider")
+            }
         }
-        return ((a + b) * 0.5, rotation)
+        return result
     }
 
     private static func matches(_ path: String, _ name: String) -> Bool {

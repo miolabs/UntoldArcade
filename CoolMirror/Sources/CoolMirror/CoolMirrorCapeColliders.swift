@@ -3,10 +3,11 @@
 //  CoolMirror
 //
 //  The cape's body colliders, fitted to the character's own mesh: one
-//  capsule per bone segment, its axis through the segment's joints but
-//  shifted sideways to where the segment's skinned vertices actually sit
-//  (a belt and a back stick out behind the spine), its radius from the
-//  vertices' spread around that axis. Pure and testable.
+//  convex hull per bone segment, built from the segment's skinned
+//  vertices in the segment's joint frame and moved with that joint (the
+//  elbow pad, the belt and the back are their own shape, not a tube's),
+//  with a capsule through the joints as the fallback where the mesh gives
+//  too few vertices. Pure and testable.
 //
 
 import Foundation
@@ -36,10 +37,18 @@ enum CoolMirrorCapeColliders {
         /// the cape's side: the cape drapes over a shoulder's top and
         /// outside, not its back.
         var allAround = false
+        /// A convex hull of the segment's vertices, or the capsule alone.
+        /// Jolt tests every cloth particle against every plane of every
+        /// hull each step, so hulls go where a tube is visibly wrong (the
+        /// torso, shoulders and arms the cape drapes over) and the legs,
+        /// which the cape only brushes, stay capsules.
+        var hull = true
     }
 
-    /// A fitted capsule: `shift` is the axis offset in the `from` joint's
-    /// rest frame, applied with the joint's current rotation.
+    /// A fitted collider: the convex hull of `hull` (points in the `from`
+    /// joint's rest frame, moved with that joint) when the mesh gave one,
+    /// otherwise a capsule of `radius` through the joints; `shift` is the
+    /// capsule's axis offset in the `from` joint's rest frame.
     struct Fit {
         var from: String
         var to: String
@@ -49,8 +58,22 @@ enum CoolMirrorCapeColliders {
         var endFraction: Float
         var shift: simd_float3
         var radius: Float
+        var hull: [simd_float3]
         var vertices: Int
     }
+
+    /// A collider's kinematic pose for a set of joints.
+    struct Pose {
+        var position: simd_float3
+        var rotation: simd_quatf
+    }
+
+    /// The hull keeps the vertices farthest along this many directions
+    /// (about twenty points describe a limb; Jolt builds the hull). Cost
+    /// grows with the planes: the headless scenario steps in 2.0 ms at 24
+    /// directions, 1.6 at 16, 2.9 with hulls on the legs too, 0.5 with
+    /// capsules everywhere (Release, this Mac).
+    static let hullDirections = 24
 
     /// Radii from the mesh are clamped to this range: an outlier vertex
     /// (a glove skinned to the forearm) must not swell a limb, and a
@@ -78,12 +101,12 @@ enum CoolMirrorCapeColliders {
             Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.08),
             Segment(from: rig.leftForearm, to: rig.leftHand, fallbackRadius: 0.04, maxRadius: 0.06),
             Segment(from: rig.rightForearm, to: rig.rightHand, fallbackRadius: 0.04, maxRadius: 0.06),
-            Segment(from: rig.leftThigh, to: rig.leftCalf, fallbackRadius: 0.08),
-            Segment(from: rig.rightThigh, to: rig.rightCalf, fallbackRadius: 0.08),
-            Segment(from: rig.leftCalf, to: rig.leftFoot, fallbackRadius: 0.06),
-            Segment(from: rig.rightCalf, to: rig.rightFoot, fallbackRadius: 0.06),
-            Segment(from: rig.leftFoot, to: rig.leftToe, fallbackRadius: 0.05, maxRadius: 0.12),
-            Segment(from: rig.rightFoot, to: rig.rightToe, fallbackRadius: 0.05, maxRadius: 0.12),
+            Segment(from: rig.leftThigh, to: rig.leftCalf, fallbackRadius: 0.08, hull: false),
+            Segment(from: rig.rightThigh, to: rig.rightCalf, fallbackRadius: 0.08, hull: false),
+            Segment(from: rig.leftCalf, to: rig.leftFoot, fallbackRadius: 0.06, hull: false),
+            Segment(from: rig.rightCalf, to: rig.rightFoot, fallbackRadius: 0.06, hull: false),
+            Segment(from: rig.leftFoot, to: rig.leftToe, fallbackRadius: 0.05, maxRadius: 0.12, hull: false),
+            Segment(from: rig.rightFoot, to: rig.rightToe, fallbackRadius: 0.05, maxRadius: 0.12, hull: false),
         ]
     }
 
@@ -166,7 +189,7 @@ enum CoolMirrorCapeColliders {
             let lengthSquared = simd_length_squared(axis)
             guard lengthSquared > 1e-6 else { continue }
             let vertices = verticesOfSegment[index]
-            var fit = Fit(from: segment.from, to: segment.to, fromJoint: a, toJoint: b, startFraction: segment.startFraction, endFraction: segment.endFraction, shift: .zero, radius: segment.fallbackRadius, vertices: vertices.count)
+            var fit = Fit(from: segment.from, to: segment.to, fromJoint: a, toJoint: b, startFraction: segment.startFraction, endFraction: segment.endFraction, shift: .zero, radius: segment.fallbackRadius, hull: [], vertices: vertices.count)
             if vertices.count >= 24 {
                 // Sideways offsets of the vertices from the axis; the
                 // capsule's axis moves to their mean, its radius covers
@@ -175,6 +198,15 @@ enum CoolMirrorCapeColliders {
                     let d = p - start
                     return d - axis * (simd_dot(d, axis) / lengthSquared)
                 }
+                // The hull: the vertices within the radius ceiling (a
+                // gauntlet's fins stay out), in the joint's rest frame.
+                let inverseRest = restJoints[a].rotation.inverse
+                var local: [simd_float3] = []
+                local.reserveCapacity(vertices.count)
+                for (p, offset) in zip(vertices, offsets) where simd_length(offset) <= segment.maxRadius {
+                    local.append(inverseRest.act(p - start))
+                }
+                fit.hull = segment.hull ? hullPoints(local) : []
                 var mean = simd_float3.zero
                 var spread: [Float]
                 let band = segment.allAround ? [] : back.map { back in offsets.filter { simd_length_squared($0) > 1e-8 && simd_dot(simd_normalize($0), back) >= 0.7071 } } ?? []
@@ -194,7 +226,77 @@ enum CoolMirrorCapeColliders {
         return fits
     }
 
-    /// The fitted capsules for the current joints.
+    /// The extreme points of `points` along `hullDirections` directions
+    /// spread over the sphere: what a convex hull of them needs (fewer
+    /// than four distinct points, or all coplanar, is no hull).
+    static func hullPoints(_ points: [simd_float3]) -> [simd_float3] {
+        guard points.count >= 4 else { return [] }
+        var chosen = Set<Int>()
+        let golden = Float.pi * (3 - sqrt(5))
+        for index in 0 ..< hullDirections {
+            let y = 1 - 2 * (Float(index) + 0.5) / Float(hullDirections)
+            let r = sqrt(max(0, 1 - y * y))
+            let angle = golden * Float(index)
+            let direction = simd_float3(r * cos(angle), y, r * sin(angle))
+            var best = 0
+            var bestDot = -Float.greatestFiniteMagnitude
+            for (i, p) in points.enumerated() {
+                let d = simd_dot(p, direction)
+                if d > bestDot {
+                    bestDot = d
+                    best = i
+                }
+            }
+            chosen.insert(best)
+        }
+        let hull = chosen.sorted().map { points[$0] }
+        guard hull.count >= 4 else { return [] }
+        // Not all coplanar.
+        let a = hull[0]
+        var normal = simd_float3.zero
+        for i in 1 ..< hull.count {
+            for j in i + 1 ..< hull.count {
+                let n = simd_cross(hull[i] - a, hull[j] - a)
+                if simd_length_squared(n) > simd_length_squared(normal) { normal = n }
+            }
+        }
+        guard simd_length_squared(normal) > 1e-12 else { return [] }
+        normal = simd_normalize(normal)
+        guard hull.contains(where: { abs(simd_dot($0 - a, normal)) > 1e-3 }) else { return [] }
+        return hull
+    }
+
+    /// The kinematic pose of every fit for the current joints: a hull sits
+    /// on its joint, a capsule's centre is on the (shifted) bone with its
+    /// axis along it.
+    static func poses(_ fits: [Fit], joints: [CoolMirrorCapeCloth.JointFrame]) -> [Pose] {
+        zip(fits, capsules(fits, joints: joints)).map { fit, capsule in
+            if !fit.hull.isEmpty, fit.fromJoint < joints.count {
+                return Pose(position: joints[fit.fromJoint].position, rotation: joints[fit.fromJoint].rotation)
+            }
+            let (position, rotation) = capsulePose(from: capsule.start, to: capsule.end)
+            return Pose(position: position, rotation: rotation)
+        }
+    }
+
+    /// A capsule's centre and the rotation taking its local y axis along `a → b`.
+    static func capsulePose(from a: simd_float3, to b: simd_float3) -> (simd_float3, simd_quatf) {
+        let axis = b - a
+        let length = simd_length(axis)
+        guard length > 1e-5 else { return ((a + b) * 0.5, simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))) }
+        let direction = axis / length
+        let up = simd_float3(0, 1, 0)
+        let rotation: simd_quatf
+        if simd_dot(up, direction) < -0.9999 {
+            rotation = simd_quatf(angle: .pi, axis: simd_float3(1, 0, 0))
+        } else {
+            rotation = simd_normalize(simd_quatf(from: up, to: direction))
+        }
+        return ((a + b) * 0.5, rotation)
+    }
+
+    /// The fitted capsules for the current joints (the fallback shape, and
+    /// the start-placement approximation of every collider).
     static func capsules(_ fits: [Fit], joints: [CoolMirrorCapeCloth.JointFrame]) -> [CoolMirrorCapeCloth.Capsule] {
         fits.compactMap { fit in
             guard fit.fromJoint < joints.count, fit.toJoint < joints.count else { return nil }

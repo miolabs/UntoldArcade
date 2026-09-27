@@ -139,9 +139,31 @@ final class CapeClothTests: XCTestCase {
         let segments = CoolMirrorCapeColliders.segments(rig)
         XCTAssertEqual(cape.fits.count, segments.count, "every segment's joints are in the skeleton")
         for fit in cape.fits {
-            print(String(format: "cape colliders: %@ → %@ (%.2f–%.2f) radius %.0f mm, shift %.0f mm, %d vertices", fit.from, fit.to, fit.startFraction, fit.endFraction, fit.radius * 1000, simd_length(fit.shift) * 1000, fit.vertices))
+            print(String(format: "cape colliders: %@ → %@ (%.2f–%.2f) hull of %d points, capsule radius %.0f mm, %d vertices", fit.from, fit.to, fit.startFraction, fit.endFraction, fit.hull.count, fit.radius * 1000, fit.vertices))
             XCTAssertGreaterThanOrEqual(fit.vertices, 24, "\(fit.from): the mesh must size it, not the fallback")
             XCTAssertTrue(CoolMirrorCapeColliders.radiusRange.contains(fit.radius))
+            // A hull segment is a hull of its own vertices, a couple of dozen points.
+            let segment = try XCTUnwrap(segments.first { $0.from == fit.from && $0.startFraction == fit.startFraction })
+            if segment.hull {
+                XCTAssertGreaterThanOrEqual(fit.hull.count, 8, "\(fit.from): a hull")
+            } else {
+                XCTAssertTrue(fit.hull.isEmpty, "\(fit.from): a capsule")
+            }
+            XCTAssertLessThanOrEqual(fit.hull.count, CoolMirrorCapeColliders.hullDirections)
+            // Hull points are in the joint's frame: within the radius ceiling
+            // of the bone (axis along the rest bone direction in that frame).
+            let axis = cape.restJoints[fit.fromJoint].rotation.inverse.act(cape.restJoints[fit.toJoint].position - cape.restJoints[fit.fromJoint].position)
+            for p in fit.hull {
+                let off = p - axis * (simd_dot(p, axis) / max(simd_length_squared(axis), 1e-8))
+                XCTAssertLessThanOrEqual(simd_length(off), CoolMirrorCapeColliders.radiusRange.upperBound + 1e-3)
+            }
+        }
+        // The forearm hull leaves the gauntlet's fins out.
+        let forearmFit = try XCTUnwrap(cape.fits.first { $0.from == rig.leftForearm })
+        let forearmAxis = cape.restJoints[forearmFit.fromJoint].rotation.inverse.act(cape.restJoints[forearmFit.toJoint].position - cape.restJoints[forearmFit.fromJoint].position)
+        for p in forearmFit.hull {
+            let off = p - forearmAxis * (simd_dot(p, forearmAxis) / simd_length_squared(forearmAxis))
+            XCTAssertLessThanOrEqual(simd_length(off), 0.06 + 1e-3)
         }
         // The belt and the hips are wider than the guessed 9 cm that let
         // the cape through the back of the belt.
@@ -411,11 +433,8 @@ final class CapeClothTests: XCTestCase {
                 let rotation = simd_dot(up, direction) < -0.9999 ? simd_quatf(angle: .pi, axis: simd_float3(1, 0, 0)) : simd_normalize(simd_quatf(from: up, to: direction))
                 return ((a + b) * 0.5, rotation, length)
             }
-            var colliders: [JoltKinematicBody] = []
-            for capsule in restCapsules {
-                let (position, rotation, length) = pose(capsule.start, capsule.end)
-                try colliders.append(XCTUnwrap(backend.addKinematicCapsule(radius: capsule.radius, height: max(length + 2 * capsule.radius, 2 * capsule.radius + 0.01), position: position, rotation: rotation)))
-            }
+            let colliders = CoolMirrorJoltCape.addColliders(fits, joints: cape.restJoints, backend: backend).map(\.body)
+            XCTAssertEqual(colliders.count, fits.count)
             backend.setEnvironmentBoxes([CoolMirrorJoltCape.floor(under: Self.origin)])
             var positions: [SIMD3<Float>] = []
             var farthestSeen: Float = 0
@@ -428,9 +447,8 @@ final class CapeClothTests: XCTestCase {
                 let joints = cape.restJoints.map { joint -> CoolMirrorCapeCloth.JointFrame in
                     .init(position: Self.origin + turn.act(joint.position - Self.origin) + sway, rotation: simd_normalize(turn * joint.rotation))
                 }
-                for (b, capsule) in zip(colliders, CoolMirrorCapeColliders.capsules(fits, joints: joints)) {
-                    let (position, rotation, _) = pose(capsule.start, capsule.end)
-                    backend.setKinematicTarget(b, position: position, rotation: rotation)
+                for (b, pose) in zip(colliders, CoolMirrorCapeColliders.poses(fits, joints: joints)) {
+                    backend.setKinematicTarget(b, position: pose.position, rotation: pose.rotation)
                 }
                 backend.setSoftBodyVertices(body, indices: cloth.pinned, worldPositions: cloth.pinTargets(joints: joints))
                 backend.step(deltaTime: 1.0 / 30.0)
@@ -481,12 +499,7 @@ final class CapeClothTests: XCTestCase {
             let rotation = simd_dot(up, direction) < -0.9999 ? simd_quatf(angle: .pi, axis: simd_float3(1, 0, 0)) : simd_normalize(simd_quatf(from: up, to: direction))
             return ((a + b) * 0.5, rotation, length)
         }
-        var colliders: [JoltKinematicBody] = []
-        for capsule in CoolMirrorCapeColliders.capsules(cape.fits, joints: cape.restJoints) {
-            let (position, rotation, length) = pose(capsule.start, capsule.end)
-            let body = try XCTUnwrap(backend.addKinematicCapsule(radius: capsule.radius, height: max(length + 2 * capsule.radius, 2 * capsule.radius + 0.01), position: position, rotation: rotation))
-            colliders.append(body)
-        }
+        let colliders = CoolMirrorJoltCape.addColliders(cape.fits, joints: cape.restJoints, backend: backend).map(\.body)
         XCTAssertEqual(colliders.count, cape.fits.count, "every segment found")
         backend.setEnvironmentBoxes([CoolMirrorJoltCape.floor(under: Self.origin)])
 
@@ -503,9 +516,8 @@ final class CapeClothTests: XCTestCase {
                 let relative = joint.position - Self.origin
                 return .init(position: Self.origin + turn.act(relative) + sway, rotation: simd_normalize(turn * joint.rotation))
             }
-            for (body, capsule) in zip(colliders, CoolMirrorCapeColliders.capsules(cape.fits, joints: joints)) {
-                let (position, rotation, _) = pose(capsule.start, capsule.end)
-                backend.setKinematicTarget(body, position: position, rotation: rotation)
+            for (body, pose) in zip(colliders, CoolMirrorCapeColliders.poses(cape.fits, joints: joints)) {
+                backend.setKinematicTarget(body, position: pose.position, rotation: pose.rotation)
             }
             backend.setSoftBodyVertices(body, indices: cloth.pinned, worldPositions: cloth.pinTargets(joints: joints))
             let stepStart = Date()
