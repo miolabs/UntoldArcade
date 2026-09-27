@@ -43,6 +43,8 @@ final class MirrorControls {
             muscleNames = []
             muscleEnabled = [:]
             muscleActivation = [:]
+            hasMLDeformer = false
+            if muscleMode == .mlDeformer { muscleMode = .off }
             clips = []
             clip = ""
             XRHolder.shared.game?.setCharacter(character)
@@ -63,8 +65,12 @@ final class MirrorControls {
     var poseDrivers = true {
         didSet { XRHolder.shared.game?.setPoseDrivers(enabled: poseDrivers) }
     }
-    var muscleSim = false {
-        didSet { XRHolder.shared.game?.setMuscleSimulation(enabled: muscleSim) }
+    var muscleMode: CoolMirrorMuscleMode = .off {
+        didSet { XRHolder.shared.game?.setMuscleMode(muscleMode) }
+    }
+    var hasMLDeformer = false
+    var mlWeight: Double = 1 {
+        didSet { XRHolder.shared.game?.setMLDeformerWeight(Float(mlWeight)) }
     }
     var flex: Double = 0 {
         didSet { XRHolder.shared.game?.setMuscleFlex(Float(flex)) }
@@ -99,6 +105,7 @@ final class MirrorControls {
         guard let game = XRHolder.shared.game else { return }
         morphNames = game.morphTargetNames()
         muscleNames = game.muscleNames()
+        hasMLDeformer = game.hasMLDeformer()
         clips = game.clipNames()
         clip = clips.first ?? ""
         paused = false
@@ -148,12 +155,23 @@ struct CoolMirrorVisionOSXRApp: App {
                             .disabled(controls.skinningPath == .vertexShader)
                     }
                     GridRow {
-                        Text("Muscle sim")
-                        Toggle(controls.muscleSim ? "XPBD volumetric muscles on" : "Off", isOn: $controls.muscleSim)
-                            .toggleStyle(.button)
-                            .disabled(controls.skinningPath == .vertexShader || controls.character == .redplayer)
+                        Text("Muscles")
+                        Picker("Muscles", selection: $controls.muscleMode) {
+                            Text("Off").tag(CoolMirrorMuscleMode.off)
+                            Text("XPBD sim").tag(CoolMirrorMuscleMode.simulation)
+                            Text("ML deformer").tag(CoolMirrorMuscleMode.mlDeformer)
+                                .selectionDisabled(!controls.hasMLDeformer)
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                        .disabled(controls.skinningPath == .vertexShader || controls.character == .redplayer)
                     }
-                    if controls.muscleSim {
+                    if controls.muscleMode == .mlDeformer {
+                        GridRow {
+                            Text("ML blend")
+                            Slider(value: $controls.mlWeight, in: 0 ... 1)
+                        }
+                    }
+                    if controls.muscleMode == .simulation {
                         GridRow {
                             Text("Flex all")
                             Slider(value: $controls.flex, in: 0 ... 1)
@@ -209,7 +227,7 @@ struct CoolMirrorVisionOSXRApp: App {
                     }
                 }
 
-                if controls.muscleSim, controls.showMuscleList {
+                if controls.muscleMode == .simulation, controls.showMuscleList {
                     // Placement tuning: isolate one muscle and drive it by hand.
                     ScrollView {
                         VStack(spacing: 6) {

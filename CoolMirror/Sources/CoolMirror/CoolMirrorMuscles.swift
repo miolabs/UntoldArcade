@@ -65,9 +65,9 @@ struct CoolMirrorRigProfile: Sendable {
     )
 }
 
-enum CoolMirrorMuscles {
+public enum CoolMirrorMuscles {
     /// The rig for a character, or nil for characters without a profile.
-    static func rig(for character: CoolMirrorCharacter) -> MuscleRig? {
+    public static func rig(for character: CoolMirrorCharacter) -> MuscleRig? {
         switch character {
         case .spiderman: return rig(profile: .mixamo)
         case .batman: return rig(profile: .biped)
