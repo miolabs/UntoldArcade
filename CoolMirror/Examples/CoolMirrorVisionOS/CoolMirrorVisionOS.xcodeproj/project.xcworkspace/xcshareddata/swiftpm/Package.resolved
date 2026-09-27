@@ -6,8 +6,8 @@
       "kind": "remoteSourceControl",
       "location": "https://github.com/miolabs/UntoldEngine",
       "state": {
-        "branch": "feature/psd_runtime",
-        "revision": "ebf86de302667a6398664dbb347c9fbed4d01584"
+        "branch": "feature/ml_deformer",
+        "revision": "c340089589b9b0e1ab5cf18c2f329335183cbd0b"
       }
     }
   ],

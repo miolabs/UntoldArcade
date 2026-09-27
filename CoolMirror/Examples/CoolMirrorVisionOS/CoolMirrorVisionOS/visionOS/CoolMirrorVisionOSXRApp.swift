@@ -40,6 +40,11 @@ final class MirrorControls {
         didSet {
             morphNames = []
             morphWeights = [:]
+            muscleNames = []
+            muscleEnabled = [:]
+            muscleActivation = [:]
+            hasMLDeformer = false
+            if muscleMode == .mlDeformer { muscleMode = .off }
             clips = []
             clip = ""
             XRHolder.shared.game?.setCharacter(character)
@@ -60,6 +65,33 @@ final class MirrorControls {
     var poseDrivers = true {
         didSet { XRHolder.shared.game?.setPoseDrivers(enabled: poseDrivers) }
     }
+    var muscleMode: CoolMirrorMuscleMode = .off {
+        didSet { XRHolder.shared.game?.setMuscleMode(muscleMode) }
+    }
+    var hasMLDeformer = false
+    var mlWeight: Double = 1 {
+        didSet { XRHolder.shared.game?.setMLDeformerWeight(Float(mlWeight)) }
+    }
+    var flex: Double = 0 {
+        didSet { XRHolder.shared.game?.setMuscleFlex(Float(flex)) }
+    }
+    var showCages = false {
+        didSet { XRHolder.shared.game?.setMuscleCagesVisible(showCages) }
+    }
+    var showMuscleList = false
+    var muscleNames: [String] = []
+    var muscleEnabled: [String: Bool] = [:]
+    var muscleActivation: [String: Double] = [:]
+
+    func setMuscleEnabled(_ name: String, _ enabled: Bool) {
+        muscleEnabled[name] = enabled
+        XRHolder.shared.game?.setMuscleEnabled(name: name, enabled: enabled)
+    }
+
+    func setMuscleActivation(_ name: String, _ value: Double) {
+        muscleActivation[name] = value
+        XRHolder.shared.game?.setMuscleActivation(name: name, value: Float(value))
+    }
     var clips: [String] = []
     var morphNames: [String] = []
     var morphWeights: [String: Double] = [:]
@@ -72,6 +104,8 @@ final class MirrorControls {
     func characterReady() {
         guard let game = XRHolder.shared.game else { return }
         morphNames = game.morphTargetNames()
+        muscleNames = game.muscleNames()
+        hasMLDeformer = game.hasMLDeformer()
         clips = game.clipNames()
         clip = clips.first ?? ""
         paused = false
@@ -115,10 +149,42 @@ struct CoolMirrorVisionOSXRApp: App {
                         .pickerStyle(.segmented).labelsHidden()
                     }
                     GridRow {
-                        Text("Muscles")
+                        Text("PSD morphs")
                         Toggle(controls.poseDrivers ? "Auto (pose drivers)" : "Manual sliders", isOn: $controls.poseDrivers)
                             .toggleStyle(.button)
                             .disabled(controls.skinningPath == .vertexShader)
+                    }
+                    GridRow {
+                        Text("Muscles")
+                        Picker("Muscles", selection: $controls.muscleMode) {
+                            Text("Off").tag(CoolMirrorMuscleMode.off)
+                            Text("XPBD sim").tag(CoolMirrorMuscleMode.simulation)
+                            Text("ML deformer").tag(CoolMirrorMuscleMode.mlDeformer)
+                                .selectionDisabled(!controls.hasMLDeformer)
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                        .disabled(controls.skinningPath == .vertexShader || controls.character == .redplayer)
+                    }
+                    if controls.muscleMode == .mlDeformer {
+                        GridRow {
+                            Text("ML blend")
+                            Slider(value: $controls.mlWeight, in: 0 ... 1)
+                        }
+                    }
+                    if controls.muscleMode == .simulation {
+                        GridRow {
+                            Text("Flex all")
+                            Slider(value: $controls.flex, in: 0 ... 1)
+                        }
+                        GridRow {
+                            Text("Cages")
+                            HStack {
+                                Toggle(controls.showCages ? "Wireframe shown" : "Hidden", isOn: $controls.showCages)
+                                    .toggleStyle(.button)
+                                Toggle(controls.showMuscleList ? "Hide muscle list" : "Per muscle…", isOn: $controls.showMuscleList)
+                                    .toggleStyle(.button)
+                            }
+                        }
                     }
                     GridRow {
                         Text("Playback")
@@ -161,6 +227,34 @@ struct CoolMirrorVisionOSXRApp: App {
                     }
                 }
 
+                if controls.muscleMode == .simulation, controls.showMuscleList {
+                    // Placement tuning: isolate one muscle and drive it by hand.
+                    ScrollView {
+                        VStack(spacing: 6) {
+                            ForEach(controls.muscleNames, id: \.self) { name in
+                                HStack(spacing: 12) {
+                                    Toggle(name, isOn: Binding(
+                                        get: { controls.muscleEnabled[name] ?? true },
+                                        set: { controls.setMuscleEnabled(name, $0) }
+                                    ))
+                                    .toggleStyle(.switch)
+                                    .frame(width: 220, alignment: .leading)
+                                    Slider(
+                                        value: Binding(
+                                            get: { controls.muscleActivation[name] ?? 0 },
+                                            set: { controls.setMuscleActivation(name, $0) }
+                                        ),
+                                        in: 0 ... 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 260)
+                    Text("Slider = manual activation (0 = pose driver). Switch off a muscle to take it out of the skin.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
                 if controls.skinningPath == .vertexShader {
                     Text("Morphs need a compute skinning path (LBS/DQS/DDM).")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -169,7 +263,7 @@ struct CoolMirrorVisionOSXRApp: App {
             .padding(48)
         }
         .windowStyle(.plain)
-        .defaultSize(width: 640, height: 420)
+        .defaultSize(width: 640, height: 520)
 
         ImmersiveSpace(id: "Mirror") {
             CompositorLayer(configuration: MirrorLayerConfiguration()) { layerRenderer in

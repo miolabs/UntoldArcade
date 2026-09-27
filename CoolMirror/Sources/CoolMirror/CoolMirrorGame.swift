@@ -44,6 +44,15 @@ public enum CoolMirrorCharacter: String, CaseIterable, Sendable {
     }
 }
 
+/// How the muscle deltas are produced on top of skinning.
+public enum CoolMirrorMuscleMode: String, CaseIterable, Sendable {
+    case off
+    /// Live XPBD volumetric muscle simulation.
+    case simulation
+    /// Network trained on the simulation (needs `<hero>.untoldml`).
+    case mlDeformer
+}
+
 /// Skinning paths the mirror can switch between live.
 public enum CoolMirrorSkinningPath: String, CaseIterable, Sendable {
     case vertexShader
@@ -66,6 +75,12 @@ public final class CoolMirrorGame {
     private let characterPosition = simd_float3(0.0, 0.0, -1.6)
     private var skinningPath: CoolMirrorSkinningPath = .vertexShader
     private var currentClip: String?
+    private var muscleMode: CoolMirrorMuscleMode = .off
+    private var muscleFlex: Float = 0
+    private var mlDeformerWeight: Float = 1
+    private var muscleCagesVisible = false
+    private var disabledMuscles: Set<String> = []
+    private var muscleActivations: [String: Float] = [:]
     private var generation = 0
 
     public init() {}
@@ -122,6 +137,7 @@ public final class CoolMirrorGame {
             translateTo(entityId: characterId, position: self.characterPosition)
             rotateTo(entityId: characterId, angle: .pi, axis: simd_float3(0, 1, 0))
             scaleTo(entityId: characterId, scale: simd_float3(repeating: newCharacter.displayScale))
+            setEntityMuscleRig(entityId: characterId, rig: CoolMirrorMuscles.rig(for: newCharacter))
             self.applyClip()
             self.applySkinningPath()
             self.onCharacterReady?()
@@ -164,6 +180,59 @@ public final class CoolMirrorGame {
         return entityMorphTargetNames(entityId: characterId)
     }
 
+    /// Volumetric muscles: XPBD tet cages built from the character's muscle
+    /// rig, simulated on the GPU and wrapped onto the skin after skinning,
+    /// or the ML deformer that learned those deltas. Needs a compute
+    /// skinning path.
+    public func setMuscleMode(_ mode: CoolMirrorMuscleMode) {
+        muscleMode = mode
+        applyMuscles()
+    }
+
+    /// Whether the current character ships a trained `.untoldml` payload.
+    public func hasMLDeformer() -> Bool {
+        guard let characterId else { return false }
+        return entityHasMLDeformerPayload(entityId: characterId)
+    }
+
+    /// Blend of the ML deformer's delta (A/B against nothing).
+    public func setMLDeformerWeight(_ weight: Float) {
+        mlDeformerWeight = weight
+        applyMuscles()
+    }
+
+    /// Flexes every muscle at once (0 = let the pose drivers decide).
+    public func setMuscleFlex(_ value: Float) {
+        muscleFlex = value
+        applyMuscles()
+    }
+
+    public func muscleNames() -> [String] {
+        guard let characterId else { return [] }
+        return entityMuscleNames(entityId: characterId)
+    }
+
+    /// Draws every muscle cage as wireframe lines over the character
+    /// (coloured by activation, bone capsules in cyan) to tune placement.
+    public func setMuscleCagesVisible(_ visible: Bool) {
+        muscleCagesVisible = visible
+        setMuscleDebugOverlay(enabled: visible)
+    }
+
+    /// Hides one muscle (it keeps simulating but no longer moves the skin).
+    public func setMuscleEnabled(name: String, enabled: Bool) {
+        if enabled { disabledMuscles.remove(name) } else { disabledMuscles.insert(name) }
+        guard let characterId else { return }
+        setEntityMuscleEnabled(entityId: characterId, name: name, enabled: enabled)
+    }
+
+    /// Manual activation of one muscle (0 = back to its pose driver).
+    public func setMuscleActivation(name: String, value: Float) {
+        muscleActivations[name] = value
+        guard let characterId else { return }
+        setEntityMuscleActivation(entityId: characterId, name: name, activation: value)
+    }
+
     public func clipNames() -> [String] {
         character.clips.map(\.name)
     }
@@ -180,6 +249,24 @@ public final class CoolMirrorGame {
         case .computeDDM:
             setEntityDeformation(entityId: characterId, skinningMode: .ddm)
         }
+        // The deformation component is recreated with the path; re-apply the
+        // muscle settings on top of it.
+        applyMuscles()
+    }
+
+    private func applyMuscles() {
+        guard let characterId, skinningPath != .vertexShader else { return }
+        setEntityMuscleSimulation(entityId: characterId, enabled: muscleMode == .simulation)
+        setEntityMLDeformer(entityId: characterId, enabled: muscleMode == .mlDeformer)
+        setEntityMLDeformerWeight(entityId: characterId, weight: mlDeformerWeight)
+        setEntityMuscleActivationOverride(entityId: characterId, activation: muscleFlex > 0.01 ? muscleFlex : nil)
+        for name in disabledMuscles {
+            setEntityMuscleEnabled(entityId: characterId, name: name, enabled: false)
+        }
+        for (name, value) in muscleActivations {
+            setEntityMuscleActivation(entityId: characterId, name: name, activation: value)
+        }
+        setMuscleDebugOverlay(enabled: muscleCagesVisible && muscleMode == .simulation)
     }
 
     private func applyClip() {
