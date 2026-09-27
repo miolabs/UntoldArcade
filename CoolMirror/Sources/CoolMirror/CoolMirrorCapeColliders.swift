@@ -118,10 +118,13 @@ enum CoolMirrorCapeColliders {
             Segment(from: rig.rightClavicle, to: rig.rightUpperArm, fallbackRadius: 0.06, maxRadius: 0.12, allAround: true),
             Segment(from: rig.leftUpperArm, to: rig.leftForearm, fallbackRadius: 0.07, endFraction: 0.35, maxRadius: 0.12, allAround: true),
             Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.07, endFraction: 0.35, maxRadius: 0.12, allAround: true),
-            Segment(from: rig.leftUpperArm, to: rig.leftForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.08),
-            Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.08),
-            Segment(from: rig.leftForearm, to: rig.leftHand, fallbackRadius: 0.04, maxRadius: 0.06),
-            Segment(from: rig.rightForearm, to: rig.rightHand, fallbackRadius: 0.04, maxRadius: 0.06),
+            // Batman's arm, measured: the upper arm is 9–11 cm thick at the
+            // elbow (its pad), the forearm 7–8 cm at the middle, the
+            // gauntlet's fins 12–16 cm out. The ceilings trim the fins only.
+            Segment(from: rig.leftUpperArm, to: rig.leftForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.11),
+            Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.11),
+            Segment(from: rig.leftForearm, to: rig.leftHand, fallbackRadius: 0.04, maxRadius: 0.1),
+            Segment(from: rig.rightForearm, to: rig.rightHand, fallbackRadius: 0.04, maxRadius: 0.1),
             Segment(from: rig.leftThigh, to: rig.leftCalf, fallbackRadius: 0.08, hull: false),
             Segment(from: rig.rightThigh, to: rig.rightCalf, fallbackRadius: 0.08, hull: false),
             Segment(from: rig.leftCalf, to: rig.leftFoot, fallbackRadius: 0.06, hull: false),

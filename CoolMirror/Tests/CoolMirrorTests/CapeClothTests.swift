@@ -163,8 +163,13 @@ final class CapeClothTests: XCTestCase {
         let forearmAxis = cape.restJoints[forearmFit.fromJoint].rotation.inverse.act(cape.restJoints[forearmFit.toJoint].position - cape.restJoints[forearmFit.fromJoint].position)
         for p in forearmFit.hull {
             let off = p - forearmAxis * (simd_dot(p, forearmAxis) / simd_length_squared(forearmAxis))
-            XCTAssertLessThanOrEqual(simd_length(off), 0.06 + 1e-3)
+            XCTAssertLessThanOrEqual(simd_length(off), 0.1 + 1e-3)
         }
+        // ... but keeps the elbow: the hull reaches 9 cm from the bone at its start.
+        let elbowReach = forearmFit.hull.filter { simd_dot($0, forearmAxis) / simd_length_squared(forearmAxis) < 0.15 }.map { p -> Float in
+            simd_length(p - forearmAxis * (simd_dot(p, forearmAxis) / simd_length_squared(forearmAxis)))
+        }.max() ?? 0
+        XCTAssertGreaterThan(elbowReach, 0.085, "the elbow pad is in the forearm hull")
         // The belt and the hips are wider than the guessed 9 cm that let
         // the cape through the back of the belt.
         // (The Batman body's back extents, measured: belt 150 mm, back
@@ -181,13 +186,13 @@ final class CapeClothTests: XCTestCase {
         XCTAssertGreaterThan(foot.radius, 0.09, "the heel behind the ankle")
         let upperArm = try XCTUnwrap(cape.fits.first { $0.from == rig.leftUpperArm && $0.startFraction > 0 })
         XCTAssertGreaterThan(upperArm.radius, 0.05, "the arm")
-        XCTAssertLessThanOrEqual(upperArm.radius, 0.08)
+        XCTAssertLessThanOrEqual(upperArm.radius, 0.11)
         // The shoulder the cape drapes over: the free cape vertices there
         // sit 5–13 cm from the joint.
         let shoulderPad = try XCTUnwrap(cape.fits.first { $0.from == rig.leftUpperArm && $0.endFraction < 1 })
         XCTAssertGreaterThan(shoulderPad.radius, 0.05, "the shoulder pad")
         let forearm = try XCTUnwrap(cape.fits.first { $0.from == rig.leftForearm })
-        XCTAssertLessThanOrEqual(forearm.radius, 0.06, "the gauntlet's fins must not shove the cape's front")
+        XCTAssertLessThanOrEqual(forearm.radius, 0.1, "the gauntlet's fins must not shove the cape's front")
         // The shoulder blades are covered, just under the collar.
         let upperBack = try XCTUnwrap(cape.fits.first { $0.from == rig.chest })
         XCTAssertGreaterThan(upperBack.radius, 0.06, "the upper back")
