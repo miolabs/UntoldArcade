@@ -1,0 +1,7 @@
+# MoCap Online Zombie Pro clips (binary-only license) never enter the
+# repository. The 100STYLE Zombie clips (s100_*, CC BY 4.0 — Mason, Starke,
+# Komura 2022) are committed; rebuild them with Tools/retarget_100style.py.
+*
+!.gitignore
+!s100_*/
+!s100_*/*.untold
