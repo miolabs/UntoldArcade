@@ -22,13 +22,20 @@ enum CoolMirrorCapeColliders {
         var to: String
         /// The radius when the mesh gives no vertices for the segment.
         var fallbackRadius: Float
-        /// Where along the bone the capsule starts (0 = at `from`): an
-        /// upper arm starts below the shoulder, which the collar sits on.
+        /// Where along the bone the capsule starts and ends (0 = at
+        /// `from`, 1 = at `to`). A partial segment is sized by the
+        /// vertices over its own stretch of the bone only: the shoulder
+        /// is the first third of the upper arm bone, the arm the rest.
         var startFraction: Float = 0
+        var endFraction: Float = 1
         /// Ceiling on the fitted radius: a gauntlet's fins or a boot's
         /// top must not make an arm or a foot a barrel that shoves the
         /// cape about when the limb comes near it.
         var maxRadius: Float = CoolMirrorCapeColliders.radiusRange.upperBound
+        /// Sized by the vertices all around the bone rather than those on
+        /// the cape's side: the cape drapes over a shoulder's top and
+        /// outside, not its back.
+        var allAround = false
     }
 
     /// A fitted capsule: `shift` is the axis offset in the `from` joint's
@@ -39,6 +46,7 @@ enum CoolMirrorCapeColliders {
         var fromJoint: Int
         var toJoint: Int
         var startFraction: Float
+        var endFraction: Float
         var shift: simd_float3
         var radius: Float
         var vertices: Int
@@ -50,21 +58,22 @@ enum CoolMirrorCapeColliders {
     static let radiusRange: ClosedRange<Float> = 0.03 ... 0.2
     /// The vertices' radial spread that the capsule covers.
     static let radiusPercentile: Float = 0.9
-    /// A capsule stays at least this far from every pinned particle.
-    static let pinClearance: Float = 0.02
 
-    /// The upper back and the shoulders (the shoulder blades the cape
-    /// sank into) are wrapped too; `keep(_:awayFrom:joints:)` then
-    /// shrinks them clear of the collar pins they carry, since a pinned
-    /// particle inside a collider is shoved out against a pin that cannot
-    /// move, every step, and the cloth explodes.
+    /// The upper back and the shoulders are wrapped too, collar pins and
+    /// all: Jolt leaves a pinned vertex where it is put, and the headless
+    /// scenario with the shoulders at 12 cm (forty pins inside) stays as
+    /// calm as without them.
     static func segments(_ rig: CoolMirrorCapeRig) -> [Segment] {
         [
             Segment(from: rig.pelvis, to: rig.spine, fallbackRadius: 0.11),
             Segment(from: rig.spine, to: rig.chest, fallbackRadius: 0.1),
             Segment(from: rig.chest, to: rig.upperChest, fallbackRadius: 0.1),
-            Segment(from: rig.leftClavicle, to: rig.leftUpperArm, fallbackRadius: 0.06),
-            Segment(from: rig.rightClavicle, to: rig.rightUpperArm, fallbackRadius: 0.06),
+            // The shoulders (trapezius, pads, deltoids): the cape drapes
+            // over their top and outside, so they are sized all around.
+            Segment(from: rig.leftClavicle, to: rig.leftUpperArm, fallbackRadius: 0.06, maxRadius: 0.12, allAround: true),
+            Segment(from: rig.rightClavicle, to: rig.rightUpperArm, fallbackRadius: 0.06, maxRadius: 0.12, allAround: true),
+            Segment(from: rig.leftUpperArm, to: rig.leftForearm, fallbackRadius: 0.07, endFraction: 0.35, maxRadius: 0.12, allAround: true),
+            Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.07, endFraction: 0.35, maxRadius: 0.12, allAround: true),
             Segment(from: rig.leftUpperArm, to: rig.leftForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.08),
             Segment(from: rig.rightUpperArm, to: rig.rightForearm, fallbackRadius: 0.05, startFraction: 0.35, maxRadius: 0.08),
             Segment(from: rig.leftForearm, to: rig.leftHand, fallbackRadius: 0.04, maxRadius: 0.06),
@@ -99,31 +108,33 @@ enum CoolMirrorCapeColliders {
         // Which segment a joint sizes: the nearest ancestor (itself
         // included) that starts a segment, unless an excluded joint
         // comes first.
-        var segmentOfStart: [Int: Int] = [:]
+        var segmentsOfStart: [Int: [Int]] = [:]
         for (index, segment) in segments.enumerated() {
-            if let joint = jointIndexByName[segment.from] { segmentOfStart[joint] = index }
+            if let joint = jointIndexByName[segment.from] { segmentsOfStart[joint, default: []].append(index) }
         }
         let excludedJoints = Set(excluded.compactMap { jointIndexByName[$0] })
-        var segmentOfJoint: [Int: Int?] = [:]
-        func segment(of joint: Int) -> Int? {
-            if let known = segmentOfJoint[joint] { return known }
+        var segmentsOfJoint: [Int: [Int]] = [:]
+        func segmentsSized(by joint: Int) -> [Int] {
+            if let known = segmentsOfJoint[joint] { return known }
             var current: Int? = joint
-            var result: Int?
+            var result: [Int] = []
             var visited = 0
             while let j = current, visited < parents.count {
                 visited += 1
                 if excludedJoints.contains(j) { break }
-                if let index = segmentOfStart[j] {
-                    result = index
+                if let indices = segmentsOfStart[j] {
+                    result = indices
                     break
                 }
                 current = j < parents.count ? parents[j] : nil
             }
-            segmentOfJoint[joint] = result
+            segmentsOfJoint[joint] = result
             return result
         }
 
-        // Every vertex goes to the segment of the joint that owns most of it.
+        // Every vertex goes to the segments of the joint that owns most
+        // of it; a partial segment takes only the vertices over its
+        // stretch of the bone.
         var verticesOfSegment = [[simd_float3]](repeating: [], count: segments.count)
         if jointIndices.count == positions.count, jointWeights.count == positions.count {
             for (vertex, p) in positions.enumerated() {
@@ -132,7 +143,15 @@ enum CoolMirrorCapeColliders {
                 if w.y > best { owner = Int(ids.y); best = w.y }
                 if w.z > best { owner = Int(ids.z); best = w.z }
                 if w.w > best { owner = Int(ids.w) }
-                if let index = segment(of: owner) {
+                for index in segmentsSized(by: owner) {
+                    let segment = segments[index]
+                    if segment.startFraction > 0 || segment.endFraction < 1,
+                       let a = jointIndexByName[segment.from], let b = jointIndexByName[segment.to], a < restJoints.count, b < restJoints.count
+                    {
+                        let axis = restJoints[b].position - restJoints[a].position
+                        let t = simd_dot(p - restJoints[a].position, axis) / max(simd_length_squared(axis), 1e-8)
+                        guard t >= segment.startFraction, t <= segment.endFraction else { continue }
+                    }
                     verticesOfSegment[index].append(p)
                 }
             }
@@ -147,7 +166,7 @@ enum CoolMirrorCapeColliders {
             let lengthSquared = simd_length_squared(axis)
             guard lengthSquared > 1e-6 else { continue }
             let vertices = verticesOfSegment[index]
-            var fit = Fit(from: segment.from, to: segment.to, fromJoint: a, toJoint: b, startFraction: segment.startFraction, shift: .zero, radius: segment.fallbackRadius, vertices: vertices.count)
+            var fit = Fit(from: segment.from, to: segment.to, fromJoint: a, toJoint: b, startFraction: segment.startFraction, endFraction: segment.endFraction, shift: .zero, radius: segment.fallbackRadius, vertices: vertices.count)
             if vertices.count >= 24 {
                 // Sideways offsets of the vertices from the axis; the
                 // capsule's axis moves to their mean, its radius covers
@@ -158,7 +177,7 @@ enum CoolMirrorCapeColliders {
                 }
                 var mean = simd_float3.zero
                 var spread: [Float]
-                let band = back.map { back in offsets.filter { simd_length_squared($0) > 1e-8 && simd_dot(simd_normalize($0), back) >= 0.7071 } } ?? []
+                let band = segment.allAround ? [] : back.map { back in offsets.filter { simd_length_squared($0) > 1e-8 && simd_dot(simd_normalize($0), back) >= 0.7071 } } ?? []
                 if band.count >= 24 {
                     spread = band.map { simd_length($0) }
                 } else {
@@ -181,27 +200,7 @@ enum CoolMirrorCapeColliders {
             guard fit.fromJoint < joints.count, fit.toJoint < joints.count else { return nil }
             let shift = joints[fit.fromJoint].rotation.act(fit.shift)
             let from = joints[fit.fromJoint].position + shift, to = joints[fit.toJoint].position + shift
-            return .init(start: from + (to - from) * fit.startFraction, end: to, radius: fit.radius)
-        }
-    }
-
-    /// Shrinks every capsule that would hold one of `points` (the pinned
-    /// particles at rest): a pinned particle inside a collider has its
-    /// free neighbours shoved out against a pin that cannot move, every
-    /// step, and the cloth explodes.
-    static func keep(_ fits: inout [Fit], awayFrom points: [simd_float3], joints: [CoolMirrorCapeCloth.JointFrame]) {
-        for (index, capsule) in zip(fits.indices, capsules(fits, joints: joints)) {
-            let axis = capsule.end - capsule.start
-            let lengthSquared = max(simd_length_squared(axis), 1e-8)
-            var nearest: Float = .greatestFiniteMagnitude
-            for p in points {
-                let t = simd_clamp(simd_dot(p - capsule.start, axis) / lengthSquared, 0, 1)
-                nearest = min(nearest, simd_length(p - (capsule.start + axis * t)))
-            }
-            let allowed = nearest - pinClearance
-            if allowed < fits[index].radius {
-                fits[index].radius = max(allowed, radiusRange.lowerBound)
-            }
+            return .init(start: from + (to - from) * fit.startFraction, end: from + (to - from) * fit.endFraction, radius: fit.radius)
         }
     }
 }

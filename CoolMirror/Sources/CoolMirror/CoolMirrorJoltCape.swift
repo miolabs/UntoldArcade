@@ -212,8 +212,8 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             bodyJointIndices.append(contentsOf: geometry.jointIndices)
             bodyJointWeights.append(contentsOf: geometry.jointWeights)
         }
-        // The cape cloths first: their pins decide how far the colliders
-        // may reach, and where they hang says which side of the body to fit.
+        // The cape cloths first: where they hang says which side of the
+        // body to fit the colliders to.
         let frames = joints.map { CoolMirrorCapeCloth.JointFrame(position: $0.worldPosition, rotation: $0.worldRotation) }
         var cloths: [(slot: Slot, cloth: CoolMirrorCapeCloth)] = []
         for slot in capeSlots {
@@ -226,19 +226,17 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             cloths.append((slot, cloth))
         }
         let capeRest = cloths.flatMap(\.cloth.particleRest)
-        let pinsRest = cloths.flatMap { piece in piece.cloth.pinned.map { piece.cloth.particleRest[Int($0)] } }
         var back: simd_float3?
         if let pelvis = jointIndexByName[rig.pelvis], pelvis < restJoints.count, !capeRest.isEmpty {
             var d = capeRest.reduce(simd_float3.zero, +) / Float(capeRest.count) - restJoints[pelvis].position
             d.y = 0
             if simd_length_squared(d) > 1e-6 { back = simd_normalize(d) }
         }
-        var fits = CoolMirrorCapeColliders.fit(
+        let fits = CoolMirrorCapeColliders.fit(
             CoolMirrorCapeColliders.segments(rig), excluding: CoolMirrorCapeColliders.excludedJoints(rig),
             positions: bodyPositions, jointIndices: bodyJointIndices, jointWeights: bodyJointWeights,
             restJoints: restJoints, parents: restSkeleton.map(\.parentIndex), jointIndexByName: jointIndexByName, back: back
         )
-        CoolMirrorCapeColliders.keep(&fits, awayFrom: pinsRest, joints: restJoints)
         let startCapsules = CoolMirrorCapeColliders.capsules(fits, joints: frames)
         for fit in fits {
             print(String(format: "CoolMirror jolt cape: collider %@ → %@ radius %.0f mm, shift %.0f mm, %d vertices", fit.from, fit.to, fit.radius * 1000, simd_length(fit.shift) * 1000, fit.vertices))
