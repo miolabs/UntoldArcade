@@ -16,14 +16,21 @@ import simd
 
 public struct MocapFootAnchor: Sendable {
     /// A foot is planted once its captured speed over `window` seconds
-    /// stays below this (m/s), and lifted as soon as its speed since the
-    /// last frame exceeds twice it: planting is slow and sure, lifting is
-    /// immediate, so an anchor never holds a foot down that is leaving.
+    /// stays below this (m/s), and lifted as soon as its speed over the
+    /// last `liftWindow` exceeds twice it: planting is slow and sure,
+    /// lifting is quick, so an anchor never holds a foot down that is
+    /// leaving.
     /// Speed is the smaller of the foot's travel in the world and its
     /// travel relative to the root: a root that wobbles carries both feet
     /// with it, which is no step.
     public var plantedSpeed: Float = 0.15
     public var window: TimeInterval = 0.2
+    /// Lifting is judged over this long: one jittery frame is no lift.
+    public var liftWindow: TimeInterval = 0.05
+    /// Only a foot this close to the floor may become the anchor: a foot
+    /// held still in the air is planted in nothing, and anchoring it
+    /// would pull it (and the whole character) down to the floor.
+    public var floorTolerance: Float = 0.06
     /// Fraction of the remaining error closed per update (the rig pose read
     /// each frame already carries the previous correction).
     public var gain: Float = 0.8
@@ -64,7 +71,8 @@ public struct MocapFootAnchor: Sendable {
                 planted.remove(foot)
                 continue
             }
-            if let last = history.last, let recent = speed(of: foot, since: last), recent > 2 * plantedSpeed {
+            let liftSample = history.last { time - $0.time >= liftWindow } ?? history.first
+            if let liftSample, let recent = speed(of: foot, since: liftSample), recent > 2 * plantedSpeed {
                 planted.remove(foot)
             } else if let oldest = history.first, time - oldest.time >= window * 0.5, let slow = speed(of: foot, since: oldest), slow < plantedSpeed {
                 planted.insert(foot)
@@ -73,12 +81,16 @@ public struct MocapFootAnchor: Sendable {
         history.append((time, captured, root))
 
         // The anchor: the current foot while it stays planted, else the
-        // lower planted foot, held where its ankle is now, on the floor.
+        // lower planted foot that is on the floor, held where its ankle is
+        // now, at floor height.
         if let current = anchor, !planted.contains(current) || rig[current] == nil {
             anchor = nil
         }
         if anchor == nil {
-            let candidates = Self.feet.filter { planted.contains($0) && rig[$0] != nil && floor[$0] != nil }
+            let candidates = Self.feet.filter { foot in
+                guard planted.contains(foot), let position = rig[foot], let height = floor[foot] else { return false }
+                return position.y - height <= floorTolerance
+            }
             if let foot = candidates.min(by: { rig[$0]!.y < rig[$1]!.y }) {
                 anchor = foot
                 anchorPosition = rig[foot]!
@@ -119,11 +131,12 @@ public struct MocapFootAnchor: Sendable {
     }
 
     public mutating func reset() {
-        self = MocapFootAnchor(plantedSpeed: plantedSpeed, gain: gain)
-    }
-
-    init(plantedSpeed: Float, gain: Float) {
-        self.plantedSpeed = plantedSpeed
-        self.gain = gain
+        var fresh = MocapFootAnchor()
+        fresh.plantedSpeed = plantedSpeed
+        fresh.window = window
+        fresh.liftWindow = liftWindow
+        fresh.floorTolerance = floorTolerance
+        fresh.gain = gain
+        self = fresh
     }
 }

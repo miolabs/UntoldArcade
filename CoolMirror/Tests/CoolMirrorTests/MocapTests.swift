@@ -125,11 +125,18 @@ final class MocapTests: XCTestCase {
         }
         XCTAssertLessThan(maxJump, 0.01, "the step never snaps the root")
         XCTAssertEqual(anchor.anchor, .rightFoot, "the foot that stayed down carried the step")
-        // Lifting the left foot straight up and holding it: still on the right.
-        for frame in 200 ..< 260 {
-            step(frame, jitter: .zero, lift: simd_float3(0, frame < 215 ? 0.2 * Float(frame - 200) / 15 : 0.2, 0))
+        // Lifting the left foot straight up and holding it there, while the
+        // stance foot jitters by 6 mm a frame (the tracker's noise): still
+        // on the right, and never pulled down to the raised foot.
+        var lowestCorrection: Float = 0
+        for frame in 200 ..< 320 {
+            let jitter = simd_float3(0, 0, frame % 2 == 0 ? 0.003 : -0.003)
+            step(frame, jitter: jitter, lift: simd_float3(0, frame < 215 ? 0.2 * Float(frame - 200) / 15 : 0.2, 0))
+            XCTAssertNotEqual(anchor.anchor, .leftFoot, "frame \(frame): a foot held still in the air is no anchor")
+            lowestCorrection = min(lowestCorrection, correction.y)
         }
         XCTAssertEqual(anchor.anchor, .rightFoot, "a lifted foot is not the anchor")
+        XCTAssertGreaterThan(lowestCorrection, -0.02, "the character never sinks toward the raised foot")
 
         // Root motion off: the anchor holds the floor only.
         anchor = MocapFootAnchor()
