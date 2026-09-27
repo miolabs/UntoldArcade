@@ -394,6 +394,52 @@ final class MocapTests: XCTestCase {
         assertEqual(head, yaw) // rides on the neck
     }
 
+    /// The torso is relative to the calibration pose: ARKit reports a
+    /// straight back as leaning 14° forward, so the lean the user had when
+    /// calibrating (standing straight) maps onto the rig's upright rest,
+    /// and only a change of lean from there bends the character.
+    func testTorsoLeanIsRelativeToTheCalibrationPose() throws {
+        let mapping = try XCTUnwrap(CoolMirrorMocapMapping.mapping(for: .spiderman))
+        let retargeter = MocapRetargeter(mapping: mapping)
+        retargeter.options.mirror = false
+        retargeter.rigRestPositions = [
+            "mixamorig:Pelvis": simd_float3(0, 1, 0), "mixamorig:Spine": simd_float3(0, 1.1, 0),
+            "mixamorig:Spine2": simd_float3(0, 1.25, 0), "mixamorig:Spine3": simd_float3(0, 1.4, 0),
+            "mixamorig:Neck": simd_float3(0, 1.5, 0), "mixamorig:Head": simd_float3(0, 1.6, 0),
+            "mixamorig:LeftUpLeg": simd_float3(0.1, 0.95, 0), "mixamorig:RightUpLeg": simd_float3(-0.1, 0.95, 0),
+            "mixamorig:LeftShoulder": simd_float3(0.05, 1.45, 0), "mixamorig:RightShoulder": simd_float3(-0.05, 1.45, 0),
+        ]
+        let upright: [MocapJoint: simd_float3] = [
+            .hips: simd_float3(0, 1, 0), .spine2: simd_float3(0, 1.25, 0), .spine5: simd_float3(0, 1.4, 0),
+            .spine7: simd_float3(0, 1.5, 0), .neck1: simd_float3(0, 1.55, 0), .head: simd_float3(0, 1.65, 0),
+            .leftUpLeg: simd_float3(0.1, 0.95, 0), .rightUpLeg: simd_float3(-0.1, 0.95, 0),
+            .leftShoulder: simd_float3(0.05, 1.45, 0), .rightShoulder: simd_float3(-0.05, 1.45, 0),
+        ]
+        /// The torso leaned forward by `angle` about the hips (the legs stay).
+        func leaning(_ angle: Float) -> [MocapJoint: simd_float3] {
+            let lean = simd_quatf(angle: angle, axis: simd_float3(1, 0, 0))
+            let hips = upright[.hips]!
+            return upright.mapValues { p in p.y > hips.y ? hips + lean.act(p - hips) : p }
+        }
+        var calibration = frame(rotations: [:])
+        calibration.positions = leaning(0.25) // the tracker's straight back
+        retargeter.calibrate(with: calibration)
+
+        var same = frame(sequence: 2, rotations: [:])
+        same.positions = leaning(0.25)
+        let standing = try XCTUnwrap(retargeter.retarget(same))
+        for joint in ["mixamorig:Pelvis", "mixamorig:Spine2", "mixamorig:Spine3", "mixamorig:Neck"] {
+            let delta = try XCTUnwrap(standing.worldRotationDeltas[joint])
+            XCTAssertLessThan(rotationAngle(between: delta, simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))), 0.01, "\(joint) stands as the rig rests")
+        }
+
+        var bowed = frame(sequence: 3, rotations: [:])
+        bowed.positions = leaning(0.25 + 0.4)
+        let bowing = try XCTUnwrap(retargeter.retarget(bowed))
+        let chest = try XCTUnwrap(bowing.worldRotationDeltas["mixamorig:Spine3"])
+        assertEqual(chest, simd_quatf(angle: 0.4, axis: simd_float3(1, 0, 0)))
+    }
+
     func testFilterUndoesASideSwapAndHoldsBackJumps() {
         var filter = MocapPoseFilter()
         var options = MocapSmoothingOptions()

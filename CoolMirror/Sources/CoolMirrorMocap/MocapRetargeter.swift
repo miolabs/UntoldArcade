@@ -138,6 +138,10 @@ public final class MocapRetargeter: @unchecked Sendable {
     private var calibrationRotations: [MocapJoint: simd_quatf] = [:]
     private var calibrationRootPosition = simd_float3(0, 0, 0)
     private var calibrationRootRotation = simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+    /// The calibration frame's joint positions: the torso is retargeted
+    /// relative to them (the tracker reports a straight back as leaning
+    /// 14° forward; the user stands straight to calibrate).
+    private var calibrationPositions: [MocapJoint: simd_float3] = [:]
     private var filter = MocapPoseFilter()
     private let lock = NSLock()
 
@@ -155,11 +159,15 @@ public final class MocapRetargeter: @unchecked Sendable {
             calibrationRotations = frame.rotations
             calibrationRootPosition = frame.rootPosition
             calibrationRootRotation = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+            calibrationPositions = frame.positions
         }
     }
 
     public func resetCalibration() {
-        lock.withLock { calibrationRotations.removeAll() }
+        lock.withLock {
+            calibrationRotations.removeAll()
+            calibrationPositions.removeAll()
+        }
     }
 
     /// `frame` smoothed against the frames fed before it (see
@@ -182,8 +190,8 @@ public final class MocapRetargeter: @unchecked Sendable {
 
     /// Nil until calibrated.
     public func retarget(_ frame: MocapFrame) -> MocapRetargetResult? {
-        let (calibration, calibrationPosition, calibrationRoot, restPositions) = lock.withLock {
-            (calibrationRotations, calibrationRootPosition, calibrationRootRotation, self.restPositions)
+        let (calibration, calibrationPosition, calibrationRoot, restPositions, calibrationJoints) = lock.withLock {
+            (calibrationRotations, calibrationRootPosition, calibrationRootRotation, self.restPositions, calibrationPositions)
         }
         guard !calibration.isEmpty else { return nil }
         let options = options
@@ -201,20 +209,26 @@ public final class MocapRetargeter: @unchecked Sendable {
         }
         translation *= options.rootTranslationScale
 
-        // The captured skeleton in the same space as the translation: anchor
-        // space → world → calibrated body frame, then mirrored and flipped.
-        let anchorRotation = frame.rotations[.root] ?? calibrationRoot
-        var captured: [MocapJoint: simd_float3] = [:]
-        for (joint, position) in frame.positions {
-            var p = calibrationRoot.inverse.act(anchorRotation.act(position) + frame.rootPosition - calibrationPosition)
-            if options.mirror {
-                p.x = -p.x
+        /// The captured skeleton in the same space as the translation: anchor
+        /// space → world → calibrated body frame, then mirrored and flipped.
+        /// The calibration pose goes through the same (it sits at the
+        /// calibration spot: its root is the calibration root).
+        func bodySpace(_ positions: [MocapJoint: simd_float3], anchorRotation: simd_quatf, rootPosition: simd_float3) -> [MocapJoint: simd_float3] {
+            var result: [MocapJoint: simd_float3] = [:]
+            for (joint, position) in positions {
+                var p = calibrationRoot.inverse.act(anchorRotation.act(position) + rootPosition - calibrationPosition)
+                if options.mirror {
+                    p.x = -p.x
+                }
+                if let facing {
+                    p = facing.act(p)
+                }
+                result[joint] = p
             }
-            if let facing {
-                p = facing.act(p)
-            }
-            captured[joint] = p
+            return result
         }
+        let captured = bodySpace(frame.positions, anchorRotation: frame.rotations[.root] ?? calibrationRoot, rootPosition: frame.rootPosition)
+        let calibrated = bodySpace(calibrationJoints, anchorRotation: calibrationRoot, rootPosition: calibrationPosition)
 
         /// Rotation of a captured joint relative to its calibration, in the
         /// character's space. With the mirror on, the character's joint takes
@@ -238,13 +252,20 @@ public final class MocapRetargeter: @unchecked Sendable {
         // (the lateral hip or shoulder axis for the torso, the bend of the
         // next joint for limbs). ARKit's joint orientations are not used
         // for these: they flip when it mistakes front for back while the
-        // positions stay put. The delta is captured frame × rest frame⁻¹.
+        // positions stay put. The delta is captured frame × rest frame⁻¹,
+        // where the rest frame is the rig's for the limbs (the user's arms
+        // hang however they hang at calibration) and the calibration
+        // pose's for the torso (the user stands straight to calibrate, and
+        // the tracker's idea of straight leans 14° forward).
         let rig = mapping.referenceJoints
         func rest(_ joint: MocapJoint) -> simd_float3? {
             rig[joint].flatMap { restPositions[$0] }
         }
         func cap(_ joint: MocapJoint) -> simd_float3? {
             captured[options.mirror ? joint.mirrored : joint]
+        }
+        func cal(_ joint: MocapJoint) -> simd_float3? {
+            calibrated[options.mirror ? joint.mirrored : joint]
         }
         func direction(_ a: simd_float3?, _ b: simd_float3?) -> simd_float3? {
             guard let a, let b else { return nil }
@@ -263,14 +284,16 @@ public final class MocapRetargeter: @unchecked Sendable {
 
         var frames: [MocapJoint: simd_quatf] = [:]
         for spec in MocapBoneFrame.order {
-            guard let restPrimary = direction(rest(spec.joint), rest(spec.child)),
-                  let capturedPrimary = direction(cap(spec.joint), cap(spec.child))
-            else { continue }
+            guard let capturedPrimary = direction(cap(spec.joint), cap(spec.child)) else { continue }
+            // Torso bones (lateral hints) are relative to the calibration pose.
+            var isTorso = false
+            if case .lateral = spec.hint { isTorso = true }
+            guard let restPrimary = (isTorso ? direction(cal(spec.joint), cal(spec.child)) : nil) ?? direction(rest(spec.joint), rest(spec.child)) else { continue }
             let restHint: simd_float3?
             let capturedHint: simd_float3?
             switch spec.hint {
             case let .lateral(left, right):
-                restHint = direction(rest(left), rest(right))
+                restHint = direction(cal(left), cal(right)) ?? direction(rest(left), rest(right))
                 capturedHint = direction(cap(left), cap(right))
             case let .bone(a, b):
                 restHint = direction(rest(a), rest(b))

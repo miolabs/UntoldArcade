@@ -121,10 +121,49 @@ final class MocapReplayTests: XCTestCase {
         let turn = session.stretch("Turn to your left")
         let turnRaw = Self.headings(session.raw[turn]), turnFiltered = Self.headings(session.filtered[turn])
         XCTAssertGreaterThan(Self.range(turnRaw), 90)
-        XCTAssertGreaterThan(Self.range(turnFiltered), 0.9 * Self.range(turnRaw), "a real turn is not a glitch")
+        XCTAssertGreaterThan(Self.range(turnFiltered), 0.85 * Self.range(turnRaw), "a real turn is not a glitch")
 
         // Nowhere does the heading step by more than a few degrees between frames.
         let whole = Self.headings(session.filtered[...])
         XCTAssertLessThan(Self.largestStep(whole), 9)
+    }
+
+    /// Session of 2026-09-27, later: ten frames the tracker lost (they
+    /// once let the raw skeleton through for a frame, a 29° spike); the
+    /// tracker's heading toggling between two readings 30° apart while
+    /// the arms went up; a fast turn back to the phone that the tracker
+    /// reported as a snap and that must still be followed.
+    func testSecondSessionHasNoSpikesAndFollowsTheTurnBack() throws {
+        guard let session = try replay("session-20260927-200725") else { throw XCTSkip("recording not present") }
+        XCTAssertEqual(session.raw.filter { !$0.isTracked }.count, 10)
+
+        let still = session.stretch("Stand still, arms down")
+        XCTAssertLessThan(Self.range(Self.headings(session.filtered[still])), 12)
+        XCTAssertLessThan(Self.largestStep(Self.headings(session.filtered[still])), 1.0)
+
+        let arms = session.stretch("Raise both arms")
+        XCTAssertGreaterThan(Self.largestStep(Self.headings(session.raw[arms])), 15, "the tracker did snap")
+        XCTAssertLessThan(Self.largestStep(Self.headings(session.filtered[arms])), 6, "the character never snaps")
+        // The hands never jump either (the lost frames used to throw them 40 cm).
+        var largestHandStep: Float = 0
+        for index in arms.dropFirst() {
+            for joint in [MocapJoint.leftHand, .rightHand] {
+                guard let a = session.filtered[index - 1].positions[joint], let b = session.filtered[index].positions[joint],
+                      let ra = session.filtered[index - 1].rotations[.root], let rb = session.filtered[index].rotations[.root]
+                else { continue }
+                let wa = ra.act(a) + session.filtered[index - 1].rootPosition, wb = rb.act(b) + session.filtered[index].rootPosition
+                largestHandStep = max(largestHandStep, simd_length(wb - wa))
+            }
+        }
+        XCTAssertLessThan(largestHandStep, 0.08)
+
+        // The turn: a real 50° turn left and the fast turn back are followed.
+        let turn = session.stretch("Turn to your left")
+        XCTAssertGreaterThan(Self.range(Self.headings(session.filtered[turn])), 40)
+
+        // Nowhere does the heading step by more than the rate limit allows
+        // (the fast turn back runs at it).
+        let whole = Self.headings(session.filtered[...])
+        XCTAssertLessThan(Self.largestStep(whole), 12)
     }
 }

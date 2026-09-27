@@ -39,15 +39,19 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var medianWindow = 5
 
     /// Body-yaw guard, on the hip heading. A step of more than
-    /// `yawJumpThreshold` between two frames is a tracker error (a body
-    /// turns gradually): the skeleton is turned back about the hips and
-    /// the heading held until the tracked one returns within
-    /// `yawReturnTolerance`, or, after `yawHold` seconds, is taken as real
-    /// and approached at `yawAdoptRate` (rad/s) so nothing ever snaps.
-    /// Otherwise the heading follows at up to `maxYawRate` (rad/s). With
-    /// both feet planted a body cannot turn its hips much: a jump is held
-    /// for `yawHoldPlanted` seconds instead (the tracker turning the whole
-    /// skeleton under planted feet is its commonest error), and the
+    /// `yawJumpThreshold` within `yawJumpWindow` seconds is a tracker
+    /// error (a body turns gradually), unless the heading was already
+    /// turning that way at `yawMomentumRate` (rad/s) or more, which makes
+    /// it the tracker catching up with a real turn. On an error the
+    /// skeleton is turned back about the hips and the heading held until
+    /// the tracked one returns within `yawReturnTolerance`, or keeps on
+    /// turning the same way by `yawContinueAngle` more (a real turn after
+    /// all: released and followed), or, after `yawHold` seconds, is taken
+    /// as real and approached at `yawAdoptRate` (rad/s) so nothing ever
+    /// snaps. Otherwise the heading follows at up to `maxYawRate` (rad/s).
+    /// With a foot planted a body cannot turn its hips much: a jump is
+    /// held for `yawHoldPlanted` seconds instead (the tracker turning the
+    /// whole skeleton under planted feet is its commonest error), and the
     /// heading follows through a low-pass of `yawCutoffPlanted` (Hz) at
     /// no more than `maxYawRatePlanted`, which takes the tracker's wander
     /// (twenty degrees over two seconds, standing still) out — unless the
@@ -57,21 +61,26 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     public var steadyYaw = true
     public var maxYawRate: Float = 4.0 // ~230°/s
     public var yawJumpThreshold: Float = 0.3 // ~17°
+    public var yawJumpWindow: TimeInterval = 0.06
+    public var yawMomentumRate: Float = 0.7 // ~40°/s
+    public var yawMomentumWindow: TimeInterval = 0.3
+    public var yawContinueAngle: Float = 0.26 // ~15°
     public var yawReturnTolerance: Float = 0.17 // ~10°
     public var yawHold: TimeInterval = 2.0
-    public var yawHoldPlanted: TimeInterval = 4.0
+    public var yawHoldPlanted: TimeInterval = 12.0
     public var yawAdoptRate: Float = 0.5 // ~30°/s
     public var maxYawRatePlanted: Float = 0.35 // ~20°/s
-    public var yawCutoffPlanted: Float = 0.15
+    public var yawCutoffPlanted: Float = 0.1
     public var yawBiasThreshold: Float = 0.21 // ~12°
     public var yawBiasTime: TimeInterval = 0.5
-    /// Feet count as planted (for the yaw guard) while, over
-    /// `plantedWindow`, neither travels faster than `plantedFootSpeed`
-    /// (m/s) in the world, or the leg lengths and the stance width all
+    /// A foot counts as planted (for the yaw guard) while, over
+    /// `plantedWindow`, either foot travels slower than `plantedFootSpeed`
+    /// (m/s) in the world (a body standing on one foot cannot turn its
+    /// hips fast either), or the leg lengths and the stance width all
     /// change by less than `plantedShapeTolerance` (m): the tracker
-    /// shifting or turning the whole skeleton moves the feet but not
-    /// the body's shape, a step or a lift does. Lifted again above twice
-    /// the speed with the shape changing.
+    /// shifting or turning the whole skeleton moves the feet but not the
+    /// body's shape, a step or a lift does. Lifted again once both feet
+    /// move faster than twice the speed with the shape changing.
     public var plantedFootSpeed: Float = 0.15
     public var plantedWindow: TimeInterval = 0.2
     public var plantedShapeTolerance: Float = 0.04
@@ -190,8 +199,9 @@ public struct MocapPoseFilter: Sendable {
         plantedFeet.removeAll()
         rejectedFrames = 0
         swappedFrames = 0
+        lastOutput = nil
         trustedYaw = nil
-        lastRawYaw = nil
+        rawYawHistory.removeAll()
         yawHoldStart = nil
         yawBiasSince = nil
         yawLastTime = nil
@@ -313,6 +323,7 @@ public struct MocapPoseFilter: Sendable {
     // MARK: - Median over recent frames
 
     private var recentRaw: [MocapFrame] = []
+    private var lastOutput: MocapFrame?
 
     /// `frame` with every joint position (and the root position) replaced
     /// by the per-component median over the last `window` distinct phone
@@ -348,14 +359,20 @@ public struct MocapPoseFilter: Sendable {
     // MARK: - Body-yaw guard
 
     private var trustedYaw: Float?
-    private var lastRawYaw: Float?
+    /// Recent tracked headings (unwrapped), for the jump and momentum tests.
+    private var rawYawHistory: [(time: TimeInterval, yaw: Float)] = []
     private var yawHoldStart: TimeInterval?
+    /// The tracked heading (unwrapped) when the hold began.
+    private var yawHoldFrom: Float = 0
     private var yawBiasSince: TimeInterval?
     private var yawLastTime: TimeInterval?
     /// Recent world positions of the feet and hips, for the planted test.
     private var yawFeetHistory: [(time: TimeInterval, feet: [MocapJoint: simd_float3], hips: simd_float3)] = []
     /// Whether the heading is currently held against a tracker jump.
     public private(set) var isYawHeld = false
+    /// The last measured hip heading (rad) and the correction applied to it.
+    public private(set) var lastMeasuredYaw: Float?
+    public private(set) var lastYawCorrection: Float = 0
     /// Whether both feet were planted at the last update (the heading
     /// then follows only slowly).
     public private(set) var feetPlanted = false
@@ -396,7 +413,7 @@ public struct MocapPoseFilter: Sendable {
             feetPlanted = false
             return
         }
-        let speed = max(simd_length(left - oldLeft), simd_length(right - oldRight)) / dt
+        let speed = min(simd_length(left - oldLeft), simd_length(right - oldRight)) / dt
         // The body's shape: leg lengths (feet to hips) and stance width.
         let shapeChange = max(
             abs(simd_length(left - hips) - simd_length(oldLeft - oldest.hips)),
@@ -426,8 +443,13 @@ public struct MocapPoseFilter: Sendable {
         updateFeetPlanted(frame, at: time, options: options)
         let dt = Float(min(max(time - (yawLastTime ?? time), 0), 0.25))
         yawLastTime = time
-        let rawStep = lastRawYaw.map { Self.wrap(raw - $0) } ?? 0
-        lastRawYaw = raw
+        // The tracked heading, unwrapped against the last one.
+        let unwrappedRaw = rawYawHistory.last.map { $0.yaw + Self.wrap(raw - $0.yaw) } ?? raw
+        rawYawHistory.removeAll { $0.time > time || time - $0.time > max(options.yawMomentumWindow, options.yawJumpWindow) * 1.5 }
+        let jumpSample = rawYawHistory.last { time - $0.time >= options.yawJumpWindow } ?? rawYawHistory.first
+        let rawStep = jumpSample.map { unwrappedRaw - $0.yaw } ?? 0
+        let momentumSample = rawYawHistory.first
+        rawYawHistory.append((time, unwrappedRaw))
         guard let trusted = trustedYaw else {
             trustedYaw = raw
             return
@@ -435,18 +457,32 @@ public struct MocapPoseFilter: Sendable {
         let delta = Self.wrap(raw - trusted)
         let step = max(dt, 1 / 120)
         let planted = feetPlanted
-        let jumpThreshold = options.yawJumpThreshold
         let fastStep = options.maxYawRate * step
         let adoptStep = options.yawAdoptRate * step
         var next = trusted
-        if abs(rawStep) >= jumpThreshold, yawHoldStart == nil {
-            // A step no body makes between two frames: hold.
-            yawHoldStart = time
+        if abs(rawStep) >= options.yawJumpThreshold, yawHoldStart == nil {
+            // A step no body makes in a few frames — unless the heading
+            // was already turning that way: then the tracker only caught
+            // up with a real turn.
+            let turningThatWay = momentumSample.map { sample -> Bool in
+                let span = Float(time - sample.time)
+                guard span > 0.05, let before = jumpSample else { return false }
+                let rate = (before.yaw - sample.yaw) / max(span - Float(options.yawJumpWindow), 0.05)
+                return abs(rate) >= options.yawMomentumRate && (rate > 0) == (rawStep > 0)
+            } ?? false
+            if !turningThatWay {
+                yawHoldStart = time
+                yawHoldFrom = unwrappedRaw
+            }
         }
         if let start = yawHoldStart {
+            let further = unwrappedRaw - yawHoldFrom
             if abs(delta) <= options.yawReturnTolerance {
                 // The tracker came back: the hold is over (the rate limit
                 // below still applies to the remaining difference).
+                yawHoldStart = nil
+            } else if abs(further) >= options.yawContinueAngle, (further > 0) == (Self.wrap(yawHoldFrom - trusted) > 0) {
+                // It kept turning the same way: a real turn after all.
                 yawHoldStart = nil
             } else if time - start > (planted ? options.yawHoldPlanted : options.yawHold) {
                 // Long enough that it must be real: approach it slowly.
@@ -477,6 +513,8 @@ public struct MocapPoseFilter: Sendable {
         trustedYaw = Self.wrap(next)
         let correction = Self.wrap(next - raw)
         isYawHeld = abs(correction) > 1e-3
+        lastMeasuredYaw = raw
+        lastYawCorrection = correction
         guard isYawHeld, let hips = frame.positions[.hips] else { return }
 
         // Turn the whole skeleton about the vertical axis through the hips
@@ -610,7 +648,9 @@ public struct MocapPoseFilter: Sendable {
 
     /// The smoothed frame; untracked frames pass through untouched.
     public mutating func filter(_ frame: MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) -> MocapFrame {
-        guard options.isEnabled, frame.isTracked else { return frame }
+        guard options.isEnabled else { return frame }
+        // A frame the tracker lost is no pose: the last one stands.
+        guard frame.isTracked else { return lastOutput ?? frame }
         let dt = Float(min(max(time - (lastTime ?? time), 0), 0.25))
         lastTime = time
         var frame = guardGlitches(median(frame, window: options.medianWindow), at: time, options: options)
@@ -638,6 +678,7 @@ public struct MocapPoseFilter: Sendable {
             plants.removeAll()
             plantedFeet.removeAll()
         }
+        lastOutput = output
         return output
     }
 }
