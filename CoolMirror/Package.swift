@@ -61,6 +61,8 @@ let package = Package(
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
                 .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
+            // Raw capture recordings the replay tests read by path.
+            exclude: ["Recordings"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

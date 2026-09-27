@@ -514,8 +514,8 @@ final class MocapTests: XCTestCase {
     }
 
     /// A 40° torso jump in one frame is held (the skeleton turned back
-    /// about the hips) and released when the tracker comes back; a real
-    /// turn at 10° per frame is followed.
+    /// about the hips, by its anchor) and released when the tracker comes
+    /// back; a real turn at 6° per frame (180°/s) is followed.
     func testBodyYawJumpsAreHeldAndSlowTurnsFollow() throws {
         var filter = MocapPoseFilter()
         var options = MocapSmoothingOptions()
@@ -537,25 +537,30 @@ final class MocapTests: XCTestCase {
             f.positions = base.mapValues { q.act($0) }
             return f
         }
+        func world(_ f: MocapFrame, _ joint: MocapJoint) throws -> simd_float3 {
+            let anchor = try XCTUnwrap(f.rotations[.root])
+            return try anchor.act(XCTUnwrap(f.positions[joint])) + f.rootPosition
+        }
         for i in 0 ..< 10 {
             _ = filter.filter(turned(0, sequence: UInt32(i + 1)), at: Double(i) / 30, options: options)
         }
         // Tracker jumps 40° in one frame: held, hand stays where it was.
         let jumped = filter.filter(turned(0.7, sequence: 11), at: 10.0 / 30, options: options)
         XCTAssertTrue(filter.isYawHeld)
-        let hand = try XCTUnwrap(jumped.positions[.rightHand])
+        let hand = try world(jumped, .rightHand)
         XCTAssertLessThan(simd_length(hand - base[.rightHand]!), 0.02)
-        // Tracker comes back: released.
+        // Tracker comes back: released within a couple of frames.
         _ = filter.filter(turned(0.05, sequence: 12), at: 11.0 / 30, options: options)
+        _ = filter.filter(turned(0.0, sequence: 13), at: 12.0 / 30, options: options)
         XCTAssertFalse(filter.isYawHeld)
-        // A real turn, 10° per frame, is followed.
+        // A real turn, 6° per frame, is followed.
         var last: MocapFrame?
-        for i in 0 ..< 9 {
-            last = filter.filter(turned(Float(i + 1) * 0.1745, sequence: UInt32(13 + i)), at: (12.0 + Double(i)) / 30, options: options)
+        for i in 0 ..< 15 {
+            last = filter.filter(turned(Float(i + 1) * 0.1047, sequence: UInt32(14 + i)), at: (13.0 + Double(i)) / 30, options: options)
         }
         XCTAssertFalse(filter.isYawHeld)
-        let turnedHand = try XCTUnwrap(last?.positions[.rightHand])
-        let expected = simd_quatf(angle: 9 * 0.1745, axis: simd_float3(0, 1, 0)).act(base[.rightHand]!)
+        let turnedHand = try world(XCTUnwrap(last), .rightHand)
+        let expected = simd_quatf(angle: 15 * 0.1047, axis: simd_float3(0, 1, 0)).act(base[.rightHand]!)
         XCTAssertLessThan(simd_length(turnedHand - expected), 0.02)
     }
 

@@ -38,16 +38,43 @@ public struct MocapSmoothingOptions: Sendable, Equatable {
     /// frames of delay.
     public var medianWindow = 5
 
-    /// Body-yaw guard: the torso heading may turn at most `maxYawRate`
-    /// (rad/s); a larger jump is held as a tracker error (the skeleton is
-    /// turned back about the hips) until the tracked heading returns
-    /// within `yawReturnTolerance` or the jump has lasted `yawHold`
-    /// seconds, when it is taken as real and followed at the rate limit.
+    /// Body-yaw guard, on the hip heading. A step of more than
+    /// `yawJumpThreshold` between two frames is a tracker error (a body
+    /// turns gradually): the skeleton is turned back about the hips and
+    /// the heading held until the tracked one returns within
+    /// `yawReturnTolerance`, or, after `yawHold` seconds, is taken as real
+    /// and approached at `yawAdoptRate` (rad/s) so nothing ever snaps.
+    /// Otherwise the heading follows at up to `maxYawRate` (rad/s). With
+    /// both feet planted a body cannot turn its hips much: a jump is held
+    /// for `yawHoldPlanted` seconds instead (the tracker turning the whole
+    /// skeleton under planted feet is its commonest error), and the
+    /// heading follows through a low-pass of `yawCutoffPlanted` (Hz) at
+    /// no more than `maxYawRatePlanted`, which takes the tracker's wander
+    /// (twenty degrees over two seconds, standing still) out — unless the
+    /// tracked heading stays more than `yawBiasThreshold` away for
+    /// `yawBiasTime` seconds, a slow real turn (a pivot on the heels),
+    /// which is then followed at `maxYawRate`.
     public var steadyYaw = true
-    public var maxYawRate: Float = 7.0 // ~400°/s
-    public var yawJumpThreshold: Float = 0.4 // ~23°
+    public var maxYawRate: Float = 4.0 // ~230°/s
+    public var yawJumpThreshold: Float = 0.3 // ~17°
     public var yawReturnTolerance: Float = 0.17 // ~10°
-    public var yawHold: TimeInterval = 3.0
+    public var yawHold: TimeInterval = 2.0
+    public var yawHoldPlanted: TimeInterval = 4.0
+    public var yawAdoptRate: Float = 0.5 // ~30°/s
+    public var maxYawRatePlanted: Float = 0.35 // ~20°/s
+    public var yawCutoffPlanted: Float = 0.15
+    public var yawBiasThreshold: Float = 0.21 // ~12°
+    public var yawBiasTime: TimeInterval = 0.5
+    /// Feet count as planted (for the yaw guard) while, over
+    /// `plantedWindow`, neither travels faster than `plantedFootSpeed`
+    /// (m/s) in the world, or the leg lengths and the stance width all
+    /// change by less than `plantedShapeTolerance` (m): the tracker
+    /// shifting or turning the whole skeleton moves the feet but not
+    /// the body's shape, a step or a lift does. Lifted again above twice
+    /// the speed with the shape changing.
+    public var plantedFootSpeed: Float = 0.15
+    public var plantedWindow: TimeInterval = 0.2
+    public var plantedShapeTolerance: Float = 0.04
 
     /// Foot planting: a foot slower than `plantSpeed` (m/s) for
     /// `plantDelay` seconds is pinned near where it is (the pin creeps
@@ -164,8 +191,12 @@ public struct MocapPoseFilter: Sendable {
         rejectedFrames = 0
         swappedFrames = 0
         trustedYaw = nil
+        lastRawYaw = nil
         yawHoldStart = nil
+        yawBiasSince = nil
         yawLastTime = nil
+        yawFeetHistory.removeAll()
+        feetPlanted = false
         isYawHeld = false
         recentRaw.removeAll()
     }
@@ -317,24 +348,68 @@ public struct MocapPoseFilter: Sendable {
     // MARK: - Body-yaw guard
 
     private var trustedYaw: Float?
+    private var lastRawYaw: Float?
     private var yawHoldStart: TimeInterval?
+    private var yawBiasSince: TimeInterval?
     private var yawLastTime: TimeInterval?
+    /// Recent world positions of the feet and hips, for the planted test.
+    private var yawFeetHistory: [(time: TimeInterval, feet: [MocapJoint: simd_float3], hips: simd_float3)] = []
     /// Whether the heading is currently held against a tracker jump.
     public private(set) var isYawHeld = false
+    /// Whether both feet were planted at the last update (the heading
+    /// then follows only slowly).
+    public private(set) var feetPlanted = false
 
-    /// Heading of the torso in world space (hip and shoulder axes), or nil
-    /// without both hips.
+    /// Heading of the hips in world space (the hip axis; the shoulders
+    /// swing with the arms and are no measure of where the body faces),
+    /// or nil without both hips.
     static func bodyYaw(of frame: MocapFrame) -> Float? {
         let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
-        func axis(_ left: MocapJoint, _ right: MocapJoint) -> simd_float3? {
-            guard let l = frame.positions[left], let r = frame.positions[right] else { return nil }
-            var d = anchor.act(r - l)
-            d.y = 0
-            return simd_length_squared(d) > 1e-6 ? simd_normalize(d) : nil
+        guard let l = frame.positions[.leftUpLeg], let r = frame.positions[.rightUpLeg] else { return nil }
+        var d = anchor.act(r - l)
+        d.y = 0
+        guard simd_length_squared(d) > 1e-6 else { return nil }
+        d = simd_normalize(d)
+        return atan2(d.z, d.x)
+    }
+
+    /// Both feet planted: see `MocapSmoothingOptions.plantedFootSpeed`.
+    private mutating func updateFeetPlanted(_ frame: MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) {
+        let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+        func world(_ joint: MocapJoint) -> simd_float3? {
+            frame.positions[joint].map { anchor.act($0) + frame.rootPosition }
         }
-        guard let hips = axis(.leftUpLeg, .rightUpLeg) else { return nil }
-        let combined = axis(.leftShoulder, .rightShoulder).map { simd_normalize(hips + $0) } ?? hips
-        return atan2(combined.z, combined.x)
+        guard let hips = world(.hips), let left = world(.leftFoot), let right = world(.rightFoot) else {
+            feetPlanted = false
+            yawFeetHistory.removeAll()
+            return
+        }
+        yawFeetHistory.removeAll { $0.time > time || time - $0.time > options.plantedWindow * 1.5 }
+        let feet: [MocapJoint: simd_float3] = [.leftFoot: left, .rightFoot: right]
+        defer { yawFeetHistory.append((time, feet, hips)) }
+        guard let oldest = yawFeetHistory.first, time - oldest.time >= options.plantedWindow * 0.5 else {
+            feetPlanted = false
+            return
+        }
+        let dt = Float(time - oldest.time)
+        guard let oldLeft = oldest.feet[.leftFoot], let oldRight = oldest.feet[.rightFoot] else {
+            feetPlanted = false
+            return
+        }
+        let speed = max(simd_length(left - oldLeft), simd_length(right - oldRight)) / dt
+        // The body's shape: leg lengths (feet to hips) and stance width.
+        let shapeChange = max(
+            abs(simd_length(left - hips) - simd_length(oldLeft - oldest.hips)),
+            abs(simd_length(right - hips) - simd_length(oldRight - oldest.hips)),
+            abs(simd_length(left - right) - simd_length(oldLeft - oldRight))
+        )
+        let shapeSteady = shapeChange < options.plantedShapeTolerance
+        // Hysteresis: a planted pair stays planted until a foot clearly moves.
+        if speed < options.plantedFootSpeed || shapeSteady {
+            feetPlanted = true
+        } else if speed > 2 * options.plantedFootSpeed {
+            feetPlanted = false
+        }
     }
 
     private static func wrap(_ angle: Float) -> Float {
@@ -348,51 +423,73 @@ public struct MocapPoseFilter: Sendable {
     /// whole skeleton back about the hips by the rejected part.
     private mutating func steadyYaw(_ frame: inout MocapFrame, at time: TimeInterval, options: MocapSmoothingOptions) {
         guard let raw = Self.bodyYaw(of: frame) else { return }
+        updateFeetPlanted(frame, at: time, options: options)
         let dt = Float(min(max(time - (yawLastTime ?? time), 0), 0.25))
         yawLastTime = time
+        let rawStep = lastRawYaw.map { Self.wrap(raw - $0) } ?? 0
+        lastRawYaw = raw
         guard let trusted = trustedYaw else {
             trustedYaw = raw
             return
         }
         let delta = Self.wrap(raw - trusted)
-        let maxStep = options.maxYawRate * max(dt, 1 / 120)
+        let step = max(dt, 1 / 120)
+        let planted = feetPlanted
+        let jumpThreshold = options.yawJumpThreshold
+        let fastStep = options.maxYawRate * step
+        let adoptStep = options.yawAdoptRate * step
         var next = trusted
-        if abs(delta) <= maxStep {
-            next = raw
-            yawHoldStart = nil
-        } else if abs(delta) < options.yawJumpThreshold {
-            // Fast but plausible: follow at the rate limit.
-            next = trusted + (delta > 0 ? maxStep : -maxStep)
-            yawHoldStart = nil
-        } else {
-            // A jump no body makes: hold the heading until the tracker
-            // comes back, or long enough that it must be real.
-            if yawHoldStart == nil {
-                yawHoldStart = time
-            }
-            if let start = yawHoldStart, time - start > options.yawHold {
-                next = trusted + (delta > 0 ? maxStep : -maxStep)
+        if abs(rawStep) >= jumpThreshold, yawHoldStart == nil {
+            // A step no body makes between two frames: hold.
+            yawHoldStart = time
+        }
+        if let start = yawHoldStart {
+            if abs(delta) <= options.yawReturnTolerance {
+                // The tracker came back: the hold is over (the rate limit
+                // below still applies to the remaining difference).
+                yawHoldStart = nil
+            } else if time - start > (planted ? options.yawHoldPlanted : options.yawHold) {
+                // Long enough that it must be real: approach it slowly.
+                next = trusted + (delta > 0 ? adoptStep : -adoptStep)
             }
         }
-        if abs(Self.wrap(raw - next)) <= options.yawReturnTolerance {
-            next = raw
-            yawHoldStart = nil
+        if yawHoldStart == nil {
+            // Following. Planted feet: a low-pass, unless the tracked
+            // heading has sat away for a while (a slow real turn).
+            var wanted = delta
+            var maxStep = fastStep
+            if planted {
+                if abs(delta) > options.yawBiasThreshold {
+                    if yawBiasSince == nil { yawBiasSince = time }
+                } else {
+                    yawBiasSince = nil
+                }
+                let biased = yawBiasSince.map { time - $0 >= options.yawBiasTime } ?? false
+                if !biased {
+                    wanted = delta * lowPassAlpha(cutoff: options.yawCutoffPlanted, dt: step)
+                    maxStep = options.maxYawRatePlanted * step
+                }
+            } else {
+                yawBiasSince = nil
+            }
+            next = trusted + min(max(wanted, -maxStep), maxStep)
         }
         trustedYaw = Self.wrap(next)
         let correction = Self.wrap(next - raw)
         isYawHeld = abs(correction) > 1e-3
         guard isYawHeld, let hips = frame.positions[.hips] else { return }
 
-        // Turn every joint about the vertical axis through the hips.
+        // Turn the whole skeleton about the vertical axis through the hips
+        // by moving its anchor (orientation, and position so the hips stay
+        // put): the joints keep their anchor-space positions, so the
+        // smoothing after this sees no flip at all.
         let anchor = frame.rotations[.root] ?? simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
         let hipsWorld = anchor.act(hips) + frame.rootPosition
         // A positive turn about y decreases the measured yaw, hence the sign.
         let turn = simd_quatf(angle: -correction, axis: simd_float3(0, 1, 0))
-        for (joint, position) in frame.positions {
-            let world = anchor.act(position) + frame.rootPosition
-            let turned = turn.act(world - hipsWorld) + hipsWorld
-            frame.positions[joint] = anchor.inverse.act(turned - frame.rootPosition)
-        }
+        let turnedAnchor = simd_normalize(turn * anchor)
+        frame.rotations[.root] = turnedAnchor
+        frame.rootPosition = hipsWorld - turnedAnchor.act(hips)
     }
 
     // MARK: - Foot planting
