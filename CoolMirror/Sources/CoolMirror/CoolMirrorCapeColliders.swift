@@ -344,6 +344,20 @@ enum CoolMirrorCapeColliders {
         }
     }
 
+    /// The push-out from the last frame carried into this one: a
+    /// displacement that grew is taken at once (the body must not show),
+    /// one that shrank eases back with the time constant `releaseSeconds`
+    /// (gone within a quarter second), so the mesh does not snap when the
+    /// body moves away.
+    static let releaseSeconds: Float = 0.06
+    static func eased(previous: [simd_float3], target: [simd_float3], dt: Float) -> [simd_float3] {
+        guard previous.count == target.count, dt > 0 else { return target }
+        let s = 1 - exp(-dt / releaseSeconds)
+        return zip(previous, target).map { was, now in
+            simd_length_squared(now) >= simd_length_squared(was) ? now : was + (now - was) * s
+        }
+    }
+
     /// The kinematic pose of every fit for the current joints: a hull sits
     /// on its joint, a capsule's centre is on the (shifted) bone with its
     /// axis along it.

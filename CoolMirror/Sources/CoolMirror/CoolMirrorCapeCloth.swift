@@ -75,6 +75,12 @@ struct CoolMirrorCapeCloth {
     var particleNormals: [simd_float3]
     /// Binding of every vertex in `vertexIds`.
     var vertexBindings: [VertexBinding]
+    /// The welded mesh vertex (before any coarsening) of every vertex in
+    /// `vertexIds`, and each welded vertex's neighbours over the mesh
+    /// edges: the mesh's own connectivity, for spreading a per-vertex
+    /// correction over its surroundings.
+    var meshVertexOfVertex: [UInt32]
+    var meshNeighbours: [[UInt32]]
     /// The mesh vertices of the cape slot (sorted).
     var vertexIds: [UInt32]
     var faces: [SIMD3<UInt32>]
@@ -176,6 +182,11 @@ struct CoolMirrorCapeCloth {
         }
         stats.faces = faces.count
         stats.nonManifoldEdges = edgeUse.values.filter { $0 > 2 }.count
+        var neighbours = [[UInt32]](repeating: [], count: particleRest.count)
+        for edge in edgeUse.keys {
+            neighbours[Int(edge.x)].append(edge.y)
+            neighbours[Int(edge.y)].append(edge.x)
+        }
 
         // Skin: start shape and collar pins.
         var inverseMasses = [Float](repeating: 1 / particleMass, count: particleRest.count)
@@ -226,6 +237,8 @@ struct CoolMirrorCapeCloth {
         self.startWorld = startWorld
         particleNormals = particleNormal
         vertexBindings = particleOfVertex.map { VertexBinding(particles: SIMD3(repeating: $0), weights: simd_float3(1, 0, 0), local: .zero, normalSign: 1) }
+        meshVertexOfVertex = particleOfVertex
+        meshNeighbours = neighbours
         self.vertexIds = vertexIds
         self.restJoints = restJoints
         self.particleMass = particleMass
@@ -456,6 +469,36 @@ struct CoolMirrorCapeCloth {
         stats.minEdge = minEdge
         stats.maxEdge = maxEdge
         stats.bindingError = worstError
+    }
+
+    /// Spreads per-vertex displacements over the mesh: a vertex's
+    /// displacement grows to `share` of its largest neighbour's where
+    /// that is larger, never shrinks, over `passes` rings. A lone vertex
+    /// pushed out of the body by centimetres is a spike; with its first
+    /// ring lifted to 70 % and the second to 49 % it is a bump.
+    func spread(_ displacements: inout [simd_float3], passes: Int = 2, share: Float = 0.7) {
+        guard displacements.count == meshVertexOfVertex.count, !meshNeighbours.isEmpty else { return }
+        var perMesh = [simd_float3](repeating: .zero, count: meshNeighbours.count)
+        for (slot, mesh) in meshVertexOfVertex.enumerated() where simd_length_squared(displacements[slot]) > simd_length_squared(perMesh[Int(mesh)]) {
+            perMesh[Int(mesh)] = displacements[slot]
+        }
+        for _ in 0 ..< passes {
+            var next = perMesh
+            for (mesh, neighbours) in meshNeighbours.enumerated() where !neighbours.isEmpty {
+                var largest = simd_float3.zero
+                for n in neighbours where simd_length_squared(perMesh[Int(n)]) > simd_length_squared(largest) {
+                    largest = perMesh[Int(n)]
+                }
+                largest *= share
+                if simd_length_squared(largest) > simd_length_squared(perMesh[mesh]) {
+                    next[mesh] = largest
+                }
+            }
+            perMesh = next
+        }
+        for (slot, mesh) in meshVertexOfVertex.enumerated() {
+            displacements[slot] = perMesh[Int(mesh)]
+        }
     }
 
     /// The mesh vertices (positions and unit normals, in the particles'

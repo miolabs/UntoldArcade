@@ -67,6 +67,8 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
     private var jointIndexByName: [String: Int] = [:]
     private var built = false
     private var scratchPositions: [SIMD3<Float>] = []
+    /// Last frame's mesh push-out per piece (render thread only).
+    private var pushDisplacements: [[simd_float3]] = []
     private var lastReport: TimeInterval = 0
 
     var isEnabled: Bool {
@@ -98,7 +100,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
 
     /// Render-thread step: builds the cloth once the skeleton is live, then
     /// moves the collar and the colliders and writes the cloth back.
-    func update(deltaTime _: Float) {
+    func update(deltaTime: Float) {
         let (enabled, characterId, rig, backend, built) = lock.withLock {
             (self.enabled, self.characterId, self.rig, self.backend, self.built)
         }
@@ -146,7 +148,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
         }
 
         // Read the cloth back into the mesh (model space).
-        for piece in pieces {
+        for (pieceIndex, piece) in pieces.enumerated() {
             var world = lock.withLock { scratchPositions }
             let read = backend.readSoftBodyVertices(piece.body, into: &world)
             guard read == piece.cloth.particleRest.count else { continue }
@@ -163,6 +165,18 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             let deformed = piece.cloth.deformedVertices(particles: world)
             var pushed = deformed.positions
             CoolMirrorCapeColliders.pushOut(&pushed, fits: colliders.map(\.fit), joints: frames)
+            // The push-out as a smooth, eased bump rather than a spike.
+            var displacements = zip(pushed, deformed.positions).map { $0 - $1 }
+            piece.cloth.spread(&displacements)
+            let previous = lock.withLock { pieceIndex < pushDisplacements.count ? pushDisplacements[pieceIndex] : [] }
+            displacements = CoolMirrorCapeColliders.eased(previous: previous, target: displacements, dt: deltaTime)
+            lock.withLock {
+                while pushDisplacements.count <= pieceIndex {
+                    pushDisplacements.append([])
+                }
+                pushDisplacements[pieceIndex] = displacements
+            }
+            pushed = zip(deformed.positions, displacements).map { $0 + $1 }
             let positions = pushed.map { p -> simd_float3 in
                 let m = worldToModel * simd_float4(p, 1)
                 return simd_float3(m.x, m.y, m.z)
@@ -325,6 +339,7 @@ final class CoolMirrorJoltCape: @unchecked Sendable {
             let state = (self.backend, self.pieces, self.colliders)
             self.pieces = []
             self.colliders = []
+            pushDisplacements = []
             built = false
             return state
         }

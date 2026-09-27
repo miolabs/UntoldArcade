@@ -427,6 +427,50 @@ final class CapeClothTests: XCTestCase {
         XCTAssertLessThan(moved, rest.count / 10)
     }
 
+    /// The push-out's spike becomes a bump: a lone displaced vertex lifts
+    /// its ring to most of its displacement and the next ring less, and a
+    /// displacement that shrinks eases back over a few frames while one
+    /// that grows is taken at once.
+    func testPushOutSpreadsIntoABumpAndEasesBack() throws {
+        guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
+        let cloth = cape.cloth
+        let slot = cloth.vertexIds.count / 2
+        let mesh = Int(cloth.meshVertexOfVertex[slot])
+        let ring = Set(cloth.meshNeighbours[mesh])
+        XCTAssertGreaterThan(ring.count, 2)
+        var displacements = [simd_float3](repeating: .zero, count: cloth.vertexIds.count)
+        displacements[slot] = simd_float3(0, 0.03, 0)
+        cloth.spread(&displacements)
+        XCTAssertEqual(displacements[slot].y, 0.03, accuracy: 1e-6, "the pushed vertex stays on the surface")
+        var ringSlots = 0
+        var secondRing = 0
+        for (other, meshOther) in cloth.meshVertexOfVertex.enumerated() where other != slot {
+            if ring.contains(meshOther) {
+                ringSlots += 1
+                XCTAssertGreaterThan(displacements[other].y, 0.03 * 0.7 - 1e-6, "a neighbour is lifted to 70 %")
+            } else if cloth.meshNeighbours[Int(meshOther)].contains(where: { ring.contains($0) }) {
+                secondRing += 1
+                XCTAssertGreaterThan(displacements[other].y, 0, "the second ring is lifted a little")
+            } else {
+                XCTAssertEqual(displacements[other].y, 0, "beyond two rings nothing moves")
+            }
+        }
+        XCTAssertGreaterThan(ringSlots, 0)
+        XCTAssertGreaterThan(secondRing, 0)
+        // Easing: growth is immediate, release takes releaseSeconds.
+        let grown = CoolMirrorCapeColliders.eased(previous: [.zero], target: [simd_float3(0, 0.02, 0)], dt: 1 / 90)
+        XCTAssertEqual(grown[0].y, 0.02, accuracy: 1e-6)
+        var released = [simd_float3(0, 0.02, 0)]
+        for _ in 0 ..< 5 {
+            released = CoolMirrorCapeColliders.eased(previous: released, target: [.zero], dt: 1 / 90)
+        }
+        XCTAssertGreaterThan(released[0].y, 0.005, "still easing after 55 ms")
+        for _ in 0 ..< 20 {
+            released = CoolMirrorCapeColliders.eased(previous: released, target: [.zero], dt: 1 / 90)
+        }
+        XCTAssertLessThan(released[0].y, 1e-3, "gone after 280 ms")
+    }
+
     /// A collider may hold collar pins: Jolt leaves a pinned vertex where
     /// it is put, and the cloth around it stays as calm as when every
     /// pin is clear of the body (this is what lets the shoulders and the
