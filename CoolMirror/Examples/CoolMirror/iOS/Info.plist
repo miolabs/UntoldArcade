@@ -30,6 +30,10 @@
 	<string>Finds the CoolMirror visionOS app on your local network to stream your body pose to it.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arkit</string>

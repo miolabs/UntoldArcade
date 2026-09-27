@@ -57,6 +57,12 @@ struct ContentView: View {
                         .toggleStyle(.button)
                     Toggle("Auto scale", isOn: $capture.automaticScale)
                         .toggleStyle(.button)
+                    Toggle("Record", isOn: $capture.isRecording)
+                        .toggleStyle(.button)
+                }
+                if !capture.recordingReport.isEmpty {
+                    Text(capture.recordingReport)
+                        .font(.footnote)
                 }
                 Text("\(capture.status) · \(capture.videoFormat)")
                     .font(.footnote)

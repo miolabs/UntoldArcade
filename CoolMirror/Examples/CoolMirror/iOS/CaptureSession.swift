@@ -34,6 +34,14 @@ final class CaptureSession: NSObject {
     /// last second: a pose change that re-sizes or re-places the whole
     /// skeleton shows here, not in the joints.
     private(set) var scaleReport = ""
+    /// Raw frames written to a file in Documents (visible in the Files
+    /// app, to share) while recording, for replaying on a Mac.
+    private(set) var recording: MocapRecordingWriter?
+    private(set) var recordingReport = ""
+    var isRecording: Bool {
+        get { recording != nil }
+        set { newValue ? startRecording() : stopRecording() }
+    }
 
     /// Skeleton overlay: joints projected into the preview view, in points.
     var showSkeleton = true
@@ -120,6 +128,7 @@ final class CaptureSession: NSObject {
     }
 
     func stop() {
+        stopRecording()
         statusTimer?.invalidate()
         statusTimer = nil
         sender.stop()
@@ -145,6 +154,27 @@ final class CaptureSession: NSObject {
         } else {
             scaleReport = ""
         }
+    }
+
+    func startRecording() {
+        guard recording == nil else { return }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let url = documents.appendingPathComponent("mocap-\(formatter.string(from: Date())).\(MocapRecording.fileExtension)")
+        do {
+            recording = try MocapRecordingWriter(url: url)
+            recordingReport = "Recording to \(url.lastPathComponent)"
+        } catch {
+            recordingReport = "Could not record: \(error.localizedDescription)"
+        }
+    }
+
+    func stopRecording() {
+        guard let recording else { return }
+        recording.close()
+        recordingReport = "Saved \(recording.frameCount) frames to \(recording.url.lastPathComponent) (Files app → On My iPhone → CoolMirror Capture)"
+        self.recording = nil
     }
 
     func resetCounters() {
@@ -264,6 +294,12 @@ extension CaptureSession: ARSessionDelegate {
         Task { @MainActor in
             self.isTracked = body.isTracked
             self.trackedJointCount = frame.trackedJoints.count
+            if let recording = self.recording {
+                recording.append(frame)
+                if recording.frameCount % 30 == 0 {
+                    self.recordingReport = "Recording \(recording.frameCount) frames to \(recording.url.lastPathComponent)"
+                }
+            }
             if let camera = self.session.currentFrame?.camera {
                 let eye = camera.transform.columns.3
                 self.scaleSamples.append((timestamp, scale, simd_length(frame.rootPosition - simd_float3(eye.x, eye.y, eye.z))))
