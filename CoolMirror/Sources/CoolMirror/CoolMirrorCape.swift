@@ -31,6 +31,13 @@ struct CoolMirrorCapeRig {
     var rightThigh: String
     var leftCalf: String
     var rightCalf: String
+    var spine: String
+    var leftHand: String
+    var rightHand: String
+    var leftFoot: String
+    var rightFoot: String
+    var leftToe: String
+    var rightToe: String
 
     static func rig(for character: CoolMirrorCharacter) -> CoolMirrorCapeRig? {
         guard character == .batman, let p = CoolMirrorRigProfile.profile(for: character) else { return nil }
@@ -40,7 +47,11 @@ struct CoolMirrorCapeRig {
             leftUpperArm: p.upperArm, rightUpperArm: p.mirror(p.upperArm),
             leftForearm: p.forearm, rightForearm: p.mirror(p.forearm),
             leftThigh: p.thigh, rightThigh: p.mirror(p.thigh),
-            leftCalf: p.calf, rightCalf: p.mirror(p.calf)
+            leftCalf: p.calf, rightCalf: p.mirror(p.calf),
+            spine: p.spine,
+            leftHand: p.hand, rightHand: p.mirror(p.hand),
+            leftFoot: p.foot, rightFoot: p.mirror(p.foot),
+            leftToe: p.toe, rightToe: p.mirror(p.toe)
         )
     }
 }

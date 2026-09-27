@@ -25,6 +25,8 @@ final class CapeClothTests: XCTestCase {
         var cloth: CoolMirrorCapeCloth
         var restJoints: [CoolMirrorCapeCloth.JointFrame]
         var jointIndex: (String) -> Int?
+        /// The body colliders fitted to the asset's other primitives.
+        var fits: [CoolMirrorCapeColliders.Fit]
     }
 
     /// The Batman entity's display transform in the mirror: scaled to a
@@ -74,8 +76,12 @@ final class CapeClothTests: XCTestCase {
         let rig = try XCTUnwrap(CoolMirrorCapeRig.rig(for: .batman))
         let collarJoints = Set([rig.neck, rig.upperChest, rig.leftClavicle, rig.rightClavicle, rig.head].compactMap(jointIndex))
 
+        var cloth: CoolMirrorCapeCloth?
+        var bodyPositions: [simd_float3] = []
+        var bodyJointIndices: [simd_ushort4] = []
+        var bodyJointWeights: [simd_float4] = []
         for node in asset.nodes {
-            for primitive in node.primitives where (primitive.material?.name ?? "").localizedCaseInsensitiveContains("cape") || primitive.name.localizedCaseInsensitiveContains("cape") {
+            for primitive in node.primitives {
                 let geometry = try primitive.decodedGeometry()
                 let map = primitive.skin?.skinToSkeletonMap ?? []
                 let jointIndices = geometry.jointIndices.map { ids -> simd_ushort4 in
@@ -89,17 +95,92 @@ final class CapeClothTests: XCTestCase {
                     let m = toWorld * simd_float4(p, 1)
                     return simd_float3(m.x, m.y, m.z)
                 }
-                let cloth = CoolMirrorCapeCloth(
-                    positions: positions, normals: geometry.normals, triangles: geometry.triangles,
-                    jointIndices: jointIndices, jointWeights: geometry.jointWeights,
-                    restJoints: restJoints, joints: restJoints, collarJoints: collarJoints, collarWeight: 0.45,
-                    particleMass: 0.02
-                )
-                return Cape(cloth: cloth, restJoints: restJoints, jointIndex: jointIndex)
+                let isCape = (primitive.material?.name ?? "").localizedCaseInsensitiveContains("cape") || primitive.name.localizedCaseInsensitiveContains("cape")
+                if isCape, cloth == nil {
+                    cloth = CoolMirrorCapeCloth(
+                        positions: positions, normals: geometry.normals, triangles: geometry.triangles,
+                        jointIndices: jointIndices, jointWeights: geometry.jointWeights,
+                        restJoints: restJoints, joints: restJoints, collarJoints: collarJoints, collarWeight: 0.45,
+                        particleMass: 0.02
+                    )
+                } else if !isCape, jointIndices.count == positions.count, geometry.jointWeights.count == positions.count {
+                    bodyPositions.append(contentsOf: positions)
+                    bodyJointIndices.append(contentsOf: jointIndices)
+                    bodyJointWeights.append(contentsOf: geometry.jointWeights)
+                }
             }
         }
-        XCTFail("no cape primitive in the asset")
-        return nil
+        guard let cloth else {
+            XCTFail("no cape primitive in the asset")
+            return nil
+        }
+        var jointIndexByName: [String: Int] = [:]
+        for (index, path) in skeleton.jointPaths.enumerated() {
+            jointIndexByName[path] = index
+            if let name = path.split(separator: "/").last {
+                jointIndexByName[String(name)] = index
+            }
+        }
+        // Like the app: fitted to the side the cape hangs on, kept clear
+        // of the (coarse) cape's pins.
+        var coarse = cloth
+        coarse.coarsen(spacing: CoolMirrorJoltCape.particleSpacing)
+        let pelvis = try XCTUnwrap(jointIndex(rig.pelvis))
+        var back = coarse.particleRest.reduce(simd_float3.zero, +) / Float(coarse.particleRest.count) - restJoints[pelvis].position
+        back.y = 0
+        var fits = CoolMirrorCapeColliders.fit(
+            CoolMirrorCapeColliders.segments(rig), excluding: CoolMirrorCapeColliders.excludedJoints(rig),
+            positions: bodyPositions, jointIndices: bodyJointIndices, jointWeights: bodyJointWeights,
+            restJoints: restJoints, parents: skeleton.parentIndices, jointIndexByName: jointIndexByName, back: simd_normalize(back)
+        )
+        CoolMirrorCapeColliders.keep(&fits, awayFrom: coarse.pinned.map { coarse.particleRest[Int($0)] }, joints: restJoints)
+        return Cape(cloth: cloth, restJoints: restJoints, jointIndex: jointIndex, fits: fits)
+    }
+
+    func testCollidersFitTheBody() throws {
+        guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
+        let rig = try XCTUnwrap(CoolMirrorCapeRig.rig(for: .batman))
+        let segments = CoolMirrorCapeColliders.segments(rig)
+        XCTAssertEqual(cape.fits.count, segments.count, "every segment's joints are in the skeleton")
+        for fit in cape.fits {
+            print(String(format: "cape colliders: %@ → %@ radius %.0f mm, shift %.0f mm, %d vertices", fit.from, fit.to, fit.radius * 1000, simd_length(fit.shift) * 1000, fit.vertices))
+            XCTAssertGreaterThanOrEqual(fit.vertices, 24, "\(fit.from): the mesh must size it, not the fallback")
+            XCTAssertTrue(CoolMirrorCapeColliders.radiusRange.contains(fit.radius))
+        }
+        // The belt and the hips are wider than the guessed 9 cm that let
+        // the cape through the back of the belt.
+        // (The Batman body's back extents, measured: belt 150 mm, back
+        // 142 mm, thigh 132 mm, calf 123 mm, heel 113 mm behind the ankle.)
+        let pelvis = try XCTUnwrap(cape.fits.first { $0.from == rig.pelvis })
+        XCTAssertGreaterThan(pelvis.radius, 0.12, "the belt")
+        XCTAssertLessThan(pelvis.radius, 0.18, "the belt's sides must not size its back")
+        let spine = try XCTUnwrap(cape.fits.first { $0.from == rig.spine })
+        XCTAssertGreaterThan(spine.radius, 0.12, "the back")
+        XCTAssertLessThan(spine.radius, 0.17, "the head, arms and collar must not fall into the chest")
+        let calf = try XCTUnwrap(cape.fits.first { $0.from == rig.leftCalf })
+        XCTAssertGreaterThan(calf.radius, 0.09, "the calf the cape brushes")
+        let foot = try XCTUnwrap(cape.fits.first { $0.from == rig.leftFoot })
+        XCTAssertGreaterThan(foot.radius, 0.09, "the heel behind the ankle")
+        let upperArm = try XCTUnwrap(cape.fits.first { $0.from == rig.leftUpperArm })
+        XCTAssertGreaterThan(upperArm.radius, 0.035, "the arm must keep a body after the pin clearance")
+        // The capsules are the body: at rest, no collar pin sits inside
+        // one (a pinned particle inside a collider explodes the cloth),
+        // and the feet have their own.
+        let capsules = CoolMirrorCapeColliders.capsules(cape.fits, joints: cape.restJoints)
+        XCTAssertEqual(capsules.count, cape.fits.count)
+        var cloth = cape.cloth
+        cloth.coarsen(spacing: CoolMirrorJoltCape.particleSpacing)
+        for (slot, particle) in cloth.pinned.enumerated() {
+            let p = cloth.particleRest[Int(particle)]
+            for (fit, capsule) in zip(cape.fits, capsules) {
+                let axis = capsule.end - capsule.start
+                let t = simd_clamp(simd_dot(p - capsule.start, axis) / max(simd_length_squared(axis), 1e-8), 0, 1)
+                let distance = simd_length(p - (capsule.start + axis * t))
+                XCTAssertGreaterThan(distance, capsule.radius, "pin \(slot) is inside the \(fit.from) collider")
+            }
+        }
+        XCTAssertNotNil(cape.fits.first { $0.from == rig.leftFoot })
+        XCTAssertNotNil(cape.fits.first { $0.from == rig.rightCalf })
     }
 
     func testCapeTopologyIsCleanCloth() throws {
@@ -152,11 +233,7 @@ final class CapeClothTests: XCTestCase {
     /// hold (the cape ships with distance bends).
     func testDistanceBendsHoldWhereDihedralBendsDiverge() throws {
         guard let cape = try loadCape() else { throw XCTSkip("Batman asset not present") }
-        let rig = try XCTUnwrap(CoolMirrorCapeRig.rig(for: .batman))
-        let spine = try XCTUnwrap(CoolMirrorRigProfile.profile(for: .batman)).spine
-        _ = spine
-        let all = CoolMirrorJoltCape.bones(rig)
-        _ = all
+        // No colliders: the bend type alone decides.
         // (name, sway amplitude m, turn amplitude rad, compliance, iterations, damping, bend)
         let variants: [(String, Float, Float, Float, UInt32, Float, JoltSoftBodyDescriptor.BendType)] = [
             ("sway+turn, dihedral, 8 it", 0.08, 0.26, 2e-6, 8, 0.6, .dihedral),
@@ -167,66 +244,27 @@ final class CapeClothTests: XCTestCase {
         ]
         var farthestByName: [String: Float] = [:]
         for (name, swayAmplitude, turnAmplitude, compliance, iterations, damping, bendType) in variants {
-            let bones: [(from: String, to: String, radius: Float)] = []
-            let setTargets = false
-            let sway = true
             var settings = JoltWorldSettings()
             settings.workerThreads = 0
             settings.collisionSteps = name.contains("2 substeps") ? 2 : 3
             let backend = JoltPhysicsBackend(settings: settings)
             backend.configure(PhysicsWorldConfiguration())
-            var cloth = cape.cloth
-            let capsules: [CoolMirrorCapeCloth.Capsule] = bones.compactMap { bone in
-                guard let a = cape.jointIndex(bone.from), let b = cape.jointIndex(bone.to) else { return nil }
-                return .init(start: cape.restJoints[a].position, end: cape.restJoints[b].position, radius: bone.radius)
-            }
-            cloth.pushStartOut(of: capsules, margin: 0.012)
-            // How many pinned particles sit inside a collider?
-            var pinnedInside = 0
-            for pin in cloth.pinned {
-                let p = cloth.startWorld[Int(pin)]
-                for c in capsules {
-                    let axis = c.end - c.start
-                    let t = simd_clamp(simd_dot(p - c.start, axis) / max(simd_length_squared(axis), 1e-8), 0, 1)
-                    if simd_length(p - (c.start + axis * t)) < c.radius { pinnedInside += 1; break }
-                }
-            }
+            let cloth = cape.cloth
             var descriptor = JoltSoftBodyDescriptor(vertices: cloth.startWorld, inverseMasses: cloth.inverseMasses, faces: cloth.faces, compliance: compliance, shearCompliance: compliance * 10, bendCompliance: name.hasSuffix("4e-3") ? 4e-3 : 4e-4)
             descriptor.iterations = iterations
             descriptor.linearDamping = damping
             descriptor.bendType = bendType
             descriptor.vertexRadius = 0.008
             let body = try XCTUnwrap(backend.addSoftBody(descriptor))
-            func capsulePose(_ a: simd_float3, _ b: simd_float3) -> (simd_float3, simd_quatf, Float) {
-                let axis = b - a
-                let length = simd_length(axis)
-                let direction = axis / max(length, 1e-5)
-                let up = simd_float3(0, 1, 0)
-                let rotation = simd_dot(up, direction) < -0.9999 ? simd_quatf(angle: .pi, axis: simd_float3(1, 0, 0)) : simd_normalize(simd_quatf(from: up, to: direction))
-                return ((a + b) * 0.5, rotation, length)
-            }
-            var bodies: [(JoltKinematicBody, Int, Int)] = []
-            for bone in bones {
-                guard let a = cape.jointIndex(bone.from), let b = cape.jointIndex(bone.to) else { continue }
-                let (position, rotation, length) = capsulePose(cape.restJoints[a].position, cape.restJoints[b].position)
-                let capsule = try XCTUnwrap(backend.addKinematicCapsule(radius: bone.radius, height: length + 2 * bone.radius, position: position, rotation: rotation))
-                bodies.append((capsule, a, b))
-            }
             var positions: [SIMD3<Float>] = []
             var farthest: Float = 0
             var firstFrameFar: Float = 0
             for frame in 0 ..< 30 {
                 let t = Float(frame) / 30
-                let swayOffset = sway ? simd_float3(swayAmplitude * sin(t * 2.5), 0, 0) : .zero
-                let turn = sway ? simd_quatf(angle: turnAmplitude * sin(t * 1.7), axis: simd_float3(0, 1, 0)) : simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
+                let swayOffset = simd_float3(swayAmplitude * sin(t * 2.5), 0, 0)
+                let turn = simd_quatf(angle: turnAmplitude * sin(t * 1.7), axis: simd_float3(0, 1, 0))
                 let joints = cape.restJoints.map { joint -> CoolMirrorCapeCloth.JointFrame in
                     .init(position: Self.origin + turn.act(joint.position - Self.origin) + swayOffset, rotation: simd_normalize(turn * joint.rotation))
-                }
-                if setTargets {
-                    for (capsule, a, b) in bodies {
-                        let (position, rotation, _) = capsulePose(joints[a].position, joints[b].position)
-                        backend.setKinematicTarget(capsule, position: position, rotation: rotation)
-                    }
                 }
                 backend.setSoftBodyVertices(body, indices: cloth.pinned, worldPositions: cloth.pinTargets(joints: joints))
                 backend.step(deltaTime: 1.0 / 30.0)
@@ -235,7 +273,7 @@ final class CapeClothTests: XCTestCase {
                 if frame == 0 { firstFrameFar = f }
                 farthest = max(farthest, f)
             }
-            print("cape collider \(name): pinned inside \(pinnedInside), farthest after frame 1 \(firstFrameFar) m, over 1 s \(farthest) m")
+            print("cape bends \(name): farthest after frame 1 \(firstFrameFar) m, over 1 s \(farthest) m")
             farthestByName[name] = farthest
         }
         XCTAssertLessThan(try XCTUnwrap(farthestByName["sway+turn, distance, 8 it"]), 1.8)
@@ -340,15 +378,10 @@ final class CapeClothTests: XCTestCase {
         settings.collisionSteps = 2
         let backend = JoltPhysicsBackend(settings: settings)
         backend.configure(PhysicsWorldConfiguration())
-        let rig = try XCTUnwrap(CoolMirrorCapeRig.rig(for: .batman))
-        let bones = CoolMirrorJoltCape.bones(rig)
         // Like the app: the cloth starts outside the colliders, with a speed ceiling.
         var cloth = cape.cloth
         cloth.coarsen(spacing: CoolMirrorJoltCape.particleSpacing)
-        cloth.pushStartOut(of: bones.compactMap { bone in
-            guard let a = cape.jointIndex(bone.from), let b = cape.jointIndex(bone.to) else { return nil }
-            return .init(start: cape.restJoints[a].position, end: cape.restJoints[b].position, radius: bone.radius)
-        }, margin: 0.012)
+        cloth.pushStartOut(of: CoolMirrorCapeColliders.capsules(cape.fits, joints: cape.restJoints), margin: 0.012)
         var descriptor = JoltSoftBodyDescriptor(
             vertices: cloth.startWorld, inverseMasses: cloth.inverseMasses, faces: cloth.faces,
             compliance: 2e-6, shearCompliance: 2e-5, bendCompliance: 4e-4
@@ -367,14 +400,13 @@ final class CapeClothTests: XCTestCase {
             let rotation = simd_dot(up, direction) < -0.9999 ? simd_quatf(angle: .pi, axis: simd_float3(1, 0, 0)) : simd_normalize(simd_quatf(from: up, to: direction))
             return ((a + b) * 0.5, rotation, length)
         }
-        var colliders: [(JoltKinematicBody, Int, Int, Float)] = []
-        for (from, to, radius) in bones {
-            guard let a = cape.jointIndex(from), let b = cape.jointIndex(to) else { continue }
-            let (position, rotation, length) = pose(cape.restJoints[a].position, cape.restJoints[b].position)
-            let capsule = try XCTUnwrap(backend.addKinematicCapsule(radius: radius, height: max(length + 2 * radius, 2 * radius + 0.01), position: position, rotation: rotation))
-            colliders.append((capsule, a, b, radius))
+        var colliders: [JoltKinematicBody] = []
+        for capsule in CoolMirrorCapeColliders.capsules(cape.fits, joints: cape.restJoints) {
+            let (position, rotation, length) = pose(capsule.start, capsule.end)
+            let body = try XCTUnwrap(backend.addKinematicCapsule(radius: capsule.radius, height: max(length + 2 * capsule.radius, 2 * capsule.radius + 0.01), position: position, rotation: rotation))
+            colliders.append(body)
         }
-        XCTAssertEqual(colliders.count, bones.count, "every bone found")
+        XCTAssertEqual(colliders.count, cape.fits.count, "every segment found")
 
         var positions: [SIMD3<Float>] = []
         var farthestSeen: Float = 0
@@ -388,9 +420,9 @@ final class CapeClothTests: XCTestCase {
                 let relative = joint.position - Self.origin
                 return .init(position: Self.origin + turn.act(relative) + sway, rotation: simd_normalize(turn * joint.rotation))
             }
-            for (capsule, a, b, _) in colliders {
-                let (position, rotation, _) = pose(joints[a].position, joints[b].position)
-                backend.setKinematicTarget(capsule, position: position, rotation: rotation)
+            for (body, capsule) in zip(colliders, CoolMirrorCapeColliders.capsules(cape.fits, joints: joints)) {
+                let (position, rotation, _) = pose(capsule.start, capsule.end)
+                backend.setKinematicTarget(body, position: position, rotation: rotation)
             }
             backend.setSoftBodyVertices(body, indices: cloth.pinned, worldPositions: cloth.pinTargets(joints: joints))
             let stepStart = Date()
@@ -406,8 +438,8 @@ final class CapeClothTests: XCTestCase {
             if nonFinite > 0 || farthest > 2.5 { break }
         }
         print(String(format: "cape cloth: with colliders and a swaying collar, farthest particle over 5 s = %.2f m, %d particles, %.2f ms per step", farthestSeen, cloth.particleRest.count, stepTime / 150 * 1000))
-        for (capsule, _, _, _) in colliders {
-            backend.removeKinematicBody(capsule)
+        for body in colliders {
+            backend.removeKinematicBody(body)
         }
         backend.removeSoftBody(body)
     }
