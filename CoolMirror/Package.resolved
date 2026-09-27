@@ -1,0 +1,15 @@
+{
+  "originHash" : "6c91af501a6bd0ac32357ed4ac35b05652134cf2808eed852dcb01bbf0a46818",
+  "pins" : [
+    {
+      "identity" : "untoldengine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/miolabs/UntoldEngine.git",
+      "state" : {
+        "branch" : "feature/psd_runtime",
+        "revision" : "ebf86de302667a6398664dbb347c9fbed4d01584"
+      }
+    }
+  ],
+  "version" : 3
+}

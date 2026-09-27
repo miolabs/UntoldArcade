@@ -57,6 +57,17 @@ A Spider-Man web-shooter demo — strike the classic web-shooter pose (thumb, in
 open CoolWeb/Examples/CoolWebVisionOS/CoolWebVisionOS.xcodeproj
 ```
 
+### 🪞 CoolMirror — *visionOS*
+
+<!-- MEDIA: docs/media/CoolMirror/demo.gif -->
+<!-- ![CoolMirror demo](docs/media/CoolMirror/demo.gif) -->
+
+A *virtual mirror* for the engine's character-deformation stack: a rigged, high-poly character stands in front of you flexing, and you switch the skinning live — legacy vertex shader, compute LBS, dual-quaternion, or Direct Delta Mush — freeze the pose to compare, drag morph sliders, or let pose drivers fire the biceps automatically as the elbows curl. Later phases add XPBD muscles, an ML deformer, and live iPhone body tracking so the character mirrors your own movements.
+
+```bash
+open CoolMirror/Examples/CoolMirrorVisionOS/CoolMirrorVisionOS.xcodeproj
+```
+
 ### 🏛️ ArchvizViewer — *visionOS*
 
 ![ArchvizViewer demo](docs/media/ArchvizViewer/demo.gif)
