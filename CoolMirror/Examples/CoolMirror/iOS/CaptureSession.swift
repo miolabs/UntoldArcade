@@ -30,6 +30,10 @@ final class CaptureSession: NSObject {
     private(set) var jitterReport = ""
     /// Flip count since the last reset, to read after stepping out of view.
     private(set) var flipTotals = ""
+    /// ARKit's body scale and distance, with how much each moved in the
+    /// last second: a pose change that re-sizes or re-places the whole
+    /// skeleton shows here, not in the joints.
+    private(set) var scaleReport = ""
 
     /// Skeleton overlay: joints projected into the preview view, in points.
     var showSkeleton = true
@@ -39,6 +43,14 @@ final class CaptureSession: NSObject {
     /// lower rate gives each frame more exposure).
     var preferredFrameRate = 60 {
         didSet { if preferredFrameRate != oldValue, isRunning { start() } }
+    }
+
+    /// Whether ARKit re-estimates the person's size as it tracks. Off, the
+    /// skeleton keeps ARKit's default proportions and only its placement
+    /// follows the picture; on, a change of pose (arms up) can re-size and
+    /// re-place the whole skeleton at once, which the mirror shows as a jump.
+    var automaticScale = false {
+        didSet { if automaticScale != oldValue, isRunning { start() } }
     }
 
     private var isRunning = false
@@ -68,6 +80,8 @@ final class CaptureSession: NSObject {
     private var sentTimes: [TimeInterval] = []
     private var statusTimer: Timer?
     private var jitter = MocapJitterMeter()
+    /// (time, ARKit scale factor, body distance from the camera) over the last second.
+    private var scaleSamples: [(TimeInterval, Float, Float)] = []
 
     override init() {
         super.init()
@@ -80,7 +94,7 @@ final class CaptureSession: NSObject {
             return
         }
         let configuration = ARBodyTrackingConfiguration()
-        configuration.automaticSkeletonScaleEstimationEnabled = true
+        configuration.automaticSkeletonScaleEstimationEnabled = automaticScale
         // Body tracking only: nothing else competes for the frame (the
         // frame semantics stay at their default, .bodyDetection, which the
         // 3D tracker relies on).
@@ -121,6 +135,16 @@ final class CaptureSession: NSObject {
         status = sender.status
         jitterReport = jitter.report
         flipTotals = jitter.totals
+        scaleSamples.removeAll { now - $0.0 > 1 }
+        if let last = scaleSamples.last {
+            let scales = scaleSamples.map(\.1), distances = scaleSamples.map(\.2)
+            scaleReport = String(
+                format: "ARKit body scale %.3f (moved %.3f in 1 s) · distance %.2f m (moved %.2f m in 1 s)",
+                last.1, (scales.max() ?? 0) - (scales.min() ?? 0), last.2, (distances.max() ?? 0) - (distances.min() ?? 0)
+            )
+        } else {
+            scaleReport = ""
+        }
     }
 
     func resetCounters() {
@@ -236,9 +260,14 @@ extension CaptureSession: ARSessionDelegate {
         let timestamp = Date().timeIntervalSinceReferenceDate
         var frame = Self.frame(from: body, timestamp: timestamp)
         previewLock.withLock { sharedBody = body }
+        let scale = Float(body.estimatedScaleFactor)
         Task { @MainActor in
             self.isTracked = body.isTracked
             self.trackedJointCount = frame.trackedJoints.count
+            if let camera = self.session.currentFrame?.camera {
+                let eye = camera.transform.columns.3
+                self.scaleSamples.append((timestamp, scale, simd_length(frame.rootPosition - simd_float3(eye.x, eye.y, eye.z))))
+            }
             self.sender.send(frame)
             self.sentTimes.append(frame.timestamp)
             // The sender assigns sequence numbers; the meter only needs

@@ -55,9 +55,15 @@ struct ContentView: View {
                     .frame(width: 160)
                     Toggle("Skeleton", isOn: $capture.showSkeleton)
                         .toggleStyle(.button)
+                    Toggle("Auto scale", isOn: $capture.automaticScale)
+                        .toggleStyle(.button)
                 }
                 Text("\(capture.status) · \(capture.videoFormat)")
                     .font(.footnote)
+                if !capture.scaleReport.isEmpty {
+                    Text(capture.scaleReport)
+                        .font(.footnote.monospacedDigit())
+                }
                 Text("\(capture.framesPerSecond) frames/s sent · camera frames \(capture.cameraFrames) · pictures sent \(capture.previewsSent), failed \(capture.previewFailures) · \(capture.jitterReport)")
                     .font(.footnote.monospacedDigit())
                 HStack {
