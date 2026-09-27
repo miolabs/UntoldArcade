@@ -147,6 +147,8 @@ final class MocapTests: XCTestCase {
         }
         XCTAssertLessThan(maxJump, 0.01, "the step never snaps the root")
         XCTAssertEqual(anchor.anchor, .rightFoot, "the foot that stayed down carried the step")
+
+
         // Lifting the left foot straight up and holding it there, while the
         // stance foot jitters by 6 mm a frame (the tracker's noise): still
         // on the right, and never pulled down to the raised foot.
@@ -159,6 +161,44 @@ final class MocapTests: XCTestCase {
         }
         XCTAssertEqual(anchor.anchor, .rightFoot, "a lifted foot is not the anchor")
         XCTAssertGreaterThan(lowestCorrection, -0.02, "the character never sinks toward the raised foot")
+
+        // A walk: six alternate steps, each landing foot tracked 4 cm too
+        // high for its whole stance. The body neither jumps at a handover
+        // nor ratchets upward: its floor stays within a few centimetres of
+        // the true one.
+        var highest: Float = -1, lowestSeen: Float = 1
+        var walkJump: Float = 0
+        var walkFrame = 320
+        trueLeft = simd_float3(-0.1, 0.08, 0)
+        trueRight = simd_float3(0.1, 0.08, 0)
+        for stepIndex in 0 ..< 6 {
+            let swing: MocapJoint = stepIndex % 2 == 0 ? .leftFoot : .rightFoot
+            for frame in 0 ..< 30 {
+                let s = Float(frame) / 29
+                let advance = -0.3 * Float(stepIndex) - 0.3 * s
+                // Lands 4 cm high and stays there while it is the stance foot.
+                let lift = simd_float3(0, 0.06 * sin(.pi * s) + 0.04 * s, 0)
+                if swing == .leftFoot {
+                    trueLeft = simd_float3(-0.1, 0.08, advance) + lift
+                } else {
+                    trueRight = simd_float3(0.1, 0.08, advance) + lift
+                }
+                trueRoot = simd_float3(0, 0.9, -0.3 * Float(stepIndex) - 0.15 * s)
+                let before = correction
+                step(walkFrame, jitter: .zero)
+                walkFrame += 1
+                if frame > 0 {
+                    walkJump = max(walkJump, abs(correction.y - before.y))
+                }
+                // The body's floor: the root's rest height below the placed root.
+                let bodyFloor = trueRoot.y + correction.y - 0.9
+                highest = max(highest, bodyFloor)
+                lowestSeen = min(lowestSeen, bodyFloor)
+            }
+        }
+        XCTAssertLessThan(walkJump, 0.008, "a handover never snaps the body vertically")
+        XCTAssertLessThan(highest, 0.04, "the body does not climb a ramp")
+        XCTAssertGreaterThan(lowestSeen, -0.045, "brought down by the landing error, no more")
 
         // Root motion off: the anchor holds the floor only.
         anchor = MocapFootAnchor()

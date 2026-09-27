@@ -34,6 +34,11 @@ public struct MocapFootAnchor: Sendable {
     /// Fraction of the remaining error closed per update (the rig pose read
     /// each frame already carries the previous correction).
     public var gain: Float = 0.8
+    /// A foot that takes the anchor is held where it is and brought to
+    /// the floor at this speed (m/s): the tracked feet land at different
+    /// heights, and snapping each new anchor to the floor at once moved
+    /// the whole body up and down by the difference at every step.
+    public var settleSpeed: Float = 0.25
 
     /// The root translation correction, in the space of the positions given.
     public private(set) var correction = simd_float3.zero
@@ -94,11 +99,16 @@ public struct MocapFootAnchor: Sendable {
             if let foot = candidates.min(by: { rig[$0]!.y < rig[$1]!.y }) {
                 anchor = foot
                 anchorPosition = rig[foot]!
-                anchorPosition.y = floor[foot]!
             }
         }
 
+        let dt = Float(history.count >= 2 ? time - history[history.count - 2].time : 0)
         if let anchor, let position = rig[anchor] {
+            // Settle the anchor onto the floor.
+            if let height = floor[anchor] {
+                let toFloor = height - anchorPosition.y
+                anchorPosition.y += min(max(toFloor, -settleSpeed * dt), settleSpeed * dt)
+            }
             // The rig ankle hangs from the tracked root: this frame it will
             // move by whatever the captured ankle moved since the frame the
             // rig pose was composed from. Cancel that in full, and close a
@@ -116,15 +126,18 @@ public struct MocapFootAnchor: Sendable {
             }
             correction += gain * error - travel
         } else {
-            // In the air: only keep the lowest foot from sinking below the floor.
+            // No foot planted (a step in progress, a hop): bring the lowest
+            // foot to the floor, both ways (lifting only would let every
+            // step ratchet the body upward) and no faster than a settling
+            // anchor, so a foot that lands high does not snap the body.
             var lowest: Float?
             for (foot, position) in rig {
                 guard let height = floor[foot] else { continue }
                 let rise = position.y - height
                 lowest = min(lowest ?? rise, rise)
             }
-            if let lowest, lowest < 0 {
-                correction.y -= gain * lowest
+            if let lowest {
+                correction.y -= min(max(gain * lowest, -settleSpeed * dt), settleSpeed * dt)
             }
         }
         return correction
@@ -137,6 +150,7 @@ public struct MocapFootAnchor: Sendable {
         fresh.liftWindow = liftWindow
         fresh.floorTolerance = floorTolerance
         fresh.gain = gain
+        fresh.settleSpeed = settleSpeed
         self = fresh
     }
 }
