@@ -375,7 +375,9 @@ final class CapeClothTests: XCTestCase {
         let rig = try XCTUnwrap(CoolMirrorCapeRig.rig(for: .batman))
         for radius: Float in [0.12] {
             var fits = cape.fits
-            for i in fits.indices where fits[i].endFraction < 1 || fits[i].from == rig.leftClavicle || fits[i].from == rig.rightClavicle { fits[i].radius = radius }
+            for i in fits.indices where fits[i].endFraction < 1 || fits[i].from == rig.leftClavicle || fits[i].from == rig.rightClavicle {
+                fits[i].radius = radius
+            }
             var settings = JoltWorldSettings()
             settings.workerThreads = 0
             settings.collisionSteps = 2
@@ -412,7 +414,7 @@ final class CapeClothTests: XCTestCase {
             var colliders: [JoltKinematicBody] = []
             for capsule in restCapsules {
                 let (position, rotation, length) = pose(capsule.start, capsule.end)
-                colliders.append(try XCTUnwrap(backend.addKinematicCapsule(radius: capsule.radius, height: max(length + 2 * capsule.radius, 2 * capsule.radius + 0.01), position: position, rotation: rotation)))
+                try colliders.append(XCTUnwrap(backend.addKinematicCapsule(radius: capsule.radius, height: max(length + 2 * capsule.radius, 2 * capsule.radius + 0.01), position: position, rotation: rotation)))
             }
             backend.setEnvironmentBoxes([CoolMirrorJoltCape.floor(under: Self.origin)])
             var positions: [SIMD3<Float>] = []
@@ -443,7 +445,9 @@ final class CapeClothTests: XCTestCase {
             XCTAssertGreaterThan(pinsInside, 10, "the scenario must actually hold pins")
             XCTAssertLessThan(farthestSeen, 1.7)
             XCTAssertLessThan(maxSpeed, 2.5, "no more than the swaying collar itself moves the cloth")
-            for b in colliders { backend.removeKinematicBody(b) }
+            for b in colliders {
+                backend.removeKinematicBody(b)
+            }
             backend.removeSoftBody(body)
         }
     }
