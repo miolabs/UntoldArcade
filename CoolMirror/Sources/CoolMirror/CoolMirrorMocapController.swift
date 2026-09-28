@@ -77,6 +77,9 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// under the Vision Pro, and its position says where the head is.
     private var headPoseProvider: (@Sendable () -> simd_float4x4?)?
     private var headReference: simd_quatf?
+    /// The wearer's hands as the headset sees them, read every update
+    /// while recording.
+    private var handProvider: (@Sendable () -> [MocapHandSide: MocapHandSample])?
     /// The character is held by its head (the headset's position) and its
     /// planted feet (see `MocapBodyAnchor`).
     private var headAnchor = true
@@ -144,8 +147,9 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     // MARK: - Recording
 
-    /// Starts writing every frame the phone sends to `url` (see
-    /// `MocapRecording`); a recording already running is closed first.
+    /// Starts writing every frame the phone sends to `url`, and what the
+    /// headset knows at every frame it renders (see `MocapRecording`); a
+    /// recording already running is closed first.
     func startRecording(to url: URL) throws {
         stopRecording()
         let writer = try MocapRecordingWriter(url: url)
@@ -160,14 +164,33 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     }
 
     @discardableResult
-    func stopRecording() -> (url: URL, frames: Int)? {
+    func stopRecording() -> (url: URL, frames: Int, headsetSamples: Int)? {
         receiver.frameSink = nil
         guard let writer = lock.withLock({ () -> MocapRecordingWriter? in
             defer { recording = nil }
             return recording
         }) else { return nil }
         writer.close()
-        return (writer.url, writer.frameCount)
+        return (writer.url, writer.frameCount, writer.headsetSampleCount)
+    }
+
+    /// The headset's head and hands at this rendered frame, into the
+    /// recording: whether or not a body is in view, and whatever the
+    /// mirror makes of it.
+    private func recordHeadset(at time: TimeInterval) {
+        let (writer, head, hands) = lock.withLock { (recording, headPoseProvider, handProvider) }
+        guard let writer else { return }
+        writer.append(MocapHeadsetSample(
+            time: time,
+            frameTime: receiver.latestFrame?.timestamp,
+            head: head?().map { MocapPose($0) },
+            hands: hands?() ?? [:]
+        ))
+    }
+
+    /// Supplies the wearer's hands as the headset sees them.
+    func setHandProvider(_ provider: (@Sendable () -> [MocapHandSide: MocapHandSample])?) {
+        lock.withLock { handProvider = provider }
     }
 
     var recordingFrameCount: Int? {
@@ -458,14 +481,15 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// and retargets it onto the character. Runs every render tick, so the
     /// filter also interpolates between the phone's frames.
     func update() {
+        let now = Date()
+        let time = now.timeIntervalSinceReferenceDate
+        recordHeadset(at: time)
         let (enabled, characterId, retargeter, origin) = lock.withLock {
             (self.enabled, self.characterId, self.retargeter, characterOrigin)
         }
         guard enabled, let characterId, let retargeter else { return }
         guard let frame = receiver.latestFrame else { return }
 
-        let now = Date()
-        let time = now.timeIntervalSinceReferenceDate
         let isNew = lock.withLock { () -> Bool in
             guard frame.sequence != lastSequence else { return false }
             lastSequence = frame.sequence

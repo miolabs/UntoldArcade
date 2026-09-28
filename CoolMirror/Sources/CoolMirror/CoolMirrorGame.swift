@@ -283,6 +283,13 @@ public final class CoolMirrorGame {
         mocap.setHeadPoseProvider(provider)
     }
 
+    /// Supplies the wearer's hands as the headset sees them (see
+    /// `CoolMirrorHandSession`); they go into the recordings. The
+    /// provider runs on the render thread every frame.
+    public func setMocapHandProvider(_ provider: (@Sendable () -> [MocapHandSide: MocapHandSample])?) {
+        mocap.setHandProvider(provider)
+    }
+
     /// Whether an iPhone is connected to the mirror.
     public func mocapIsConnected() -> Bool {
         mocap.isConnected
@@ -304,7 +311,8 @@ public final class CoolMirrorGame {
         mocap.preview
     }
 
-    /// Records the raw frames the phone sends into a new file in the app's
+    /// Records the raw frames the phone sends, and the headset's head and
+    /// hands at every frame it renders, into a new file in the app's
     /// Documents folder (shown in the Files app), for replaying on a Mac.
     /// Returns the file.
     public func startMocapRecording() -> URL? {
@@ -326,9 +334,10 @@ public final class CoolMirrorGame {
         mocap.markRecording(label)
     }
 
-    /// Closes the recording; the file and how many frames it holds.
+    /// Closes the recording; the file, how many frames of the phone's it
+    /// holds and how many samples of the headset's.
     @discardableResult
-    public func stopMocapRecording() -> (url: URL, frames: Int)? {
+    public func stopMocapRecording() -> (url: URL, frames: Int, headsetSamples: Int)? {
         mocap.stopRecording()
     }
 
