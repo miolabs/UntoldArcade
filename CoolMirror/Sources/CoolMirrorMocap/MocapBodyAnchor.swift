@@ -234,9 +234,16 @@ public struct MocapHeadTrack: Sendable {
         reference != nil
     }
 
-    private func joint(_ pose: simd_float4x4) -> simd_float3 {
+    /// The joint the head turns on, in the headset's world.
+    public func joint(_ pose: simd_float4x4) -> simd_float3 {
         let p = pose * simd_float4(pivot, 1)
         return simd_float3(p.x, p.y, p.z)
+    }
+
+    /// A stretch between two points of the headset's world (a hand seen
+    /// from the head, say), in the calibrated body's axes.
+    public func inBodyAxes(_ vector: simd_float3) -> simd_float3 {
+        simd_float3(simd_dot(vector, left), vector.y, simd_dot(vector, forward))
     }
 
     /// Takes the headset's pose (world) as the wearer standing at the
@@ -257,8 +264,7 @@ public struct MocapHeadTrack: Sendable {
     /// body's axes. Nil until calibrated.
     public func displacement(of pose: simd_float4x4) -> simd_float3? {
         guard let reference else { return nil }
-        let moved = joint(pose) - reference
-        return simd_float3(simd_dot(moved, left), moved.y, simd_dot(moved, forward))
+        return inBodyAxes(joint(pose) - reference)
     }
 
     public mutating func reset() {

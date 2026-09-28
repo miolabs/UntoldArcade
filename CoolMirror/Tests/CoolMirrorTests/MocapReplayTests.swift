@@ -287,13 +287,65 @@ final class MocapReplayTests: XCTestCase {
         var tilt: [Float] = []
     }
 
-    /// Replays a stretch with a character of the wearer's own proportions.
-    /// The headset is simulated: the head is where the phone saw it,
-    /// averaged over a second either side (what the phone gets wrong about
-    /// the body's depth wanders much faster than a standing head moves).
+    /// One update of the mirror: the phone's frame it showed, filtered,
+    /// and the headset's pose then (nil in the sessions recorded before
+    /// the headset was).
+    private struct Tick {
+        var time: TimeInterval
+        var frame: MocapFrame
+        var headset: simd_float4x4?
+    }
+
+    /// A stretch of a session recorded before the headset was. The head
+    /// is simulated: where the phone saw it, averaged over a second either
+    /// side (what the phone gets wrong about the body's depth wanders much
+    /// faster than a standing head moves).
     private func anchored(_ session: Replay, _ stretch: Range<Int>) throws -> Anchored {
-        let frames = session.filtered[stretch].filter(\.isTracked)
+        try anchored(session.filtered[stretch].filter(\.isTracked).map { Tick(time: $0.timestamp, frame: $0) })
+    }
+
+    /// A session recorded with the headset, as the mirror ran it: one
+    /// update per frame the headset rendered, showing the newest frame of
+    /// the phone's, filtered at the headset's clock.
+    private func ticks(_ name: String) throws -> (ticks: [Tick], frameTimes: [Double], markers: [MocapRecording.Marker])? {
+        let url = Self.recording(name)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let all = try MocapRecording.readAll(url: url)
+        var frames: [Double: MocapFrame] = [:]
+        for frame in all.frames {
+            frames[frame.timestamp] = frame
+        }
+        var filter = MocapPoseFilter()
+        let options = Self.options
+        var ticks: [Tick] = []
+        var times: [Double] = []
+        for sample in all.headset {
+            guard let time = sample.frameTime, let frame = frames[time], let head = sample.head else { continue }
+            let filtered = filter.filter(frame, at: sample.time, options: options)
+            guard filtered.isTracked else { continue }
+            ticks.append(Tick(time: sample.time, frame: filtered, headset: head.matrix))
+            times.append(time)
+        }
+        return (ticks, times, all.markers.sorted { $0.time < $1.time })
+    }
+
+    /// The updates of a marked stretch.
+    private func stretch(_ label: String, of session: (ticks: [Tick], frameTimes: [Double], markers: [MocapRecording.Marker])) -> [Tick] {
+        guard let index = session.markers.firstIndex(where: { $0.label.hasPrefix(label) }) else { return [] }
+        let start = session.markers[index].time
+        let end = index + 1 < session.markers.count ? session.markers[index + 1].time : .infinity
+        return zip(session.ticks, session.frameTimes).filter { $0.1 >= start && $0.1 < end }.map(\.0)
+    }
+
+    /// Replays updates with a character of the wearer's own proportions,
+    /// calibrated on the first.
+    private func anchored(_ ticks: [Tick]) throws -> Anchored {
+        let frames = ticks.map(\.frame)
         let calibration = try XCTUnwrap(frames.first)
+        var track = MocapHeadTrack()
+        if let headset = ticks.first?.headset {
+            track.calibrate(with: headset)
+        }
         var names: [MocapJoint: String] = [:]
         for joint in MocapJoint.allCases {
             names[joint] = "\(joint)"
@@ -320,9 +372,12 @@ final class MocapReplayTests: XCTestCase {
             var head: simd_float3
             var feet: [MocapJoint: simd_float3]
             var root: simd_float3
+            /// How far the headset says the head went, in the rig's space.
+            var moved: simd_float3?
         }
         var samples: [Sample] = []
-        for frame in frames {
+        for tick in ticks {
+            let frame = tick.frame
             let result = try XCTUnwrap(retargeter.retarget(frame))
             var deltas: [MocapJoint: simd_quatf] = [:]
             for (joint, name) in names {
@@ -335,7 +390,11 @@ final class MocapReplayTests: XCTestCase {
             for foot in MocapFootAnchor.feet {
                 feet[foot] = result.capturedJointPositions[driven(foot)]
             }
-            samples.append(Sample(time: frame.timestamp, pose: pose, head: head, feet: feet, root: result.rootTranslationDelta))
+            var moved = tick.headset.flatMap { track.displacement(of: $0) }
+            if MocapRetargetOptions().mirror {
+                moved?.x *= -1
+            }
+            samples.append(Sample(time: tick.time, pose: pose, head: head, feet: feet, root: result.rootTranslationDelta, moved: moved))
         }
 
         func flat(_ v: simd_float3) -> simd_float2 {
@@ -347,9 +406,19 @@ final class MocapReplayTests: XCTestCase {
         var shown: [MocapJoint: simd_float3] = [:]
         var first: [MocapJoint: (position: simd_float3, time: TimeInterval)] = [:]
         var held: (foot: MocapJoint, position: simd_float3)?
+        var headRest: simd_float3?
         for sample in samples {
-            let near = samples.filter { abs($0.time - sample.time) <= 1 }
-            let head = near.reduce(simd_float3.zero) { $0 + $1.head } / Float(near.count)
+            let head: simd_float3
+            if let moved = sample.moved {
+                // As the mirror does: the first update continues where
+                // the phone's root is.
+                let rest = headRest ?? restRoot + sample.pose.head + simd_float3(sample.root.x, 0, sample.root.z) - simd_float3(moved.x, 0, moved.z)
+                headRest = rest
+                head = rest + moved
+            } else {
+                let near = samples.filter { abs($0.time - sample.time) <= 1 }
+                head = near.reduce(simd_float3.zero) { $0 + $1.head } / Float(near.count)
+            }
             var floor: [MocapJoint: Float] = [:]
             for joint in MocapFootAnchor.feet {
                 floor[joint] = rest[joint]?.y
@@ -454,6 +523,137 @@ final class MocapReplayTests: XCTestCase {
                 XCTAssertLessThan(try XCTUnwrap(run.tilt.max()), 10, note)
                 XCTAssertLessThan(run.pinSpeed, 0.0101, note)
             }
+        }
+    }
+
+    // MARK: - With the headset
+
+    /// Session of 2026-09-28, the first recorded with the headset: ten
+    /// guided steps, the phone's frames and the headset's head and hands
+    /// at every frame it rendered.
+    private static let withHeadset = "session-20260928-201728"
+
+    func testTheRecordingHoldsWhatTheHeadsetSaw() throws {
+        let url = Self.recording(Self.withHeadset)
+        guard FileManager.default.fileExists(atPath: url.path) else { throw XCTSkip("recording not present") }
+        let all = try MocapRecording.readAll(url: url)
+        XCTAssertEqual(all.frames.count, 3937)
+        XCTAssertEqual(all.markers.count, 10)
+        XCTAssertEqual(all.headset.count, 6606)
+        XCTAssertTrue(all.headset.allSatisfy { $0.head != nil })
+        // A sample every hundredth of a second, each naming a frame of the phone's.
+        let steps = zip(all.headset.dropFirst(), all.headset).map { $0.time - $1.time }
+        XCTAssertLessThan(try XCTUnwrap(steps.max()), 0.015)
+        let times = Set(all.frames.map(\.timestamp))
+        // (The first few name the frame that was showing when the
+        // recording started, which is not in it.)
+        let first = try XCTUnwrap(all.frames.first).timestamp
+        XCTAssertTrue(all.headset.compactMap(\.frameTime).allSatisfy { times.contains($0) || $0 < first })
+        XCTAssertLessThan(all.headset.filter { $0.frameTime.map { $0 < first } ?? true }.count, 10)
+
+        // Arms down, looking ahead: the headset sees both hands, 70 cm
+        // below it. Behind the back it loses them, and keeps them
+        // in the samples where it last saw them.
+        let markers = all.markers.sorted { $0.time < $1.time }
+        let last = MocapRecording.headset(all.headset, from: markers[9].time, to: .infinity)
+        XCTAssertTrue(last.allSatisfy { $0.hands[.left]?.isTracked == true && $0.hands[.right]?.isTracked == true })
+        for sample in last {
+            let head = try XCTUnwrap(sample.head), wrist = try XCTUnwrap(sample.hands[.left]).wrist
+            XCTAssertEqual(wrist.position.y - head.position.y, -0.72, accuracy: 0.05)
+        }
+        let behind = MocapRecording.headset(all.headset, from: markers[7].time + 3, to: markers[8].time)
+        XCTAssertGreaterThan(behind.count, 400)
+        XCTAssertTrue(behind.allSatisfy { sample in
+            MocapHandSide.allCases.allSatisfy { sample.hands[$0].map { !$0.isTracked } ?? false }
+        })
+    }
+
+    /// The head's travel as the headset has it and as the phone has it,
+    /// both in the calibrated body's axes: along `axis` over a stretch,
+    /// how they correlate and the phone's travel per metre of the
+    /// headset's.
+    private func agreement(_ ticks: [Tick], calibration: Tick, axis: KeyPath<simd_float3, Float>) throws -> (correlation: Float, slope: Float, headset: Float, phone: Float) {
+        let retargeter = MocapRetargeter(mapping: MocapRigMapping(joints: [:], rootJoint: "hips"))
+        retargeter.options.mirror = false
+        retargeter.calibrate(with: calibration.frame)
+        var track = MocapHeadTrack()
+        try track.calibrate(with: XCTUnwrap(calibration.headset))
+        var headset: [Float] = [], phone: [Float] = []
+        for tick in ticks {
+            guard let pose = tick.headset, let moved = track.displacement(of: pose),
+                  let head = retargeter.retarget(tick.frame)?.capturedJointPositions[.head]
+            else { continue }
+            headset.append(moved[keyPath: axis])
+            phone.append(head[keyPath: axis])
+        }
+        let meanHeadset = headset.reduce(0, +) / Float(headset.count), meanPhone = phone.reduce(0, +) / Float(phone.count)
+        var both: Float = 0, a: Float = 0, b: Float = 0
+        for (h, p) in zip(headset, phone) {
+            both += (h - meanHeadset) * (p - meanPhone)
+            a += (h - meanHeadset) * (h - meanHeadset)
+            b += (p - meanPhone) * (p - meanPhone)
+        }
+        return try (
+            both / max((a * b).squareRoot(), 1e-9), both / max(a, 1e-9),
+            XCTUnwrap(headset.max()) - XCTUnwrap(headset.min()), XCTUnwrap(phone.max()) - XCTUnwrap(phone.min())
+        )
+    }
+
+    /// Where the wearer really moves, the two agree on the way: shifting
+    /// the weight to lift a foot goes sideways for both, stepping toward
+    /// the phone goes forward for both. How far, the phone overstates.
+    /// Where the wearer stands still, the headset says so (the head stays
+    /// within 3 cm) and the phone has it wander three times that.
+    func testTheHeadsetAndThePhoneAgreeOnWhichWayTheHeadGoes() throws {
+        guard let session = try ticks(Self.withHeadset) else { throw XCTSkip("recording not present") }
+        let calibration = try XCTUnwrap(stretch("Stand still, arms down", of: session).first)
+
+        let sideways = try agreement(stretch("Put it down", of: session), calibration: calibration, axis: \.x)
+        XCTAssertGreaterThan(sideways.headset, 0.3)
+        XCTAssertGreaterThan(sideways.correlation, 0.95)
+        XCTAssertEqual(sideways.slope, 1.2, accuracy: 0.3)
+
+        let forward = try agreement(stretch("Take two steps", of: session), calibration: calibration, axis: \.z)
+        XCTAssertGreaterThan(forward.headset, 0.6)
+        XCTAssertGreaterThan(forward.correlation, 0.9)
+        XCTAssertEqual(forward.slope, 1.1, accuracy: 0.3)
+
+        let still = try agreement(stretch("Stand still, arms down", of: session), calibration: calibration, axis: \.z)
+        XCTAssertLessThan(still.headset, 0.03)
+        XCTAssertGreaterThan(still.phone, 0.05)
+        // Raising the arms moves the head 4 cm; the phone makes it 45.
+        let arms = try agreement(stretch("Raise both arms", of: session), calibration: calibration, axis: \.z)
+        XCTAssertLessThan(arms.headset, 0.05)
+        XCTAssertGreaterThan(arms.phone, 0.4)
+    }
+
+    /// Standing still with the head the headset recorded: it stays within
+    /// 3 cm, where the planted foot alone would have let it swing 15. The
+    /// hips keep a wander of the phone's, in depth (it cannot tell how
+    /// far the hips are from it), the legs and the torso make up the rest.
+    func testStandingStillWithTheHeadsetsHead() throws {
+        guard let session = try ticks(Self.withHeadset) else { throw XCTSkip("recording not present") }
+        let run = try anchored(stretch("Stand still, arms down", of: session))
+        XCTAssertGreaterThan(run.hips.count, 700)
+        XCTAssertLessThan(Self.span(run.head), 0.03)
+        XCTAssertGreaterThan(Self.span(run.footHeldHead), 0.12)
+        XCTAssertLessThan(Self.span(run.hips), 0.1)
+        let sideways = zip(run.hips, run.head).map { $0.x - $1.x }
+        XCTAssertLessThan(try XCTUnwrap(sideways.max()) - XCTUnwrap(sideways.min()), 0.04)
+        let reach = run.legReach.sorted()
+        XCTAssertLessThan(reach[reach.count * 95 / 100], 0.08)
+        XCTAssertLessThan(try XCTUnwrap(run.tilt.max()), 5)
+        XCTAssertLessThan(run.pinSpeed, 0.0101)
+    }
+
+    func testTheCorrectionsStayThoseOfALeanWithTheHeadsetsHead() throws {
+        guard let session = try ticks(Self.withHeadset) else { throw XCTSkip("recording not present") }
+        for marker in session.markers.dropFirst().dropLast() {
+            let run = try anchored(stretch(marker.label, of: session))
+            XCTAssertGreaterThan(run.hips.count, 400, marker.label)
+            XCTAssertLessThan(try XCTUnwrap(run.legReach.max()), 0.2, marker.label)
+            XCTAssertLessThan(try XCTUnwrap(run.tilt.max()), 12, marker.label)
+            XCTAssertLessThan(run.pinSpeed, 0.0101, marker.label)
         }
     }
 }
