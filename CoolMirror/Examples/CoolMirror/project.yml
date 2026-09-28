@@ -9,12 +9,12 @@ packages:
     path: ../..
   UntoldEngine:
     url: https://github.com/miolabs/UntoldEngine.git
-    branch: feature/mirror_mocap
+    branch: feature/mirror_reach_ik
   CoolCloth:
     path: ../../../CoolCloth
   UntoldJoltPhysics:
     url: https://github.com/miolabs/UntoldJoltPhysics.git
-    branch: feature/soft_body_cloth
+    branch: feature/mirror_reach_ik
 
 settings:
   base:

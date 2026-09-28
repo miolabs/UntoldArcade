@@ -493,7 +493,7 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/miolabs/UntoldJoltPhysics.git";
 			requirement = {
-				branch = feature/soft_body_cloth;
+				branch = feature/mirror_reach_ik;
 				kind = branch;
 			};
 		};
@@ -501,7 +501,7 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/miolabs/UntoldEngine.git";
 			requirement = {
-				branch = feature/mirror_mocap;
+				branch = feature/mirror_reach_ik;
 				kind = branch;
 			};
 		};
