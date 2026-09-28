@@ -48,10 +48,14 @@ public struct MocapArmReach: Sendable {
     ///   keyed by the rig joint they drive (the mirror already resolved).
     /// - rig: the rig's joints in the pose it has, same space and keys.
     /// - rigArmLength: upper arm plus forearm of the rig, by shoulder joint.
+    /// - hands: where a hand is when another source knows better than
+    ///   `captured` (the headset, see `MocapHandLadder`), by hand joint,
+    ///   same space; the arm's length is still the captured arm's.
     public func targets(
         captured: [MocapJoint: simd_float3],
         rig: [MocapJoint: simd_float3],
-        rigArmLength: [MocapJoint: Float]
+        rigArmLength: [MocapJoint: Float],
+        hands: [MocapJoint: simd_float3] = [:]
     ) -> [MocapJoint: simd_float3] {
         // One scale for both arms: the rig's reach over the captured one.
         var capturedLength: Float = 0
@@ -68,7 +72,7 @@ public struct MocapArmReach: Sendable {
 
         var result: [MocapJoint: simd_float3] = [:]
         for arm in Self.arms {
-            guard let hand = captured[arm.hand], captured[arm.shoulder] != nil, captured[arm.elbow] != nil,
+            guard let hand = hands[arm.hand] ?? captured[arm.hand], captured[arm.shoulder] != nil, captured[arm.elbow] != nil,
                   let rigShoulder = rig[arm.shoulder]
             else { continue }
             var sum = simd_float3(0, 0, 0)

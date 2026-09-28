@@ -236,12 +236,15 @@ public final class CoolMirrorGame {
     /// copied bone directions take them. With `headAnchor` the head is
     /// where the headset is and the planted feet stay where they landed;
     /// the phone gives the pose between them, not where the body is.
+    /// With `headsetHands` the hands are where the headset sees them,
+    /// the phone's taking over while it does not.
     public func setMocapOptions(
         mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
         bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false,
-        armReach: Bool = true, headAnchor: Bool = true
+        armReach: Bool = true, headAnchor: Bool = true, headsetHands: Bool = true
     ) {
         mocap.isGroundLockEnabled = groundLock
+        mocap.isHeadsetHandsEnabled = headsetHands
         mocap.isHeadAnchorEnabled = headAnchor
         mocap.isArmReachEnabled = armReach
         var options = MocapRetargetOptions()
@@ -284,8 +287,9 @@ public final class CoolMirrorGame {
     }
 
     /// Supplies the wearer's hands as the headset sees them (see
-    /// `CoolMirrorHandSession`); they go into the recordings. The
-    /// provider runs on the render thread every frame.
+    /// `CoolMirrorHandSession`): the character's hands follow them, and
+    /// they go into the recordings. The provider runs on the render
+    /// thread every frame.
     public func setMocapHandProvider(_ provider: (@Sendable () -> [MocapHandSide: MocapHandSample])?) {
         mocap.setHandProvider(provider)
     }

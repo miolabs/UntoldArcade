@@ -77,9 +77,12 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// under the Vision Pro, and its position says where the head is.
     private var headPoseProvider: (@Sendable () -> simd_float4x4?)?
     private var headReference: simd_quatf?
-    /// The wearer's hands as the headset sees them, read every update
-    /// while recording.
+    /// The wearer's hands as the headset sees them, read every update.
     private var handProvider: (@Sendable () -> [MocapHandSide: MocapHandSample])?
+    /// The hands follow the headset while it sees them and the phone
+    /// while it does not (see `MocapHandLadder`).
+    private var headsetHands = true
+    private var handLadder = MocapHandLadder()
     /// The character is held by its head (the headset's position) and its
     /// planted feet (see `MocapBodyAnchor`).
     private var headAnchor = true
@@ -248,6 +251,25 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         set { lock.withLock { armReach = newValue } }
     }
 
+    /// The hands are where the headset sees them; the phone's take over
+    /// while it does not (see `MocapHandLadder`). Needs the arm reach,
+    /// the headset's pose and its hands.
+    var isHeadsetHandsEnabled: Bool {
+        get { lock.withLock { headsetHands } }
+        set {
+            lock.withLock {
+                guard headsetHands != newValue else { return }
+                headsetHands = newValue
+                handLadder.reset()
+            }
+        }
+    }
+
+    /// Which device each of the character's hands follows, for the panel.
+    var handSources: [MocapJoint: MocapHandLadder.Source] {
+        lock.withLock { headsetHands ? handLadder.sources : [:] }
+    }
+
     /// Joints the phone must actually see before the pose is trustworthy
     /// and calibration makes sense.
     static let framingJoints: [MocapJoint] = [.head, .leftHand, .rightHand, .leftFoot, .rightFoot]
@@ -339,7 +361,16 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             + ", pictures \(counts.pictures) of \(counts.chunks) chunks"
         if driving {
             let held = (lock.withLock { retargeter?.isYawHeld } ?? false) ? " · heading held: the tracker turned the body faster than a body can turn" : ""
-            return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport)\(held) (stand still to read the tracker noise)"
+            let sources = handSources
+            func name(_ joint: MocapJoint) -> String {
+                switch sources[joint] {
+                case .headset, .bridge: "headset"
+                case .phone: "phone"
+                case nil: "-"
+                }
+            }
+            let hands = sources.isEmpty ? "" : " · hands: left \(name(.leftHand)), right \(name(.rightHand))"
+            return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen)\(hands). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport)\(held) (stand still to read the tracker noise)"
         }
         return "Body tracked (\(receiver.framesPerSecond) Hz), waiting for the next frame…"
     }
@@ -550,7 +581,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             rootTranslationDelta: result.rootTranslationDelta,
             weight: retargeter.options.weight
         )
-        reach(result, pins: pins, characterId: characterId, origin: origin, options: retargeter.options)
+        reach(result, pins: pins, devicePose: devicePose, characterId: characterId, origin: origin, time: time, options: retargeter.options)
         lock.withLock { driving = true }
 
         if lock.withLock({ debugOverlay }) {
@@ -725,8 +756,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// shoulder they change only as fast as the torso turns. The legs:
     /// the spot each held foot stands on (see `MocapBodyAnchor`).
     private func reach(
-        _ result: MocapRetargetResult, pins: [MocapJoint: MocapBodyAnchor.Pin], characterId: EntityID, origin: simd_float3,
-        options: MocapRetargetOptions
+        _ result: MocapRetargetResult, pins: [MocapJoint: MocapBodyAnchor.Pin], devicePose: simd_float4x4?,
+        characterId: EntityID, origin: simd_float3, time: TimeInterval, options: MocapRetargetOptions
     ) {
         let (hands, arms, legs, lengths, configured, mapping) = lock.withLock {
             (armReach, armChains, legChains, armLengths, reachChainsConfigured, retargeter?.mapping)
@@ -750,7 +781,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 for joint in MocapArmReach.joints {
                     captured[joint] = result.capturedJointPositions[options.mirror ? joint.mirrored : joint]
                 }
-                offsets = armReachSolver.targets(captured: captured, rig: rig, rigArmLength: lengths)
+                let hands = handsFromTheHeadset(captured: captured, devicePose: devicePose, time: time, options: options)
+                offsets = armReachSolver.targets(captured: captured, rig: rig, rigArmLength: lengths, hands: hands)
             }
             for arm in MocapArmReach.arms {
                 targets.append(offsets[arm.shoulder].map { ReachIKChainTarget(position: $0, space: .shoulder) })
@@ -777,6 +809,40 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             targetHalflife: Self.reachTargetHalflife
         )
         lock.withLock { reaching = true }
+    }
+
+    /// The character's hands by the device that knows them best (see
+    /// `MocapHandLadder`), in the space of `captured` and by the rig's
+    /// hand; empty without the headset, which leaves them to the phone.
+    private func handsFromTheHeadset(
+        captured: [MocapJoint: simd_float3], devicePose: simd_float4x4?, time: TimeInterval, options: MocapRetargetOptions
+    ) -> [MocapJoint: simd_float3] {
+        let (enabled, provider, track) = lock.withLock { (headsetHands, handProvider, headTrack) }
+        guard enabled, let provider, let devicePose, track.isCalibrated, let phoneHead = captured[.head] else {
+            lock.withLock { handLadder.reset() }
+            return [:]
+        }
+        let seen = provider()
+        let head = track.joint(devicePose)
+        var inputs: [MocapJoint: MocapHandLadder.Input] = [:]
+        for (joint, side) in [(MocapJoint.leftHand, MocapHandSide.left), (.rightHand, .right)] {
+            // In a mirror the wearer's other hand drives this one.
+            let wearer: MocapHandSide = options.mirror ? (side == .left ? .right : .left) : side
+            var fromHead: simd_float3?
+            if let hand = seen[wearer], hand.isTracked {
+                var v = track.inBodyAxes(hand.wrist.position - head)
+                if options.mirror {
+                    v.x = -v.x
+                }
+                if options.flipFacing {
+                    v = simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0)).act(v)
+                }
+                fromHead = v
+            }
+            inputs[joint] = MocapHandLadder.Input(headset: fromHead, phone: captured[joint].map { $0 - phoneHead })
+        }
+        let outputs = lock.withLock { handLadder.update(inputs, time: time) }
+        return outputs.mapValues { phoneHead + $0.position }
     }
 
     /// Eases the limbs back to the pose.

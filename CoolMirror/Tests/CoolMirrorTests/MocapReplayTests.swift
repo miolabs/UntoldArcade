@@ -294,6 +294,7 @@ final class MocapReplayTests: XCTestCase {
         var time: TimeInterval
         var frame: MocapFrame
         var headset: simd_float4x4?
+        var hands: [MocapHandSide: MocapHandSample] = [:]
     }
 
     /// A stretch of a session recorded before the headset was. The head
@@ -323,7 +324,7 @@ final class MocapReplayTests: XCTestCase {
             guard let time = sample.frameTime, let frame = frames[time], let head = sample.head else { continue }
             let filtered = filter.filter(frame, at: sample.time, options: options)
             guard filtered.isTracked else { continue }
-            ticks.append(Tick(time: sample.time, frame: filtered, headset: head.matrix))
+            ticks.append(Tick(time: sample.time, frame: filtered, headset: head.matrix, hands: sample.hands))
             times.append(time)
         }
         return (ticks, times, all.markers.sorted { $0.time < $1.time })
@@ -655,5 +656,100 @@ final class MocapReplayTests: XCTestCase {
             XCTAssertLessThan(try XCTUnwrap(run.tilt.max()), 12, marker.label)
             XCTAssertLessThan(run.pinSpeed, 0.0101, marker.label)
         }
+    }
+
+    // MARK: - Hands
+
+    private struct HandRun {
+        var outputs: [MocapJoint: [MocapHandLadder.Output]] = [:]
+        /// Per update and hand, from the head: where the headset has it
+        /// (nil while it does not see it) and where the phone has it.
+        var headset: [MocapJoint: [simd_float3?]] = [:]
+        var phone: [MocapJoint: [simd_float3]] = [:]
+        var times: [TimeInterval] = []
+        var scale: Float = 1
+    }
+
+    /// The whole session through the ladder, as the mirror runs it.
+    private func hands(_ session: (ticks: [Tick], frameTimes: [Double], markers: [MocapRecording.Marker])) throws -> HandRun {
+        let retargeter = MocapRetargeter(mapping: MocapRigMapping(joints: [:], rootJoint: "hips"))
+        let calibration = try XCTUnwrap(session.ticks.first)
+        retargeter.calibrate(with: calibration.frame)
+        var track = MocapHeadTrack()
+        try track.calibrate(with: XCTUnwrap(calibration.headset))
+        var ladder = MocapHandLadder()
+        var run = HandRun()
+        for tick in session.ticks {
+            guard let pose = tick.headset, let captured = retargeter.retarget(tick.frame)?.capturedJointPositions,
+                  let head = captured[.head]
+            else { continue }
+            var inputs: [MocapJoint: MocapHandLadder.Input] = [:]
+            for (joint, side) in [(MocapJoint.leftHand, MocapHandSide.right), (.rightHand, .left)] {
+                guard let phone = captured[driven(joint)] else { continue }
+                var seen: simd_float3?
+                if let hand = tick.hands[side], hand.isTracked {
+                    var v = track.inBodyAxes(hand.wrist.position - track.joint(pose))
+                    v.x = -v.x
+                    seen = v
+                }
+                inputs[joint] = .init(headset: seen, phone: phone - head)
+                run.phone[joint, default: []].append(phone - head)
+            }
+            let outputs = ladder.update(inputs, time: tick.time)
+            guard outputs.count == 2 else { continue }
+            for (joint, output) in outputs {
+                run.outputs[joint, default: []].append(output)
+                run.headset[joint, default: []].append(inputs[joint]?.headset.map { $0 * ladder.scale })
+            }
+            run.times.append(tick.time)
+        }
+        run.scale = ladder.scale
+        return run
+    }
+
+    /// The hands of the session with the headset: it lost them 24 times,
+    /// behind the back, in the turn and for tenths of a second at the
+    /// edge of its view. Through every change of source the character's
+    /// hands move no faster than the hands did; while the headset sees a
+    /// hand, the hand is where the headset has it.
+    func testTheHandsChangeSourceWithoutShowingIt() throws {
+        guard let session = try ticks(Self.withHeadset) else { throw XCTSkip("recording not present") }
+        let run = try hands(session)
+        XCTAssertGreaterThan(run.times.count, 6000)
+        // The phone's skeleton is a tenth larger than the wearer.
+        XCTAssertEqual(run.scale, 1.1, accuracy: 0.05)
+
+        var losses = 0, handovers = 0
+        for joint in [MocapJoint.leftHand, .rightHand] {
+            let outputs = try XCTUnwrap(run.outputs[joint]), headset = try XCTUnwrap(run.headset[joint])
+            var changed = 0
+            var onHeadset = 0
+            var ownStep: Float = 0
+            for index in 1 ..< outputs.count {
+                let step = simd_distance(outputs[index].position, outputs[index - 1].position)
+                if let now = headset[index], let before = headset[index - 1] {
+                    ownStep = max(ownStep, simd_distance(now, before))
+                } else if headset[index - 1] != nil {
+                    losses += 1
+                }
+                if outputs[index].source != outputs[index - 1].source {
+                    changed = index
+                    handovers += 1
+                    XCTAssertLessThan(step, 0.015, "\(joint) at \(run.times[index] - run.times[0]) s")
+                }
+                guard outputs[index].source != .phone else { continue }
+                onHeadset += 1
+                // No faster than the hand itself went at its fastest,
+                // give or take what a handover has left to make up.
+                XCTAssertLessThan(step, 0.06, "\(joint) at \(run.times[index] - run.times[0]) s")
+                if index - changed > 50, outputs[index].source == .headset, let seen = headset[index] {
+                    XCTAssertLessThan(simd_distance(outputs[index].position, seen), 0.01)
+                }
+            }
+            XCTAssertGreaterThan(ownStep, 0.025, "the hands did move")
+            XCTAssertGreaterThan(Float(onHeadset) / Float(outputs.count), 0.55)
+        }
+        XCTAssertEqual(losses, 24)
+        XCTAssertGreaterThan(handovers, 40)
     }
 }
