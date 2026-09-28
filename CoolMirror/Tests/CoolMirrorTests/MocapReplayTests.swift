@@ -752,4 +752,66 @@ final class MocapReplayTests: XCTestCase {
         XCTAssertEqual(losses, 24)
         XCTAssertGreaterThan(handovers, 40)
     }
+
+    // MARK: - Legs
+
+    /// The bend of the rig's knees over a stretch (degrees, left and
+    /// right), for a rig of the wearer's proportions whose legs are
+    /// straight at rest, calibrated on `calibration`.
+    private func kneeBends(_ ticks: [Tick], calibration: Tick) throws -> [(left: Float, right: Float)] {
+        var names: [MocapJoint: String] = [:]
+        for joint in MocapJoint.allCases {
+            names[joint] = "\(joint)"
+        }
+        let retargeter = MocapRetargeter(mapping: MocapRigMapping(joints: names, rootJoint: "hips"))
+        retargeter.calibrate(with: calibration.frame)
+        let standing = try XCTUnwrap(retargeter.retarget(calibration.frame)).capturedJointPositions
+        var rest: [MocapJoint: simd_float3] = [:]
+        for (joint, position) in standing {
+            rest[driven(joint)] = position
+        }
+        let legs: [(hip: MocapJoint, knee: MocapJoint, ankle: MocapJoint)] = [(.leftUpLeg, .leftLeg, .leftFoot), (.rightUpLeg, .rightLeg, .rightFoot)]
+        for leg in legs {
+            let hip = try XCTUnwrap(rest[leg.hip]), knee = try XCTUnwrap(rest[leg.knee]), ankle = try XCTUnwrap(rest[leg.ankle])
+            let straightKnee = hip - simd_float3(0, simd_distance(hip, knee), 0)
+            rest[leg.knee] = straightKnee
+            rest[leg.ankle] = straightKnee - simd_float3(0, simd_distance(knee, ankle), 0)
+        }
+        var byName: [String: simd_float3] = [:]
+        for (joint, position) in rest {
+            byName["\(joint)"] = position
+        }
+        retargeter.rigRestPositions = byName
+
+        return try ticks.map { tick in
+            let deltas = try XCTUnwrap(retargeter.retarget(tick.frame)).worldRotationDeltas
+            let bends = try legs.map { leg -> Float in
+                let thigh = try XCTUnwrap(deltas["\(leg.hip)"]), shin = try XCTUnwrap(deltas["\(leg.knee)"])
+                let down = simd_float3(0, -1, 0)
+                return acos(min(max(simd_dot(thigh.act(down), shin.act(down)), -1), 1)) * 180 / .pi
+            }
+            return (bends[0], bends[1])
+        }
+    }
+
+    /// The phone has a wearer who stands straight on knees bent 25°. The
+    /// character's legs are straight when the wearer's are, and bend when
+    /// the wearer lifts a foot.
+    func testTheCharacterStandsOnStraightLegsWhenTheWearerDoes() throws {
+        guard let session = try ticks(Self.withHeadset) else { throw XCTSkip("recording not present") }
+        let calibration = try XCTUnwrap(stretch("Stand still, arms down", of: session).dropFirst(100).first)
+
+        // The last step of the session, a minute after the calibration.
+        let last = try XCTUnwrap(session.markers.last)
+        let still = zip(session.ticks, session.frameTimes).filter { $0.1 >= last.time }.map(\.0)
+        let standing = try kneeBends(still, calibration: calibration)
+        XCTAssertGreaterThan(standing.count, 300)
+        XCTAssertLessThan(try XCTUnwrap(standing.map(\.left).max()), 8)
+        XCTAssertLessThan(try XCTUnwrap(standing.map(\.right).max()), 8)
+
+        // The wearer's left foot is the character's right, in the mirror.
+        let lifting = try kneeBends(stretch("Lift your LEFT", of: session), calibration: calibration)
+        XCTAssertGreaterThan(try XCTUnwrap(lifting.map(\.right).max()), 50)
+        XCTAssertLessThan(try XCTUnwrap(lifting.map(\.left).max()), 12)
+    }
 }
