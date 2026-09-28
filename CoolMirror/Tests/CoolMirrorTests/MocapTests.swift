@@ -238,7 +238,7 @@ final class MocapTests: XCTestCase {
         options.medianWindow = 1 // this test exercises a later stage
         options.legCutoff = 1
         options.bodyCutoff = 2
-        var generator = SystemRandomNumberGenerator()
+        var generator = SeededGenerator(seed: 20_260_928)
         var lastFoot = simd_float3.zero
         var lastArm = simd_quatf(angle: 0, axis: simd_float3(0, 1, 0))
         let dt = 1.0 / 60
@@ -572,7 +572,7 @@ final class MocapTests: XCTestCase {
             f.positions = [.leftUpLeg: hip, .leftLeg: knee, .leftFoot: footPosition, .leftToes: footPosition + simd_float3(0, -0.05, 0.15)]
             return f
         }
-        var generator = SystemRandomNumberGenerator()
+        var generator = SeededGenerator(seed: 20_260_928)
         var last = foot
         for i in 0 ..< 60 {
             let wobble = simd_float3(Float.random(in: -0.015 ... 0.015, using: &generator), Float.random(in: -0.015 ... 0.015, using: &generator), 0)
@@ -725,5 +725,23 @@ final class MocapTests: XCTestCase {
         assertEqual(MocapRetargeter.reflectAcrossSagittalPlane(aboutX), aboutX)
         let aboutY = simd_quatf(angle: 0.6, axis: simd_float3(0, 1, 0))
         assertEqual(MocapRetargeter.reflectAcrossSagittalPlane(aboutY), aboutY.inverse)
+    }
+}
+
+/// The same noise on every run (SplitMix64): a test that draws its own
+/// fails one run in ten on a threshold the others pass.
+struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed
+    }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
