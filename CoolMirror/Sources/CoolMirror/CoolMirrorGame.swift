@@ -231,12 +231,16 @@ public final class CoolMirrorGame {
 
     /// `bodySmoothing` and `legSmoothing` go from 0 (raw tracker, shaky)
     /// to 1 (very steady, laggy); the legs setting also steadies the hips
-    /// and where the character stands.
+    /// and where the character stands. With `armReach` the hands go where
+    /// the captured hands are on the body (reach IK) instead of where the
+    /// copied bone directions take them.
     public func setMocapOptions(
         mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
-        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false
+        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false,
+        armReach: Bool = true
     ) {
         mocap.isGroundLockEnabled = groundLock
+        mocap.isArmReachEnabled = armReach
         var options = MocapRetargetOptions()
         options.mirror = mirror
         options.flipFacing = flipFacing

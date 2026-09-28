@@ -104,6 +104,7 @@ final class MirrorControls {
     var mocapRootMotion = true { didSet { pushMocapOptions() } }
     var mocapGroundLock = true { didSet { pushMocapOptions() } }
     var mocapPlantFeet = false { didSet { pushMocapOptions() } }
+    var mocapArmReach = true { didSet { pushMocapOptions() } }
     var mocapWeight: Double = 1 { didSet { pushMocapOptions() } }
     var mocapBodySmoothing: Double = 0.4 { didSet { pushMocapOptions() } }
     var mocapLegSmoothing: Double = 0.6 { didSet { pushMocapOptions() } }
@@ -122,7 +123,7 @@ final class MirrorControls {
         XRHolder.shared.game?.setMocapOptions(
             mirror: mocapMirror, flipFacing: mocapFlipFacing, weight: Float(mocapWeight), rootMotion: mocapRootMotion,
             bodySmoothing: Float(mocapBodySmoothing), legSmoothing: Float(mocapLegSmoothing), groundLock: mocapGroundLock,
-            plantFeet: mocapPlantFeet
+            plantFeet: mocapPlantFeet, armReach: mocapArmReach
         )
     }
 
@@ -383,6 +384,7 @@ struct CoolMirrorVisionOSXRApp: App {
                                 Toggle("Move", isOn: $controls.mocapRootMotion).toggleStyle(.button)
                                 Toggle("Ground", isOn: $controls.mocapGroundLock).toggleStyle(.button)
                                 Toggle("Plant", isOn: $controls.mocapPlantFeet).toggleStyle(.button)
+                                Toggle("Reach", isOn: $controls.mocapArmReach).toggleStyle(.button)
                             }
                         }
                         GridRow {

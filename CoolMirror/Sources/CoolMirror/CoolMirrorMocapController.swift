@@ -4,7 +4,8 @@
 //
 //  Bridges the iPhone body capture to the engine: receives frames, retargets
 //  them for the current character's rig and hands the engine world-space
-//  rotation deltas every frame through `setEntityExternalPose`.
+//  rotation deltas every frame through `setEntityExternalPose`, and the
+//  hands' targets through reach IK (see `MocapArmReach`).
 //
 
 import CoolMirrorMocap
@@ -82,6 +83,22 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// Rest height of every ankle and toe joint (model space), by the
     /// captured joint it answers for.
     private var restFootHeights: [MocapJoint: Float] = [:]
+    /// The hands reach for where the captured hands are on the body (see
+    /// `MocapArmReach`), over the arm pose the capture gives.
+    private var armReach = true
+    private let armReachSolver = MocapArmReach()
+    /// The rig's arm chains, in the order of `MocapArmReach.arms`; empty
+    /// when the rig lacks one of the joints.
+    private var armChains: [ReachIKChainDescriptor] = []
+    private var armLengths: [MocapJoint: Float] = [:]
+    private var armChainsConfigured = false
+    private var reaching = false
+    /// Seconds over which the reach takes and releases the arms.
+    private static let armReachHalflife: Float = 0.2
+    /// The capture is filtered already; this only rounds off what is left.
+    private static let armTargetHalflife: Float = 0.03
+    /// A straight arm stays a hair short of locked.
+    private static let armReachExtent: Float = 0.98
 
     var options: MocapRetargetOptions {
         get { lock.withLock { storedOptions } }
@@ -162,6 +179,14 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// The hands go where the captured hands are relative to the body
+    /// (touching hands touch, a hand on the head lands on the head)
+    /// instead of where the copied bone directions take them.
+    var isArmReachEnabled: Bool {
+        get { lock.withLock { armReach } }
+        set { lock.withLock { armReach = newValue } }
     }
 
     /// Joints the phone must actually see before the pose is trustworthy
@@ -272,12 +297,17 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 if let id {
                     retargeter.rigRestPositions = Self.restPositions(of: id)
                     restFootHeights = Self.restFootHeights(of: retargeter.rigRestPositions, mapping: mapping)
+                    (armChains, armLengths) = Self.armChains(of: id, mapping: mapping)
                 }
                 self.retargeter = retargeter
             } else {
                 retargeter = nil
                 restFootHeights = [:]
+                armChains = []
+                armLengths = [:]
             }
+            armChainsConfigured = false
+            reaching = false
             driving = false
             footAnchor.reset()
             jitter.reset()
@@ -310,6 +340,28 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         return heights
     }
 
+    /// The rig's arm chains (full joint paths) and arm lengths, by
+    /// shoulder joint; nothing unless both arms are complete.
+    private static func armChains(of entityId: EntityID, mapping: MocapRigMapping) -> ([ReachIKChainDescriptor], [MocapJoint: Float]) {
+        let rest = entitySkeletonRestJointPoses(entityId: entityId)
+        func joint(_ captured: MocapJoint) -> (path: String, position: simd_float3)? {
+            guard let name = mapping.joints[captured],
+                  let pose = rest.first(where: { jointPath($0.path, matches: name) })
+            else { return nil }
+            return (pose.path, pose.modelPosition)
+        }
+        var chains: [ReachIKChainDescriptor] = []
+        var lengths: [MocapJoint: Float] = [:]
+        for arm in MocapArmReach.arms {
+            guard let shoulder = joint(arm.shoulder), let elbow = joint(arm.elbow), let hand = joint(arm.hand) else {
+                return ([], [:])
+            }
+            chains.append(ReachIKChainDescriptor(shoulderPath: shoulder.path, elbowPath: elbow.path, handPath: hand.path))
+            lengths[arm.shoulder] = simd_distance(shoulder.position, elbow.position) + simd_distance(elbow.position, hand.position)
+        }
+        return (chains, lengths)
+    }
+
     func setEnabled(_ enabled: Bool) {
         let (wasEnabled, characterId) = lock.withLock {
             let was = self.enabled
@@ -322,6 +374,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             receiver.stop()
             if let characterId {
                 clearEntityExternalPose(entityId: characterId)
+                releaseArms(characterId: characterId)
             }
             lock.withLock {
                 driving = false
@@ -363,6 +416,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 let wasDriving = lock.withLock { driving }
                 if wasDriving {
                     clearEntityExternalPose(entityId: characterId)
+                    releaseArms(characterId: characterId)
                     lock.withLock { driving = false }
                 }
                 hideDebugLines()
@@ -397,6 +451,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             rootTranslationDelta: result.rootTranslationDelta,
             weight: retargeter.options.weight
         )
+        reachForHands(result, characterId: characterId, origin: origin, options: retargeter.options)
         lock.withLock { driving = true }
 
         if lock.withLock({ debugOverlay }) {
@@ -464,6 +519,67 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             footAnchor.update(captured: captured, root: translation, rig: rig, floor: floor, time: time, horizontal: horizontal)
         }
         return translation + correction
+    }
+
+    // MARK: - Arm reach
+
+    /// Hands the engine a reach target per arm: where the captured hand is
+    /// on the body, as an offset from the rig's shoulder. The anchors are
+    /// the rig's joints as the engine composed them last frame; the reach
+    /// does not move any of them, and measured from the shoulder they
+    /// change only as fast as the torso turns.
+    private func reachForHands(_ result: MocapRetargetResult, characterId: EntityID, origin: simd_float3, options: MocapRetargetOptions) {
+        let (enabled, chains, lengths, configured, mapping) = lock.withLock {
+            (armReach, armChains, armLengths, armChainsConfigured, retargeter?.mapping)
+        }
+        guard enabled, let mapping, chains.count == MocapArmReach.arms.count else {
+            releaseArms(characterId: characterId)
+            return
+        }
+        if !configured {
+            setReachIKChains(entityId: characterId, chains: chains)
+            lock.withLock { armChainsConfigured = true }
+        }
+
+        let rotation = getRotationQuaternion(entityId: characterId)
+        let scale = max(getScale(entityId: characterId).y, 1e-4)
+        let joints = entitySkeletonJointPoses(entityId: characterId)
+        var rig: [MocapJoint: simd_float3] = [:]
+        var captured: [MocapJoint: simd_float3] = [:]
+        for joint in MocapArmReach.joints {
+            captured[joint] = result.capturedJointPositions[options.mirror ? joint.mirrored : joint]
+            guard let name = mapping.joints[joint],
+                  let pose = joints.first(where: { Self.jointPath($0.path, matches: name) })
+            else { continue }
+            rig[joint] = rotation.inverse.act(pose.worldPosition - origin) / scale
+        }
+        let offsets = armReachSolver.targets(captured: captured, rig: rig, rigArmLength: lengths)
+        guard !offsets.isEmpty else {
+            releaseArms(characterId: characterId)
+            return
+        }
+        setReachIKChainTargets(
+            entityId: characterId,
+            targets: MocapArmReach.arms.map { arm in
+                offsets[arm.shoulder].map { ReachIKChainTarget(position: $0, space: .shoulder) }
+            },
+            weight: options.weight,
+            halflife: Self.armReachHalflife,
+            reach: Self.armReachExtent,
+            targetHalflife: Self.armTargetHalflife
+        )
+        lock.withLock { reaching = true }
+    }
+
+    /// Eases the arms back to the pose.
+    private func releaseArms(characterId: EntityID) {
+        let wasReaching = lock.withLock { () -> Bool in
+            defer { reaching = false }
+            return reaching
+        }
+        if wasReaching {
+            setReachIKChainTargets(entityId: characterId, targets: [], halflife: Self.armReachHalflife)
+        }
     }
 
     // MARK: - Debug overlay

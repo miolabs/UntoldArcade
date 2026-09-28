@@ -193,4 +193,70 @@ final class MocapReplayTests: XCTestCase {
         let whole = Self.headings(session.filtered[...])
         XCTAssertLessThan(Self.largestStep(whole), 12)
     }
+
+    // MARK: - Arm reach
+
+    /// The hands' reach targets over a stretch, for a character with
+    /// wider shoulders, a longer torso and longer arms than the wearer,
+    /// standing as calibrated: per frame the step of each target and of
+    /// the captured hand it follows.
+    private func reachSteps(_ session: Replay, _ stretch: Range<Int>) throws -> (target: [Float], hand: [Float], scale: Float) {
+        let retargeter = MocapRetargeter(mapping: MocapRigMapping(joints: [:], rootJoint: "hips"))
+        let calibration = try XCTUnwrap(session.filtered[stretch].first { $0.isTracked })
+        retargeter.calibrate(with: calibration)
+        let standing = try XCTUnwrap(retargeter.retarget(calibration)).capturedJointPositions
+        var rig: [MocapJoint: simd_float3] = [:]
+        for joint in MocapArmReach.joints {
+            let p = try XCTUnwrap(standing[joint])
+            rig[joint] = simd_float3(p.x * 1.3, p.y * 1.1, p.z)
+        }
+        func armLength(_ positions: [MocapJoint: simd_float3], _ arm: (shoulder: MocapJoint, elbow: MocapJoint, hand: MocapJoint)) -> Float {
+            simd_distance(positions[arm.shoulder]!, positions[arm.elbow]!) + simd_distance(positions[arm.elbow]!, positions[arm.hand]!)
+        }
+        let scale: Float = 1.25
+        var lengths: [MocapJoint: Float] = [:]
+        for arm in MocapArmReach.arms {
+            lengths[arm.shoulder] = armLength(standing, arm) * scale
+        }
+
+        let solver = MocapArmReach()
+        var previous: (targets: [MocapJoint: simd_float3], hands: [MocapJoint: simd_float3])?
+        var targetSteps: [Float] = [], handSteps: [Float] = []
+        for frame in session.filtered[stretch] where frame.isTracked {
+            let captured = try XCTUnwrap(retargeter.retarget(frame)).capturedJointPositions
+            let targets = solver.targets(captured: captured, rig: rig, rigArmLength: lengths)
+            var hands: [MocapJoint: simd_float3] = [:]
+            for arm in MocapArmReach.arms {
+                hands[arm.shoulder] = captured[arm.hand]
+            }
+            if let previous {
+                for arm in MocapArmReach.arms {
+                    guard let a = targets[arm.shoulder], let b = previous.targets[arm.shoulder],
+                          let c = hands[arm.shoulder], let d = previous.hands[arm.shoulder]
+                    else { continue }
+                    targetSteps.append(simd_distance(a, b))
+                    handSteps.append(simd_distance(c, d))
+                }
+            }
+            previous = (targets, hands)
+        }
+        return (targetSteps, handSteps, scale)
+    }
+
+    /// Raising the arms takes the hands from beside the hips past the
+    /// chest and the head: the anchors hand over all the way, and the
+    /// targets must move like the hands do, scaled to the character's
+    /// reach, without adding steps of their own.
+    func testReachTargetsMoveLikeTheCapturedHands() throws {
+        guard let session = try replay("session-20260927-190849") else { throw XCTSkip("recording not present") }
+        for label in ["Stand still, arms down", "Raise both arms"] {
+            let steps = try reachSteps(session, session.stretch(label))
+            XCTAssertGreaterThan(steps.target.count, 100)
+            let target = steps.target.sorted(), hand = steps.hand.sorted()
+            let allowed = steps.scale * 1.1
+            XCTAssertLessThan(try XCTUnwrap(target.last), try XCTUnwrap(hand.last) * allowed, label)
+            XCTAssertLessThan(target[target.count * 99 / 100], hand[hand.count * 99 / 100] * allowed, label)
+            XCTAssertLessThan(target.reduce(0, +), hand.reduce(0, +) * allowed, label)
+        }
+    }
 }
