@@ -233,13 +233,16 @@ public final class CoolMirrorGame {
     /// to 1 (very steady, laggy); the legs setting also steadies the hips
     /// and where the character stands. With `armReach` the hands go where
     /// the captured hands are on the body (reach IK) instead of where the
-    /// copied bone directions take them.
+    /// copied bone directions take them. With `headAnchor` the head is
+    /// where the headset is and the planted feet stay where they landed;
+    /// the phone gives the pose between them, not where the body is.
     public func setMocapOptions(
         mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
         bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false,
-        armReach: Bool = true
+        armReach: Bool = true, headAnchor: Bool = true
     ) {
         mocap.isGroundLockEnabled = groundLock
+        mocap.isHeadAnchorEnabled = headAnchor
         mocap.isArmReachEnabled = armReach
         var options = MocapRetargetOptions()
         options.mirror = mirror
@@ -271,10 +274,12 @@ public final class CoolMirrorGame {
         mocap.isCalibrated
     }
 
-    /// Drives the character's head from the headset's own orientation
-    /// (the phone cannot see the head under the Vision Pro). The provider
-    /// runs on the render thread every frame; nil goes back to the neck.
-    public func setMocapHeadPoseProvider(_ provider: (@Sendable () -> simd_quatf?)?) {
+    /// Drives the character's head from the headset's own pose (world):
+    /// its orientation turns the head (the phone cannot see it under the
+    /// Vision Pro) and its position says where the head is. The provider
+    /// runs on the render thread every frame; nil goes back to the neck
+    /// and the phone's root.
+    public func setMocapHeadPoseProvider(_ provider: (@Sendable () -> simd_float4x4?)?) {
         mocap.setHeadPoseProvider(provider)
     }
 

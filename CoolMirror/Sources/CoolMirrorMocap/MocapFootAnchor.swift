@@ -46,7 +46,8 @@ public struct MocapFootAnchor: Sendable {
     public private(set) var anchor: MocapJoint?
     public private(set) var anchorPosition = simd_float3.zero
 
-    private var planted: Set<MocapJoint> = []
+    /// The feet standing still, from the captured travel.
+    public private(set) var planted: Set<MocapJoint> = []
     private var history: [(time: TimeInterval, feet: [MocapJoint: simd_float3], root: simd_float3)] = []
 
     public static let feet: [MocapJoint] = [.leftFoot, .rightFoot]

@@ -259,4 +259,201 @@ final class MocapReplayTests: XCTestCase {
             XCTAssertLessThan(target.reduce(0, +), hand.reduce(0, +) * allowed, label)
         }
     }
+
+    // MARK: - Body anchor
+
+    private struct Anchored {
+        /// Per frame, across the floor: the hips with the body held by
+        /// head and feet, the hips with the planted foot alone holding it
+        /// (the head then swings by what the phone imagines), the head in
+        /// that case, the head as the headset would have it, and how far
+        /// the legs reach to the held feet.
+        var hips: [simd_float2] = []
+        var footHeldHead: [simd_float2] = []
+        var head: [simd_float2] = []
+        var legReach: [Float] = []
+        var times: [TimeInterval] = []
+
+        /// How fast the hips move under the head, per frame (m/s).
+        var hipSpeeds: [Float] {
+            (1 ..< max(hips.count, 1)).map { i in
+                let dt = Float(max(times[i] - times[i - 1], 1.0 / 60))
+                return simd_distance(hips[i] - head[i], hips[i - 1] - head[i - 1]) / dt
+            }
+        }
+
+        /// The fastest a held foot crept, over half a second or more (m/s).
+        var pinSpeed: Float = 0
+        var tilt: [Float] = []
+    }
+
+    /// Replays a stretch with a character of the wearer's own proportions.
+    /// The headset is simulated: the head is where the phone saw it,
+    /// averaged over a second either side (what the phone gets wrong about
+    /// the body's depth wanders much faster than a standing head moves).
+    private func anchored(_ session: Replay, _ stretch: Range<Int>) throws -> Anchored {
+        let frames = session.filtered[stretch].filter(\.isTracked)
+        let calibration = try XCTUnwrap(frames.first)
+        var names: [MocapJoint: String] = [:]
+        for joint in MocapJoint.allCases {
+            names[joint] = "\(joint)"
+        }
+        let retargeter = MocapRetargeter(mapping: MocapRigMapping(joints: names, rootJoint: "hips"))
+        retargeter.calibrate(with: calibration)
+        let standing = try XCTUnwrap(retargeter.retarget(calibration)).capturedJointPositions
+        // The character stands as the wearer did, feet level on the floor.
+        var rest: [MocapJoint: simd_float3] = [:]
+        for (joint, position) in standing {
+            rest[driven(joint)] = position
+        }
+        var byName: [String: simd_float3] = [:]
+        for (joint, position) in rest {
+            byName["\(joint)"] = position
+        }
+        retargeter.rigRestPositions = byName
+        let restRoot = try XCTUnwrap(rest[.hips])
+        let share = MocapBodyAnchor.hipShare(rest: rest)
+
+        struct Sample {
+            var time: TimeInterval
+            var pose: MocapBodyAnchor.Pose
+            var head: simd_float3
+            var feet: [MocapJoint: simd_float3]
+            var root: simd_float3
+        }
+        var samples: [Sample] = []
+        for frame in frames {
+            let result = try XCTUnwrap(retargeter.retarget(frame))
+            var deltas: [MocapJoint: simd_quatf] = [:]
+            for (joint, name) in names {
+                deltas[joint] = result.worldRotationDeltas[name]
+            }
+            guard let pose = MocapBodyAnchor.pose(rest: rest, deltas: deltas),
+                  let head = result.capturedJointPositions[.head]
+            else { continue }
+            var feet: [MocapJoint: simd_float3] = [:]
+            for foot in MocapFootAnchor.feet {
+                feet[foot] = result.capturedJointPositions[driven(foot)]
+            }
+            samples.append(Sample(time: frame.timestamp, pose: pose, head: head, feet: feet, root: result.rootTranslationDelta))
+        }
+
+        func flat(_ v: simd_float3) -> simd_float2 {
+            simd_float2(v.x, v.z)
+        }
+        var out = Anchored()
+        var foot = MocapFootAnchor()
+        var body = MocapBodyAnchor()
+        var shown: [MocapJoint: simd_float3] = [:]
+        var first: [MocapJoint: (position: simd_float3, time: TimeInterval)] = [:]
+        var held: (foot: MocapJoint, position: simd_float3)?
+        for sample in samples {
+            let near = samples.filter { abs($0.time - sample.time) <= 1 }
+            let head = near.reduce(simd_float3.zero) { $0 + $1.head } / Float(near.count)
+            var floor: [MocapJoint: Float] = [:]
+            for joint in MocapFootAnchor.feet {
+                floor[joint] = rest[joint]?.y
+            }
+            _ = foot.update(captured: sample.feet, root: sample.root, rig: shown, floor: floor, time: sample.time, horizontal: false)
+            let output = body.update(
+                pose: sample.pose, restRoot: restRoot, head: head, planted: foot.planted,
+                composed: shown, hipShare: share, time: sample.time
+            )
+            // What is shown: the pose's feet, pulled to their holds.
+            for joint in MocapFootAnchor.feet {
+                guard let leg = sample.pose.feet[joint] else { continue }
+                var position = restRoot + output.root + leg
+                if let pin = output.pins[joint] {
+                    let reach = flat(pin.position) - flat(position)
+                    out.legReach.append(simd_length(reach) * pin.weight)
+                    position.x += reach.x * pin.weight
+                    position.z += reach.y * pin.weight
+                    if pin.held, let start = first[joint] {
+                        out.pinSpeed = max(out.pinSpeed, simd_distance(flat(pin.position), flat(start.position)) / Float(max(sample.time - start.time, 0.5)))
+                    } else if pin.held {
+                        first[joint] = (pin.position, sample.time)
+                    } else {
+                        first[joint] = nil
+                    }
+                } else {
+                    first[joint] = nil
+                }
+                shown[joint] = position
+            }
+            out.hips.append(flat(restRoot + output.root))
+            out.times.append(sample.time)
+            out.head.append(flat(head))
+            out.tilt.append(output.torsoTilt.angle * 180 / .pi)
+
+            // Today: the planted foot alone holds the body.
+            if held == nil || !foot.planted.contains(held!.foot) {
+                held = nil
+                if let joint = MocapFootAnchor.feet.first(where: { foot.planted.contains($0) }), let leg = sample.pose.feet[joint] {
+                    let last = out.footHeldHead.last.map { simd_float3($0.x, 0, $0.y) } ?? head
+                    held = (joint, last - sample.pose.head + leg)
+                }
+            }
+            if let held, let leg = sample.pose.feet[held.foot] {
+                out.footHeldHead.append(flat(held.position - leg + sample.pose.head))
+            } else {
+                out.footHeldHead.append(out.footHeldHead.last ?? flat(head))
+            }
+        }
+        return out
+    }
+
+    /// The captured joint that drives a rig joint (or the other way
+    /// round): the opposite one, in a mirror.
+    private func driven(_ joint: MocapJoint) -> MocapJoint {
+        MocapRetargetOptions().mirror ? joint.mirrored : joint
+    }
+
+    private static func span(_ points: [simd_float2]) -> Float {
+        guard let first = points.first else { return 0 }
+        var low = first, high = first
+        for point in points {
+            low = simd_min(low, point)
+            high = simd_max(high, point)
+        }
+        return simd_length(high - low)
+    }
+
+    /// Standing still, the planted foot alone lets the head swing by what
+    /// the phone imagines about the body's depth (16 to 18 cm in these
+    /// sessions). Held at both ends the head is the headset's, the feet
+    /// creep a centimetre a second at most, and what is left for the
+    /// hips, the torso and the legs to make up is small.
+    func testStandingStillTheBodyIsHeldBetweenHeadAndFeet() throws {
+        for name in ["session-20260927-190849", "session-20260927-200725", "session-20260927-202923"] {
+            guard let session = try replay(name) else { throw XCTSkip("recording not present") }
+            let run = try anchored(session, session.stretch("Stand still, arms down"))
+            XCTAssertGreaterThan(run.hips.count, 400, name)
+            XCTAssertGreaterThan(Self.span(run.footHeldHead), 0.15, "\(name): held by the foot alone the head swings")
+            XCTAssertLessThan(Self.span(run.hips), 0.09, name)
+            let reach = run.legReach.sorted()
+            XCTAssertLessThan(reach[reach.count * 95 / 100], 0.06, name)
+            XCTAssertLessThan(try XCTUnwrap(run.tilt.max()), 4, name)
+            XCTAssertLessThan(run.pinSpeed, 0.0101, name)
+            let speeds = run.hipSpeeds.sorted()
+            XCTAssertLessThan(speeds[speeds.count * 95 / 100], 0.15, name)
+        }
+    }
+
+    /// Whatever the wearer does (a foot lifted, the arms raised while the
+    /// tracker flips, steps, a turn), the corrections stay those of a
+    /// lean: the legs reach a hand's width at most, the torso tilts a few
+    /// degrees, and a held foot never slides.
+    func testTheCorrectionsStayThoseOfALean() throws {
+        for name in ["session-20260927-190849", "session-20260927-200725", "session-20260927-202923"] {
+            guard let session = try replay(name) else { throw XCTSkip("recording not present") }
+            for label in ["Lift your LEFT", "Put it down", "Raise both arms", "Take two steps", "Turn to your left"] {
+                let run = try anchored(session, session.stretch(label))
+                let note = "\(name) \(label)"
+                XCTAssertGreaterThan(run.hips.count, 200, note)
+                XCTAssertLessThan(try XCTUnwrap(run.legReach.max()), 0.2, note)
+                XCTAssertLessThan(try XCTUnwrap(run.tilt.max()), 10, note)
+                XCTAssertLessThan(run.pinSpeed, 0.0101, note)
+            }
+        }
+    }
 }

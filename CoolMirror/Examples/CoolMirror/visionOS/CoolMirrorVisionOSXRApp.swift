@@ -105,6 +105,7 @@ final class MirrorControls {
     var mocapGroundLock = true { didSet { pushMocapOptions() } }
     var mocapPlantFeet = false { didSet { pushMocapOptions() } }
     var mocapArmReach = true { didSet { pushMocapOptions() } }
+    var mocapHeadAnchor = true { didSet { pushMocapOptions() } }
     var mocapWeight: Double = 1 { didSet { pushMocapOptions() } }
     var mocapBodySmoothing: Double = 0.4 { didSet { pushMocapOptions() } }
     var mocapLegSmoothing: Double = 0.6 { didSet { pushMocapOptions() } }
@@ -123,7 +124,8 @@ final class MirrorControls {
         XRHolder.shared.game?.setMocapOptions(
             mirror: mocapMirror, flipFacing: mocapFlipFacing, weight: Float(mocapWeight), rootMotion: mocapRootMotion,
             bodySmoothing: Float(mocapBodySmoothing), legSmoothing: Float(mocapLegSmoothing), groundLock: mocapGroundLock,
-            plantFeet: mocapPlantFeet, armReach: mocapArmReach
+            plantFeet: mocapPlantFeet, armReach: mocapArmReach,
+            headAnchor: mocapHeadAnchor
         )
     }
 
@@ -385,6 +387,7 @@ struct CoolMirrorVisionOSXRApp: App {
                                 Toggle("Ground", isOn: $controls.mocapGroundLock).toggleStyle(.button)
                                 Toggle("Plant", isOn: $controls.mocapPlantFeet).toggleStyle(.button)
                                 Toggle("Reach", isOn: $controls.mocapArmReach).toggleStyle(.button)
+                                Toggle("Head", isOn: $controls.mocapHeadAnchor).toggleStyle(.button)
                             }
                         }
                         GridRow {
@@ -572,7 +575,7 @@ struct CoolMirrorVisionOSXRApp: App {
                 )
                 // The wearer's head comes from the headset itself.
                 game.setMocapHeadPoseProvider { [weak xr] in
-                    xr?.currentDevicePose.map { simd_quatf($0) }
+                    xr?.currentDevicePose
                 }
 
                 let t = Thread {
