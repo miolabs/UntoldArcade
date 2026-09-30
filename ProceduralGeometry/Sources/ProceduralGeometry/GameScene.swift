@@ -14,12 +14,15 @@ import ProceduralGeometryExtension
 // GameScene: Initialize your game and write game-specific logic
 class GameScene {
 
+    /// The complete mutually-exclusive interaction mode for this demo.
+    var pipeInteractionState: PipeInteractionState = .idle
+
     /// Maps each tube's two (otherwise invisible) endpoint proxy entities to the tube they
     /// belong to and whether each is the start or end. Exactly two entries per tube, for its
-    /// whole lifetime — populated once in `createDemoTube()` via `createTubeEndpointHandles`.
-    /// Unlike the old per-control-point handle scheme, nothing here ever needs reindexing:
-    /// inserted bends are pure data in `TubePathComponent.controlPoints`, with no entity of
-    /// their own.
+    /// whole lifetime — populated once per tube via `createTubeEndpointHandles`, called when a
+    /// placed pipe is confirmed and selected (see `GameScene+PipePlacement.swift`). Unlike the old
+    /// per-control-point handle scheme, nothing here ever needs reindexing: inserted bends are
+    /// pure data in `TubePathComponent.controlPoints`, with no entity of their own.
     var tubeEndpointHandles: [EntityID: (tubeId: EntityID, isStart: Bool)] = [:]
 
     /// The reverse of `tubeEndpointHandles`: each tube's own two proxy entities, for toggling
@@ -36,29 +39,35 @@ class GameScene {
     /// wholesale before regenerating (or when the tube deactivates).
     var tubeInteriorProxies: [EntityID: [EntityID]] = [:]
 
-    /// Which tube, if any, is currently armed for editing — set by tapping the tube's own mesh
-    /// (or one of its proxies), cleared by tapping anything else. Only an active tube's endpoints
-    /// and bends can be dragged; see `beginTubeDrag`.
-    var activeTubeId: EntityID?
+    /// Which tube, if any, is currently Selected or Editing — set by tapping the tube's own mesh
+    /// (or one of its proxies), cleared by a two-hand pinch (see `checkTwoHandDeselect`). Selected
+    /// vs. Editing is tracked separately by `isEditingActiveTube`; see
+    /// `GameScene+TubeEditing.swift` for the full state machine (Idle / Selected / Editing).
+    /// Last frame's combined both-hands-pinching state, so `checkTwoHandDeselect` can fire once
+    /// on the rising edge rather than re-deselecting every frame both hands stay pinched.
+    var wasTwoHandPinching = false
 
     /// The drag currently in progress, if any, paired with the proxy entity driving it — neither
-    /// `TubeEndpointDrag` nor `TubeInteriorBendDrag` (from `ProceduralGeometryExtension`) has any
-    /// idea proxy entities exist, so this demo tracks that pairing itself. See
-    /// `GameScene+TubeEditing.swift`.
+    /// `TubeEndpointDrag`, `TubeInteriorBendDrag`, nor `TubeTranslationDrag` (from
+    /// `ProceduralGeometryExtension`) has any idea proxy entities exist, so this demo tracks that
+    /// pairing itself. See `GameScene+TubeEditing.swift`.
     ///
     /// Captured once when a gesture starts (the first frame `pickedEntityId` identifies one of
-    /// the active tube's proxies) and held until that gesture ends — `pickedEntityId` isn't
-    /// guaranteed to keep pointing at the same entity, or to stay non-nil, all the way through to
-    /// the gesture's final `.ended`/`.cancelled` frame, and `SpatialManipulationSystem`'s own
-    /// session only gets cleanly closed out if its lifecycle function is called on that final
-    /// frame too — skipping it leaves the session stuck mid-drag, still targeting whatever it was
-    /// last acting on.
-    private var activeDrag: ActiveTubeDrag?
-    /// True once an interior-bend drag has removed its own bend, but the underlying gesture
-    /// hasn't reached `.ended`/`.cancelled` yet — `SpatialManipulationSystem`'s lifecycle still
-    /// needs pumping through to the real end (see the doc comment above), but `updateActiveDrag`
-    /// must not be called again once its `TubeInteriorBendDrag` has already removed its point.
-    private var isActiveDragFinished = false
+    /// the active tube's proxies, or — while merely Selected — the active tube's own body) and
+    /// held until that gesture ends — `pickedEntityId` isn't guaranteed to keep pointing at the
+    /// same entity, or to stay non-nil, all the way through to the gesture's final
+    /// `.ended`/`.cancelled` frame, and `SpatialManipulationSystem`'s own session only gets
+    /// cleanly closed out if its lifecycle function is called on that final frame too — skipping
+    /// it leaves the session stuck mid-drag, still targeting whatever it was last acting on.
+    /// How many pipes have been placed total, used to cycle `pipeColors` — every placed pipe gets
+    /// a base identifying color, so `refreshTubeHighlight` always has one to brighten for
+    /// Selected/Editing.
+    var placedPipeCount = 0
+    /// Each tube's own identifying color, as assigned at creation — the value `refreshTubeHighlight`
+    /// brightens toward white for Selected/Editing, and restores exactly when a tube goes back to
+    /// Idle. Keyed here (rather than re-read from the material) so repeated select/deselect cycles
+    /// can't drift the color via accumulated blend rounding.
+    var tubeBaseColors: [EntityID: SIMD3<Float>] = [:]
 
     init() {
         Logger.log(message: "🎮 GameScene initializing...")
@@ -77,8 +86,6 @@ class GameScene {
         setEntityName(entityId: light, name: "Directional Light")
         createDirLight(entityId: light)
 
-        createDemoTube()
-
         setSceneReady(true)
     }
 
@@ -91,41 +98,6 @@ class GameScene {
         InputSystem.shared.registerXREvents()
         InputSystem.shared.setXRSpatialPickingBackendPreference(.octreeGPUPreferred)
         InputSystem.shared.setXRTwoHandRotateAxisMode(.dynamicSnapped)
-    }
-
-    /// Creates one procedural tube roughly at chest height, a short reach in front of where the
-    /// immersive space starts, plus its two (invisible until tapped active) endpoint proxies.
-    /// Tap the tube to arm it, then drag either endpoint — see `GameScene+TubeEditing.swift`.
-    ///
-    /// Two interior corners (at points 1 and 2) with `bendRadius` set, so both should render as
-    /// smooth rounded bends rather than sharp miter joints — the thing to actually look at when
-    /// manually verifying this in XR.
-    private func createDemoTube() {
-        let controlPoints: [SIMD3<Float>] = [
-            SIMD3(-0.2, 1.2, -0.6),
-            SIMD3(0.2, 1.2, -0.6),
-            SIMD3(0.2, 1.4, -0.6),
-            SIMD3(0.2, 1.4, -0.3),
-        ]
-
-        guard let tubeId = ProceduralGeometryExtension.shared.createTubeEntity(
-            controlPoints: controlPoints,
-            radius: 0.03,
-            radialSegments: 16,
-            capStart: true,
-            capEnd: true,
-            bendRadius: 0.08,
-            name: "DemoTube"
-        ) else {
-            Logger.log(message: "❌ Failed to create demo tube")
-            return
-        }
-
-        createTubeEndpointHandles(
-            tubeId: tubeId,
-            startPosition: controlPoints[0],
-            endPosition: controlPoints[controlPoints.count - 1]
-        )
     }
 
     // MARK: - Game Loop
@@ -146,66 +118,113 @@ class GameScene {
 
         let state = InputSystem.shared.xrSpatialInputState
 
-        // A tap (not a drag) on a tube, or on one of its endpoint proxies, arms it for editing;
-        // a tap on anything else disarms whichever tube was previously active. This is checked
-        // independently of the drag state below — a tap is a distinct, already-resolved gesture
-        // (see SpatialInputTutorial.md), never concurrent with an active drag.
-        if state.spatialTapActive {
-            handleTubeTap(pickedEntityId: state.pickedEntityId)
+        // Live-track the "place a new pipe" preview against whatever wall/floor the user is
+        // currently looking at — independent of tap handling below, so it's already in position
+        // by the time a tap arrives. See GameScene+PipePlacement.swift.
+        updatePipePlacementPreview(state: state)
+
+        // Two-hand deselection has priority, so the same snapshot can never select/edit and then
+        // immediately deselect a pipe.
+        let didDeselect = checkTwoHandDeselect(state: state)
+
+        // A tap (single pinch, not a drag) selects a tube; a later tap on the selected tube
+        // enters Editing. A tap on empty space does
+        // nothing now — see checkTwoHandDeselect below for why deselection moved to its own,
+        // distinct gesture. This is checked independently of the drag state below — a tap is a
+        // distinct, already-resolved gesture (see SpatialInputTutorial.md), never concurrent with
+        // an active drag.
+        //
+        // Placement taps (confirming the preview) are checked first: the preview is a real
+        // TubePathComponent entity, so handleTubeTap's generic "tap a tube to select it" dispatch
+        // would otherwise catch a tap meant to confirm it instead.
+        if state.spatialTapActive, !didDeselect {
+            if !handlePipePlacementTap(pickedEntityId: state.pickedEntityId) {
+                handleTubeTap(pickedEntityId: state.pickedEntityId)
+            }
         }
 
-        // Latch onto an endpoint proxy only at the start of a gesture — once a drag is under
-        // way, keep driving the same proxy regardless of what pickedEntityId reports frame to
-        // frame. `beginTubeDrag` itself refuses to start unless the proxy's tube is the active
-        // one, so a stray drag over an unarmed tube's (invisible) endpoint falls through to the
-        // scene-manipulation branch below instead of doing anything tube-specific.
+        // Both hands pinching at once (edge-triggered) deselects whichever tube is active,
+        // regardless of what's under the gaze at that instant — a deliberately distinct gesture
+        // from the single-hand tap used to select/confirm placement, so there's no single input
+        // signal for "deselect" and "confirm/create a pipe" to ever race on. This was the actual
+        // cause of an earlier bug (deselecting via an empty-space tap could, on some frames of
+        // that same gesture, also read as confirming a placement preview that had just become
+        // eligible to exist) — splitting them onto genuinely different gestures removes the
+        // possibility structurally, rather than patching the timing.
+        // Latch onto a proxy (Editing) or the active tube's own body (Selected, for a whole-tube
+        // move) only at the start of a gesture — once a drag is under way, keep driving the same
+        // target regardless of what pickedEntityId reports frame to frame. `beginTubeDrag` itself
+        // refuses to start unless it's actually this tube system's to drag, so a stray pinch over
+        // an unarmed tube falls through to the scene-manipulation branch below instead of doing
+        // anything tube-specific.
         //
         // Deliberately NOT gated on state.spatialTapActive: that flag means "this gesture
         // turned out to be a tap, not a drag" and is false for the entire duration of an
         // actual drag (see SpatialInputTutorial.md) — gating on it here meant a real drag
         // could never latch onto a proxy at all, so every attempt fell through to the
         // scene-root-drag branch below instead.
-        if activeDrag == nil, let entityId = state.pickedEntityId {
-            activeDrag = beginTubeDrag(proxyId: entityId)
+        if !didDeselect,
+           state.spatialDragActive,
+           case .changed = state.currentPhase,
+           !pipeInteractionState.isDragging,
+           let entityId = state.pickedEntityId {
+            beginTubeDrag(pickedEntityId: entityId, dragOrigin: state.inputDevicePositionWorld)
         }
 
-        // Mutually exclusive: dragging a proxy must not also drag the scene root under the same
-        // gesture, or everything in view appears to move together (the proxy moves by its own
-        // delta *and* the whole scene shifts by that same delta).
-        if var current = activeDrag {
-            // Call every frame for as long as our gesture is live — including its last frame —
-            // so SpatialManipulationSystem's own begin/update/end lifecycle actually reaches
-            // `end` instead of getting stuck mid-drag on this entity.
-            SpatialManipulationSystem.shared.processPinchTransformLifecycle(from: state)
+        // Mutually exclusive: dragging a proxy (or the whole tube) must not also drag the scene
+        // root under the same gesture, or everything in view appears to move together.
+        if case let .dragging(currentValue, returnMode, finishedValue) = pipeInteractionState {
+            var current = currentValue
+            var isFinished = finishedValue
+            // Call every frame for as long as our gesture is live — including its last frame — so
+            // SpatialManipulationSystem's own begin/update/end lifecycle actually reaches `end`
+            // instead of getting stuck mid-drag on this entity. Not called at all for a whole-tube
+            // move: that drag kind has no proxy entity of its own for SpatialManipulationSystem to
+            // move (it tracks the raw pinch position directly instead, see updateActiveDrag) —
+            // calling this with pickedEntityId == the tube itself would move the tube's own
+            // transform on top of the control-point shift already being applied, double-counting
+            // the same motion.
+            switch current {
+            case .endpoint, .interiorBend:
+                SpatialManipulationSystem.shared.processPinchTransformLifecycle(from: state)
+            case .wholeTube:
+                break
+            }
 
             let isGestureEnding = state.currentPhase == .ended || state.currentPhase == .cancelled
-            // ...then feed the proxy's current position into whichever drag type is active (the
+            // ...then feed the current position into whichever drag type is active (the
             // axis-locked/90-degree-only editing logic itself lives in
             // ProceduralGeometryExtension now) and move the proxy to wherever that reports back.
             // On the gesture's final frame this calls .end instead of .update — pinch release is
             // commonly accompanied by a small involuntary hand movement, which .update's
             // turn/collapse detection would otherwise be free to read as deliberate and insert
             // (or remove) a bend right at the moment of release.
-            if !isActiveDragFinished {
-                let stillGoing = updateActiveDrag(&current, isGestureEnding: isGestureEnding)
-                activeDrag = current
+            if !isFinished {
+                let stillGoing = updateActiveDrag(
+                    &current,
+                    isGestureEnding: isGestureEnding,
+                    rawDevicePosition: state.inputDevicePositionWorld
+                )
                 if !stillGoing {
-                    isActiveDragFinished = true
+                    isFinished = true
                 }
             }
+            pipeInteractionState = .dragging(current, returnMode: returnMode, finished: isFinished)
             // An interior-bend drag can rigidly shift an endpoint's position within the tube
             // without ever touching that endpoint's own proxy entity — keep them in sync every
             // frame so the two never visibly drift apart mid-drag.
             syncEndpointProxies(tubeId: current.tubeId)
 
             if isGestureEnding {
-                activeDrag = nil
-                isActiveDragFinished = false
-                if let activeTubeId {
-                    regenerateInteriorBendProxies(tubeId: activeTubeId)
+                switch returnMode {
+                case .selected:
+                    transitionPipeInteraction(to: .selected(current.tubeId))
+                case .editing:
+                    transitionPipeInteraction(to: .editing(current.tubeId))
+                    regenerateInteriorBendProxies(tubeId: current.tubeId)
                 }
             }
-        } else if activeTubeId == nil {
+        } else if pipeInteractionState.hasFocusedTube == false {
             // Nothing armed for editing and nothing of ours was picked — Pinch + Drag moves the
             // scene root, two-hands rotate rotates it.
             //
@@ -214,11 +233,11 @@ class GameScene {
             // would fall straight through to dragging the *entire scene* — surprising and
             // disruptive mid-edit, since arming a tube is already a deliberate signal of intent
             // to edit it. To look around again, tap away to disarm first.
-            SpatialManipulationSystem.shared.processAnchoredSceneManipulationLifecycle(
-                from: state,
-                dragSensitivity: 10.0,
-                rotateSensitivity: 1.0
-            )
+//            SpatialManipulationSystem.shared.processAnchoredSceneManipulationLifecycle(
+//                from: state,
+//                dragSensitivity: 10.0,
+//                rotateSensitivity: 1.0
+//            )
         }
 
         // Add your custom input handling here
