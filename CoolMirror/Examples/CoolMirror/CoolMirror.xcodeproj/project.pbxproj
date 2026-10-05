@@ -491,17 +491,17 @@
 /* Begin XCRemoteSwiftPackageReference section */
 		3A0C390AAC451D7BD747413A /* XCRemoteSwiftPackageReference "UntoldJoltPhysics" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/miolabs/UntoldJoltPhysics.git";
+			repositoryURL = "https://github.com/untoldengine/UntoldJoltPhysics.git";
 			requirement = {
-				branch = feature/mirror_reach_ik;
+				branch = develop;
 				kind = branch;
 			};
 		};
 		404CCDF6D0EF1CC51E5095C9 /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/miolabs/UntoldEngine.git";
+			repositoryURL = "https://github.com/untoldengine/UntoldEngine.git";
 			requirement = {
-				branch = feature/mirror_reach_ik;
+				branch = develop;
 				kind = branch;
 			};
 		};

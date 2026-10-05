@@ -15,12 +15,11 @@ let package = Package(
         .library(name: "CoolMirrorMocap", targets: ["CoolMirrorMocap"]),
     ],
     dependencies: [
-        // Tracks the engine's deformation feature branch until it merges into develop.
-        .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "feature/mirror_reach_ik"),
+        .package(url: "https://github.com/untoldengine/UntoldEngine.git", branch: "develop"),
         // XPBD cloth for Batman's cape (GPU sheet) …
         .package(path: "../CoolCloth"),
         // … and Jolt cloth on the cape mesh itself.
-        .package(url: "https://github.com/miolabs/UntoldJoltPhysics.git", branch: "feature/mirror_reach_ik"),
+        .package(url: "https://github.com/untoldengine/UntoldJoltPhysics.git", branch: "develop"),
     ],
     targets: [
         .target(
