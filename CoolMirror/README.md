@@ -76,7 +76,7 @@ The two characters are community models from Sketchfab, used under the
 [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/)
 licence their authors published them with:
 
-- **Spider-Man**: ["Spider-Man (2017; Homecoming - Tech Suit)"](https://sketchfab.com/3d-models/6f58018044e147c08b8c2d7f552f46d1) by mrpgremlin.
+- **Spider-Man**: ["Spider-Man (2017; Homecoming - Tech Suit)"](https://sketchfab.com/3d-models/spider-man-2017-homecoming-tech-suit-6f58018044e147c08b8c2d7f552f46d1) by Mr. P (mrpgremlin).
 - **Batman**: ["Batman Origins Suit - Textured and Rigged"](https://sketchfab.com/3d-models/batman-origins-suit-textured-and-rigged-ce83e407d259482c9ba284bced828933) by Light.k.
 
 Changes made for the demo: transforms applied and textures relinked in
