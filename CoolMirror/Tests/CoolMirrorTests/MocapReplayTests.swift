@@ -814,4 +814,74 @@ final class MocapReplayTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(lifting.map(\.right).max()), 50)
         XCTAssertLessThan(try XCTUnwrap(lifting.map(\.left).max()), 12)
     }
+
+    // MARK: - Fingers
+
+    /// The hands shaped from the headset's joints over the recorded
+    /// session, with the wearer's own open hand (the last step, hands
+    /// hanging relaxed) as the rig's rest: at rest nothing turns, holding
+    /// the hands up in front every bone is driven, and from one rendered
+    /// frame to the next no bone turns by more than a hand does.
+    func testTheFingersFollowTheHeadsetWithoutSteps() throws {
+        guard let session = try ticks(Self.withHeadset) else { throw XCTSkip("recording not present") }
+        let names = ["thumb", "index", "middle", "ring", "pinky"]
+        let rig = MocapHandRig(hand: "hand", fingers: names.map { f in (1 ... 3).map { "\(f)\($0)" } }, tips: names.map { "\($0)Tip" })
+        var track = MocapHeadTrack()
+        try track.calibrate(with: XCTUnwrap(session.ticks.first?.headset))
+        func captured(_ hand: MocapHandSample) -> [MocapHandJoint: simd_float3] {
+            MocapHandRetarget.modelSpace(hand, bodyAxes: track.inBodyAxes, mirror: false, flipFacing: false)
+        }
+        // The rest: the wearer's right hand, open, in the last step.
+        let still = stretch("Stand still", of: session).dropFirst(100)
+        let open = try XCTUnwrap(still.first?.hands[.right])
+        XCTAssertTrue(open.isTracked)
+        var rest: [String: simd_float3] = [:]
+        let openJoints = captured(open)
+        rest["hand"] = openJoints[.wrist]
+        for (index, (finger, joints)) in zip(rig.fingers, MocapHandRig.fingerJoints).enumerated() {
+            for segment in 0 ..< 3 {
+                rest[finger[segment]] = openJoints[joints[segment]]
+            }
+            rest[names[index] + "Tip"] = openJoints[joints[3]]
+        }
+        func turn(_ a: simd_quatf, _ b: simd_quatf) -> Float {
+            let angle = simd_normalize(a * b.inverse).angle
+            return min(angle, 2 * .pi - angle)
+        }
+        let atRest = MocapHandRetarget.deltas(captured: openJoints, rig: rig, rest: rest)
+        XCTAssertEqual(atRest.count, 16)
+        XCTAssertLessThan(try XCTUnwrap(atRest.values.map(\.angle).max()), 1e-3)
+
+        var previous: [String: simd_quatf]?
+        var largestStep: Float = 0
+        var driven = 0, seen = 0
+        var curls: [Float] = []
+        for tick in stretch("Hold your hands in front", of: session) {
+            guard let hand = tick.hands[.right], hand.isTracked else {
+                previous = nil
+                continue
+            }
+            seen += 1
+            let deltas = MocapHandRetarget.deltas(captured: captured(hand), rig: rig, rest: rest)
+            if deltas.count == 16 {
+                driven += 1
+            }
+            if let previous {
+                for (joint, delta) in deltas {
+                    guard let before = previous[joint] else { continue }
+                    largestStep = max(largestStep, turn(delta, before))
+                }
+            }
+            if let hand = deltas["hand"], let index = deltas["index1"] {
+                curls.append(turn(index, hand) * 180 / .pi)
+            }
+            previous = deltas
+        }
+        XCTAssertGreaterThan(seen, 300)
+        XCTAssertEqual(driven, seen, "every bone driven whenever the hand is seen")
+        XCTAssertLessThan(largestStep * 180 / .pi, 25, "degrees between rendered frames")
+        // The index finger bent at its knuckle relative to the open hand,
+        // and not past what a finger can do.
+        XCTAssertLessThan(try XCTUnwrap(curls.max()), 120)
+    }
 }
