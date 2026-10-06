@@ -46,6 +46,14 @@ enum CoolMirrorMocapMapping {
         }
         return MocapRigMapping(joints: joints, rootJoint: p.pelvis, referenceJoints: reference)
     }
+
+    /// The rig's hands, by the side of the character.
+    static func hands(for character: CoolMirrorCharacter) -> [MocapHandSide: MocapHandRig] {
+        guard let p = CoolMirrorRigProfile.profile(for: character) else { return [:] }
+        let left = MocapHandRig(hand: p.hand, fingers: p.fingers, tips: p.fingerTips)
+        let right = MocapHandRig(hand: p.mirror(left.hand), fingers: left.fingers.map { $0.map(p.mirror) }, tips: left.tips.map { $0.map(p.mirror) })
+        return [.left: left, .right: right]
+    }
 }
 
 /// Lock-protected; `update()` runs on the render thread, everything else on
@@ -83,6 +91,14 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// while it does not (see `MocapHandLadder`).
     private var headsetHands = true
     private var handLadder = MocapHandLadder()
+    /// The rig's hands by the character's side, and the finger and hand
+    /// rotations last shown (world deltas by joint name), eased toward
+    /// the headset's and held while it does not see the hand.
+    private var handRigs: [MocapHandSide: MocapHandRig] = [:]
+    private var shownHands: [MocapHandSide: [String: simd_quatf]] = [:]
+    private var lastHandTime: TimeInterval?
+    /// Halflife of the fingers following the headset (s).
+    private static let fingerHalflife: Float = 0.04
     /// The character is held by its head (the headset's position) and its
     /// planted feet (see `MocapBodyAnchor`).
     private var headAnchor = true
@@ -377,10 +393,12 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     /// `origin` is where the character's rest pose stands in the world (the
     /// captured skeleton is drawn relative to it).
-    func setCharacter(_ id: EntityID?, mapping: MocapRigMapping?, origin: simd_float3 = .zero) {
+    func setCharacter(_ id: EntityID?, mapping: MocapRigMapping?, hands: [MocapHandSide: MocapHandRig] = [:], origin: simd_float3 = .zero) {
         lock.withLock {
             characterId = id
             characterOrigin = origin
+            handRigs = hands
+            shownHands = [:]
             if let mapping {
                 let retargeter = MocapRetargeter(mapping: mapping)
                 retargeter.options = storedOptions
@@ -574,6 +592,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             )
         }
         let pins = place(&result, devicePose: devicePose, characterId: characterId, origin: origin, time: time, options: retargeter.options)
+        shapeHands(&result, devicePose: devicePose, rest: retargeter.rigRestPositions, time: time, options: retargeter.options)
         setEntityExternalPose(
             entityId: characterId,
             worldRotationDeltas: result.worldRotationDeltas,
@@ -843,6 +862,48 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         }
         let outputs = lock.withLock { handLadder.update(inputs, time: time) }
         return outputs.mapValues { phoneHead + $0.position }
+    }
+
+    /// The hand and finger bones take the directions of the headset's
+    /// while it sees the hand (see `MocapHandRetarget`), eased over a few
+    /// frames; a hand it does not see keeps the shape it last had.
+    private func shapeHands(
+        _ result: inout MocapRetargetResult, devicePose: simd_float4x4?, rest: [String: simd_float3],
+        time: TimeInterval, options: MocapRetargetOptions
+    ) {
+        let (enabled, provider, track, rigs) = lock.withLock { (headsetHands, handProvider, headTrack, handRigs) }
+        guard enabled, let provider, devicePose != nil, track.isCalibrated, !rigs.isEmpty else {
+            lock.withLock { shownHands = [:] }
+            return
+        }
+        let seen = provider()
+        let dt = Float(lock.withLock { () -> TimeInterval in
+            defer { lastHandTime = time }
+            return lastHandTime.map { max(0, time - $0) } ?? 0
+        })
+        let ease = 1 - exp(-0.693_147_18 * dt / Self.fingerHalflife)
+        for (side, rig) in rigs {
+            // In a mirror the wearer's other hand drives this one.
+            let wearer: MocapHandSide = options.mirror ? (side == .left ? .right : .left) : side
+            var shown = lock.withLock { shownHands[side] } ?? [:]
+            if let hand = seen[wearer], hand.isTracked {
+                let captured = MocapHandRetarget.modelSpace(
+                    hand, bodyAxes: track.inBodyAxes, mirror: options.mirror, flipFacing: options.flipFacing
+                )
+                let targets = MocapHandRetarget.deltas(captured: captured, rig: rig, rest: rest)
+                for (joint, target) in targets {
+                    if let current = shown[joint] {
+                        shown[joint] = simd_normalize(simd_slerp(current, target, ease))
+                    } else {
+                        shown[joint] = target
+                    }
+                }
+            }
+            lock.withLock { shownHands[side] = shown }
+            for (joint, delta) in shown {
+                result.worldRotationDeltas[joint] = delta
+            }
+        }
     }
 
     /// Eases the limbs back to the pose.

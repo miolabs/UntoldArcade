@@ -188,7 +188,10 @@ public final class CoolMirrorGame {
             setEntityMuscleRig(entityId: characterId, rig: CoolMirrorMuscles.rig(for: newCharacter))
             self.applyClip()
             self.applySkinningPath()
-            self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter), origin: self.characterPosition)
+            self.mocap.setCharacter(
+                characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter),
+                hands: CoolMirrorMocapMapping.hands(for: newCharacter), origin: self.characterPosition
+            )
             self.cape.setCharacter(characterId, character: newCharacter)
             self.joltCape.setCharacter(characterId, character: newCharacter)
             self.applyMocapPause()
