@@ -15,7 +15,7 @@ Clone it, open a folder, hit `⌘R`, and you're looking at the feature instead o
 
 ## 📺 Demos
 
-Each demo is a **standalone Xcode project** with its own README, tutorial, and bundled assets — no setup beyond opening the `.xcodeproj`. The four Rendering Extensions (CoolSaber, CoolWater, CoolCloth, CoolWeb) are reusable plugins — each ships its own shader library, pipelines, and render-graph passes, and can be dropped into any project.
+Each demo has its own README with run instructions and a guided path through the checked-in code. App demos are standalone Xcode projects; the Rendering Extensions (CoolSaber, CoolWater, CoolCloth, CoolWeb) are reusable Swift packages with example Xcode apps. Each extension ships its own shader library, pipelines, and render-graph passes and can be dropped into another project.
 
 ### ⚔️ CoolSaber — *visionOS · Rendering Extension*
 
@@ -66,6 +66,54 @@ A *virtual mirror* for the engine's character-deformation stack: a rigged, high-
 
 ```bash
 open CoolMirror/Examples/CoolMirror/CoolMirror.xcodeproj   # CoolMirrorVisionOS + CoolMirrorCapture (iPhone) targets
+```
+
+### 🏀 CoolBasket — *visionOS · Physics Backend*
+
+<!-- MEDIA: docs/media/CoolBasket/demo.gif -->
+<!-- ![CoolBasket demo](docs/media/CoolBasket/demo.gif) -->
+
+Mixed-reality basketball, and the first consumer of the engine's physics backend plugin seam: a pure-Swift `PhysicsBackend` simulates the ball against your real floor, walls and furniture (ARKit plane detection), the hoop you place in your room, and your hands. Look at the floor and pinch to place the hoop, pinch near the ball to pick it up, flick to throw — a shot only counts when it comes down through the rim.
+
+- `PhysicsBackendPlugin` installed before renderer creation, driven by the engine's `PhysicsCoordinator` — zero engine changes
+- Rigid bodies, static colliders and trigger volumes expressed with the engine-owned `RigidBodyComponent`/`ColliderComponent`
+- Contact and trigger events delivered through `PhysicsEvents`
+
+```bash
+open CoolBasket/Examples/CoolBasketVisionOS/CoolBasketVisionOS.xcodeproj
+```
+
+### 🎳 CoolBowling — *visionOS · Jolt Physics*
+
+<!-- MEDIA: docs/media/CoolBowling/demo.gif -->
+<!-- ![CoolBowling demo](docs/media/CoolBowling/demo.gif) -->
+
+Mixed-reality bowling on the shared Jolt Physics plugin — the demo that needs a real rigid-body solver. Look at your floor to lay a lane, pinch to pick up the ball and roll it; ten pins (lathe meshes with convex-hull colliders) stack, wobble, topple and knock each other over, and the pins down are counted from their poses.
+
+```bash
+open CoolBowling/Examples/CoolBowlingVisionOS/CoolBowlingVisionOS.xcodeproj
+```
+
+### 🧲 UntoldJoltPhysics — *plugin · Physics Backend*
+
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, as a Swift package every demo can depend on: [untoldengine/UntoldJoltPhysics](https://github.com/untoldengine/UntoldJoltPhysics). Jolt comes as source from the [untoldengine/JoltPhysics](https://github.com/untoldengine/JoltPhysics) fork (the upstream tree plus a `Package.swift`) and SwiftPM compiles it — no binaries — for macOS, iOS and visionOS. CoolBasket can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
+
+```swift
+.package(url: "https://github.com/untoldengine/UntoldJoltPhysics.git", branch: "develop")
+```
+
+### ⚽ CoolFutbol — *visionOS*
+
+![CoolFutbol demo](docs/media/CoolFutbol/demo.gif)
+
+Mixed-reality tabletop soccer: look at a real table and pinch to snap a stadium onto it, two-hand pinch to rotate, tap to confirm — then control one player on a 5v5 pitch with a PSVR2 Sense controller (dribble, pass, shoot) while teammates hold a formation shape that shifts between attacking and defending based on who has the ball. Doubles as a worked example of the engine's core game loop; see the demo's own README for a walkthrough from app bootstrap through `update()`/`handleInput()`.
+
+- ARKit real-surface picking (`pickRealSurfacePosition`) for table-snap placement, with pinch-drag/two-hand-rotate scene manipulation
+- PSVR2 Sense controller input mapped to dribble/pass/shoot via `InputSystem.shared.gameControllerState`
+- Formation/positioning system driving off-ball teammates through custom systems (`registerCustomSystem`)
+
+```bash
+open CoolFutbol/CoolFutbol.xcodeproj
 ```
 
 ### 🏛️ ArchvizViewer — *visionOS*
@@ -136,9 +184,9 @@ open SplatTwin/SplatTwin.xcodeproj
 ## ⚙️ Requirements
 
 - **Xcode 26.1** or later
-- **macOS 26.01+** (for macOS demos)
-- **iOS 26.01+** (for iOS demos)
-- **visionOS 26.01+** (for Vision Pro demos)
+- **macOS 26.0+** for the current macOS demo targets
+- **iOS 26.0+** for the current SceneBuilder iOS target
+- **visionOS 2.0+** for most Vision Pro demos; CoolSaber targets visionOS 26.0 because it uses accessory tracking
 - Metal-capable GPU
 - A physical Apple Vision Pro for CoolSaber (simulator can't run the deferred renderer's G-buffer) and CoolWeb (simulator has no hand tracking or scene reconstruction)
 
@@ -153,7 +201,7 @@ cd UntoldArcade
 ```
 
 ### 2. Open a demo project
-Each demo is a standalone Xcode project. Navigate to the demo folder and open the `.xcodeproj` file — see the `open` command under each demo above.
+Navigate to the demo folder and open the `.xcodeproj` shown under that demo above. Rendering-extension demos keep their consumer app under `Examples/`; their top-level directory is also a Swift package that can be built and tested independently.
 
 > Most demos generate their Xcode project from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). If you add/remove source files or change dependencies, re-run `xcodegen generate` inside that demo's folder before opening/building.
 
@@ -174,6 +222,9 @@ UntoldArcade/
 ├── CoolWater/           # Rendering Extension — real-time animated water
 ├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
+├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam, on either backend
+├── CoolBowling/         # visionOS — bowling on the Jolt Physics plugin
+├── CoolFutbol/          # visionOS — mixed-reality tabletop soccer + PSVR2 controls
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
 ├── CityStreaming/       # visionOS — tiled city streaming with LOD/HLOD
@@ -182,7 +233,7 @@ UntoldArcade/
 └── docs/media/          # Screenshots/GIFs/video referenced by this README
 ```
 
-Each demo folder generally follows:
+App demo folders generally follow:
 ```bash
 <Demo>/
 ├── project.yml               # XcodeGen config (where used)
@@ -191,6 +242,17 @@ Each demo folder generally follows:
     ├── <Demo>App.swift        # App entry point
     ├── GameScene.swift        # Scene setup, input, per-frame logic
     └── GameData/               # Bundled models, textures, HDRs, streamed tiles
+```
+
+Rendering-extension demos instead separate reusable package code from the consumer app:
+
+```text
+<Demo>/
+├── Package.swift
+├── README.md
+├── Sources/<Demo>/             # Plugin, extension, simulation/state, shaders
+├── Tests/<Demo>Tests/
+└── Examples/<Demo>VisionOS/    # Runnable consumer Xcode project
 ```
 
 ## 🤝 Contributing
