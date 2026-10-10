@@ -1,0 +1,24 @@
+{
+  "originHash" : "39cc400398b2b6b82f21e3c3fa16055b36698ed9b65405167de3d4a143ec8d20",
+  "pins" : [
+    {
+      "identity" : "proceduralgeometryextension",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/ProceduralGeometryExtension.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "d1b908826115d6f7fcd864bc2dcfcfddc759d579"
+      }
+    },
+    {
+      "identity" : "untoldengine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/untoldengine/UntoldEngine.git",
+      "state" : {
+        "branch" : "develop",
+        "revision" : "dc1d8e9fb80de35f979542e41a4ba8da051e5548"
+      }
+    }
+  ],
+  "version" : 3
+}
