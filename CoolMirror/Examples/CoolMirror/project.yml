@@ -8,13 +8,13 @@ packages:
   CoolMirror:
     path: ../..
   UntoldEngine:
-    url: https://github.com/miolabs/UntoldEngine.git
-    branch: feature/mirror_mocap
+    url: https://github.com/untoldengine/UntoldEngine.git
+    branch: develop
   CoolCloth:
     path: ../../../CoolCloth
   UntoldJoltPhysics:
-    url: https://github.com/miolabs/UntoldJoltPhysics.git
-    branch: feature/soft_body_cloth
+    url: https://github.com/untoldengine/UntoldJoltPhysics.git
+    branch: develop
 
 settings:
   base:

@@ -188,7 +188,10 @@ public final class CoolMirrorGame {
             setEntityMuscleRig(entityId: characterId, rig: CoolMirrorMuscles.rig(for: newCharacter))
             self.applyClip()
             self.applySkinningPath()
-            self.mocap.setCharacter(characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter), origin: self.characterPosition)
+            self.mocap.setCharacter(
+                characterId, mapping: CoolMirrorMocapMapping.mapping(for: newCharacter),
+                hands: CoolMirrorMocapMapping.hands(for: newCharacter), origin: self.characterPosition
+            )
             self.cape.setCharacter(characterId, character: newCharacter)
             self.joltCape.setCharacter(characterId, character: newCharacter)
             self.applyMocapPause()
@@ -231,12 +234,22 @@ public final class CoolMirrorGame {
 
     /// `bodySmoothing` and `legSmoothing` go from 0 (raw tracker, shaky)
     /// to 1 (very steady, laggy); the legs setting also steadies the hips
-    /// and where the character stands.
+    /// and where the character stands. With `armReach` the hands go where
+    /// the captured hands are on the body (reach IK) instead of where the
+    /// copied bone directions take them. With `headAnchor` the head is
+    /// where the headset is and the planted feet stay where they landed;
+    /// the phone gives the pose between them, not where the body is.
+    /// With `headsetHands` the hands are where the headset sees them,
+    /// the phone's taking over while it does not.
     public func setMocapOptions(
         mirror: Bool, flipFacing: Bool, weight: Float, rootMotion: Bool,
-        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false
+        bodySmoothing: Float = 0.4, legSmoothing: Float = 0.6, groundLock: Bool = true, plantFeet: Bool = false,
+        armReach: Bool = true, headAnchor: Bool = true, headsetHands: Bool = true
     ) {
         mocap.isGroundLockEnabled = groundLock
+        mocap.isHeadsetHandsEnabled = headsetHands
+        mocap.isHeadAnchorEnabled = headAnchor
+        mocap.isArmReachEnabled = armReach
         var options = MocapRetargetOptions()
         options.mirror = mirror
         options.flipFacing = flipFacing
@@ -267,11 +280,21 @@ public final class CoolMirrorGame {
         mocap.isCalibrated
     }
 
-    /// Drives the character's head from the headset's own orientation
-    /// (the phone cannot see the head under the Vision Pro). The provider
-    /// runs on the render thread every frame; nil goes back to the neck.
-    public func setMocapHeadPoseProvider(_ provider: (@Sendable () -> simd_quatf?)?) {
+    /// Drives the character's head from the headset's own pose (world):
+    /// its orientation turns the head (the phone cannot see it under the
+    /// Vision Pro) and its position says where the head is. The provider
+    /// runs on the render thread every frame; nil goes back to the neck
+    /// and the phone's root.
+    public func setMocapHeadPoseProvider(_ provider: (@Sendable () -> simd_float4x4?)?) {
         mocap.setHeadPoseProvider(provider)
+    }
+
+    /// Supplies the wearer's hands as the headset sees them (see
+    /// `CoolMirrorHandSession`): the character's hands follow them, and
+    /// they go into the recordings. The provider runs on the render
+    /// thread every frame.
+    public func setMocapHandProvider(_ provider: (@Sendable () -> [MocapHandSide: MocapHandSample])?) {
+        mocap.setHandProvider(provider)
     }
 
     /// Whether an iPhone is connected to the mirror.
@@ -295,7 +318,8 @@ public final class CoolMirrorGame {
         mocap.preview
     }
 
-    /// Records the raw frames the phone sends into a new file in the app's
+    /// Records the raw frames the phone sends, and the headset's head and
+    /// hands at every frame it renders, into a new file in the app's
     /// Documents folder (shown in the Files app), for replaying on a Mac.
     /// Returns the file.
     public func startMocapRecording() -> URL? {
@@ -317,9 +341,10 @@ public final class CoolMirrorGame {
         mocap.markRecording(label)
     }
 
-    /// Closes the recording; the file and how many frames it holds.
+    /// Closes the recording; the file, how many frames of the phone's it
+    /// holds and how many samples of the headset's.
     @discardableResult
-    public func stopMocapRecording() -> (url: URL, frames: Int)? {
+    public func stopMocapRecording() -> (url: URL, frames: Int, headsetSamples: Int)? {
         mocap.stopRecording()
     }
 

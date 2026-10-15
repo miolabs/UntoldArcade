@@ -28,6 +28,10 @@ struct CoolMirrorRigProfile: Sendable {
     let calf: String
     let foot: String
     let toe: String
+    /// Five fingers, thumb first, three segments each from the knuckle,
+    /// and each finger's tip joint when the rig has one.
+    let fingers: [[String]]
+    let fingerTips: [String?]
     /// Rewrites a left-side joint name into its right-side twin.
     let mirror: @Sendable (String) -> String
 
@@ -54,6 +58,8 @@ struct CoolMirrorRigProfile: Sendable {
         calf: "mixamorig:LeftLeg",
         foot: "mixamorig:LeftFoot",
         toe: "mixamorig:LeftToeBase",
+        fingers: ["Thumb", "Index", "Middle", "Ring", "Pinky"].map { finger in (1 ... 3).map { "mixamorig:LeftHand\(finger)\($0)" } },
+        fingerTips: Array(repeating: nil, count: 5),
         mirror: { $0.replacingOccurrences(of: "Left", with: "Right") }
     )
 
@@ -72,6 +78,8 @@ struct CoolMirrorRigProfile: Sendable {
         calf: "Bip01_L_Calf",
         foot: "Bip01_L_Foot",
         toe: "Bip01_L_Toe0",
+        fingers: (0 ... 4).map { finger in ["Bip01_L_Finger\(finger)", "Bip01_L_Finger\(finger)1", "Bip01_L_Finger\(finger)2"] },
+        fingerTips: (0 ... 4).map { "Bip01_L_Finger\($0)Nub" },
         mirror: { $0.replacingOccurrences(of: "_L_", with: "_R_") }
     )
 }

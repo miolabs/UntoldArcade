@@ -4,7 +4,10 @@
 //
 //  Bridges the iPhone body capture to the engine: receives frames, retargets
 //  them for the current character's rig and hands the engine world-space
-//  rotation deltas every frame through `setEntityExternalPose`.
+//  rotation deltas every frame through `setEntityExternalPose`, and the
+//  hands' targets through reach IK (see `MocapArmReach`). With the headset's
+//  pose the character is held by its head and its planted feet (see
+//  `MocapBodyAnchor`), the phone giving only the pose between them.
 //
 
 import CoolMirrorMocap
@@ -43,6 +46,14 @@ enum CoolMirrorMocapMapping {
         }
         return MocapRigMapping(joints: joints, rootJoint: p.pelvis, referenceJoints: reference)
     }
+
+    /// The rig's hands, by the side of the character.
+    static func hands(for character: CoolMirrorCharacter) -> [MocapHandSide: MocapHandRig] {
+        guard let p = CoolMirrorRigProfile.profile(for: character) else { return [:] }
+        let left = MocapHandRig(hand: p.hand, fingers: p.fingers, tips: p.fingerTips)
+        let right = MocapHandRig(hand: p.mirror(left.hand), fingers: left.fingers.map { $0.map(p.mirror) }, tips: left.tips.map { $0.map(p.mirror) })
+        return [.left: left, .right: right]
+    }
 }
 
 /// Lock-protected; `update()` runs on the render thread, everything else on
@@ -69,11 +80,39 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     private var jitter = MocapJitterMeter()
     private var debugOverlay = false
     private var debugLinesShown = false
-    /// The headset's own orientation (world), read every update: it drives
-    /// the character's head, the one joint the phone cannot see under the
-    /// Vision Pro.
-    private var headPoseProvider: (@Sendable () -> simd_quatf?)?
+    /// The headset's own pose (world), read every update: its orientation
+    /// drives the character's head, the one joint the phone cannot see
+    /// under the Vision Pro, and its position says where the head is.
+    private var headPoseProvider: (@Sendable () -> simd_float4x4?)?
     private var headReference: simd_quatf?
+    /// The wearer's hands as the headset sees them, read every update.
+    private var handProvider: (@Sendable () -> [MocapHandSide: MocapHandSample])?
+    /// The hands follow the headset while it sees them and the phone
+    /// while it does not (see `MocapHandLadder`).
+    private var headsetHands = true
+    private var handLadder = MocapHandLadder()
+    /// The rig's hands by the character's side, and the finger and hand
+    /// rotations last shown (world deltas by joint name), eased toward
+    /// the headset's and held while it does not see the hand.
+    private var handRigs: [MocapHandSide: MocapHandRig] = [:]
+    private var shownHands: [MocapHandSide: [String: simd_quatf]] = [:]
+    private var lastHandTime: TimeInterval?
+    /// Halflife of the fingers following the headset (s).
+    private static let fingerHalflife: Float = 0.04
+    /// The character is held by its head (the headset's position) and its
+    /// planted feet (see `MocapBodyAnchor`).
+    private var headAnchor = true
+    private var headTrack = MocapHeadTrack()
+    private var bodyAnchor = MocapBodyAnchor()
+    /// Where the rig's head is with the wearer at the calibration spot
+    /// (model space); nil until the first anchored frame.
+    private var headRest: simd_float3?
+    /// The rig's rest joint positions by the captured joint they answer
+    /// for, and the hips' share of a lean (see `MocapBodyAnchor`).
+    private var restJoints: [MocapJoint: simd_float3] = [:]
+    private var hipShare: Float = 0.55
+    /// The rig's leg chains, in the order of `MocapBodyAnchor.feet`.
+    private var legChains: [ReachIKChainDescriptor] = []
     private var groundLock = true
     /// The character stands on its planted foot (see `MocapFootAnchor`).
     private var footAnchor = MocapFootAnchor()
@@ -82,6 +121,23 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// Rest height of every ankle and toe joint (model space), by the
     /// captured joint it answers for.
     private var restFootHeights: [MocapJoint: Float] = [:]
+    /// The hands reach for where the captured hands are on the body (see
+    /// `MocapArmReach`), over the arm pose the capture gives.
+    private var armReach = true
+    private let armReachSolver = MocapArmReach()
+    /// The rig's arm chains, in the order of `MocapArmReach.arms`; empty
+    /// when the rig lacks one of the joints.
+    private var armChains: [ReachIKChainDescriptor] = []
+    private var armLengths: [MocapJoint: Float] = [:]
+    private var reachChainsConfigured = false
+    private var reaching = false
+    /// Seconds over which the reach takes and releases the limbs.
+    private static let reachHalflife: Float = 0.2
+    /// The capture is filtered already; this only rounds off what is left.
+    private static let reachTargetHalflife: Float = 0.03
+    /// A straight limb is straight: a limit short of it bends every
+    /// elbow and knee that should not be.
+    private static let reachExtent: Float = 1
 
     var options: MocapRetargetOptions {
         get { lock.withLock { storedOptions } }
@@ -110,8 +166,9 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     // MARK: - Recording
 
-    /// Starts writing every frame the phone sends to `url` (see
-    /// `MocapRecording`); a recording already running is closed first.
+    /// Starts writing every frame the phone sends to `url`, and what the
+    /// headset knows at every frame it renders (see `MocapRecording`); a
+    /// recording already running is closed first.
     func startRecording(to url: URL) throws {
         stopRecording()
         let writer = try MocapRecordingWriter(url: url)
@@ -126,14 +183,33 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     }
 
     @discardableResult
-    func stopRecording() -> (url: URL, frames: Int)? {
+    func stopRecording() -> (url: URL, frames: Int, headsetSamples: Int)? {
         receiver.frameSink = nil
         guard let writer = lock.withLock({ () -> MocapRecordingWriter? in
             defer { recording = nil }
             return recording
         }) else { return nil }
         writer.close()
-        return (writer.url, writer.frameCount)
+        return (writer.url, writer.frameCount, writer.headsetSampleCount)
+    }
+
+    /// The headset's head and hands at this rendered frame, into the
+    /// recording: whether or not a body is in view, and whatever the
+    /// mirror makes of it.
+    private func recordHeadset(at time: TimeInterval) {
+        let (writer, head, hands) = lock.withLock { (recording, headPoseProvider, handProvider) }
+        guard let writer else { return }
+        writer.append(MocapHeadsetSample(
+            time: time,
+            frameTime: receiver.latestFrame?.timestamp,
+            head: head?().map { MocapPose($0) },
+            hands: hands?() ?? [:]
+        ))
+    }
+
+    /// Supplies the wearer's hands as the headset sees them.
+    func setHandProvider(_ provider: (@Sendable () -> [MocapHandSide: MocapHandSample])?) {
+        lock.withLock { handProvider = provider }
     }
 
     var recordingFrameCount: Int? {
@@ -142,10 +218,29 @@ final class CoolMirrorMocapController: @unchecked Sendable {
 
     /// Supplies the headset's world orientation; the head then follows the
     /// wearer's head (mirrored like the rest) instead of riding on the neck.
-    func setHeadPoseProvider(_ provider: (@Sendable () -> simd_quatf?)?) {
+    func setHeadPoseProvider(_ provider: (@Sendable () -> simd_float4x4?)?) {
         lock.withLock {
             headPoseProvider = provider
             headReference = nil
+            headTrack.reset()
+            bodyAnchor.reset()
+            headRest = nil
+        }
+    }
+
+    /// The head is where the headset is and the planted feet stay where
+    /// they landed; the phone gives the pose between them, not where the
+    /// body is (see `MocapBodyAnchor`). Needs the headset's pose and root
+    /// motion; off, or without them, the root is the phone's.
+    var isHeadAnchorEnabled: Bool {
+        get { lock.withLock { headAnchor } }
+        set {
+            lock.withLock {
+                guard headAnchor != newValue else { return }
+                headAnchor = newValue
+                bodyAnchor.reset()
+                headRest = nil
+            }
         }
     }
 
@@ -162,6 +257,33 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// The hands go where the captured hands are relative to the body
+    /// (touching hands touch, a hand on the head lands on the head)
+    /// instead of where the copied bone directions take them.
+    var isArmReachEnabled: Bool {
+        get { lock.withLock { armReach } }
+        set { lock.withLock { armReach = newValue } }
+    }
+
+    /// The hands are where the headset sees them; the phone's take over
+    /// while it does not (see `MocapHandLadder`). Needs the arm reach,
+    /// the headset's pose and its hands.
+    var isHeadsetHandsEnabled: Bool {
+        get { lock.withLock { headsetHands } }
+        set {
+            lock.withLock {
+                guard headsetHands != newValue else { return }
+                headsetHands = newValue
+                handLadder.reset()
+            }
+        }
+    }
+
+    /// Which device each of the character's hands follows, for the panel.
+    var handSources: [MocapJoint: MocapHandLadder.Source] {
+        lock.withLock { headsetHands ? handLadder.sources : [:] }
     }
 
     /// Joints the phone must actually see before the pose is trustworthy
@@ -255,29 +377,52 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             + ", pictures \(counts.pictures) of \(counts.chunks) chunks"
         if driving {
             let held = (lock.withLock { retargeter?.isYawHeld } ?? false) ? " · heading held: the tracker turned the body faster than a body can turn" : ""
-            return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport)\(held) (stand still to read the tracker noise)"
+            let sources = handSources
+            func name(_ joint: MocapJoint) -> String {
+                switch sources[joint] {
+                case .headset, .bridge: "headset"
+                case .phone: "phone"
+                case nil: "-"
+                }
+            }
+            let hands = sources.isEmpty ? "" : " · hands: left \(name(.leftHand)), right \(name(.rightHand))"
+            return "Mirroring you at \(receiver.framesPerSecond) Hz, \(seen)\(hands). Wrong side? tap Mirror. Facing away? tap Flip. Recalibrate any time.\n\(jitterReport)\(held) (stand still to read the tracker noise)"
         }
         return "Body tracked (\(receiver.framesPerSecond) Hz), waiting for the next frame…"
     }
 
     /// `origin` is where the character's rest pose stands in the world (the
     /// captured skeleton is drawn relative to it).
-    func setCharacter(_ id: EntityID?, mapping: MocapRigMapping?, origin: simd_float3 = .zero) {
+    func setCharacter(_ id: EntityID?, mapping: MocapRigMapping?, hands: [MocapHandSide: MocapHandRig] = [:], origin: simd_float3 = .zero) {
         lock.withLock {
             characterId = id
             characterOrigin = origin
+            handRigs = hands
+            shownHands = [:]
             if let mapping {
                 let retargeter = MocapRetargeter(mapping: mapping)
                 retargeter.options = storedOptions
                 if let id {
                     retargeter.rigRestPositions = Self.restPositions(of: id)
                     restFootHeights = Self.restFootHeights(of: retargeter.rigRestPositions, mapping: mapping)
+                    (armChains, armLengths) = Self.armChains(of: id, mapping: mapping)
+                    legChains = Self.legChains(of: id, mapping: mapping)
+                    restJoints = mapping.referenceJoints.compactMapValues { retargeter.rigRestPositions[$0] }
+                    hipShare = MocapBodyAnchor.hipShare(rest: restJoints)
                 }
                 self.retargeter = retargeter
             } else {
                 retargeter = nil
                 restFootHeights = [:]
+                armChains = []
+                armLengths = [:]
+                legChains = []
+                restJoints = [:]
             }
+            reachChainsConfigured = false
+            reaching = false
+            bodyAnchor.reset()
+            headRest = nil
             driving = false
             footAnchor.reset()
             jitter.reset()
@@ -310,6 +455,48 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         return heights
     }
 
+    /// The rig's arm chains (full joint paths) and arm lengths, by
+    /// shoulder joint; nothing unless both arms are complete.
+    private static func armChains(of entityId: EntityID, mapping: MocapRigMapping) -> ([ReachIKChainDescriptor], [MocapJoint: Float]) {
+        let rest = entitySkeletonRestJointPoses(entityId: entityId)
+        func joint(_ captured: MocapJoint) -> (path: String, position: simd_float3)? {
+            guard let name = mapping.joints[captured],
+                  let pose = rest.first(where: { jointPath($0.path, matches: name) })
+            else { return nil }
+            return (pose.path, pose.modelPosition)
+        }
+        var chains: [ReachIKChainDescriptor] = []
+        var lengths: [MocapJoint: Float] = [:]
+        for arm in MocapArmReach.arms {
+            guard let shoulder = joint(arm.shoulder), let elbow = joint(arm.elbow), let hand = joint(arm.hand) else {
+                return ([], [:])
+            }
+            chains.append(ReachIKChainDescriptor(shoulderPath: shoulder.path, elbowPath: elbow.path, handPath: hand.path))
+            lengths[arm.shoulder] = simd_distance(shoulder.position, elbow.position) + simd_distance(elbow.position, hand.position)
+        }
+        return (chains, lengths)
+    }
+
+    /// The rig's leg chains (full joint paths), in the order of
+    /// `MocapBodyAnchor.feet`; nothing unless both legs are complete.
+    private static func legChains(of entityId: EntityID, mapping: MocapRigMapping) -> [ReachIKChainDescriptor] {
+        let rest = entitySkeletonRestJointPoses(entityId: entityId)
+        func path(_ captured: MocapJoint) -> String? {
+            guard let name = mapping.joints[captured] else { return nil }
+            return rest.first { jointPath($0.path, matches: name) }?.path
+        }
+        var chains: [ReachIKChainDescriptor] = []
+        for foot in MocapBodyAnchor.feet {
+            guard let leg = MocapBodyAnchor.legs[foot], leg.count == 4,
+                  let hip = path(leg[1]), let knee = path(leg[2]), let ankle = path(leg[3])
+            else { return [] }
+            chains.append(ReachIKChainDescriptor(
+                shoulderPath: hip, elbowPath: knee, handPath: ankle, bendDirection: simd_float3(0, 0, 1)
+            ))
+        }
+        return chains
+    }
+
     func setEnabled(_ enabled: Bool) {
         let (wasEnabled, characterId) = lock.withLock {
             let was = self.enabled
@@ -322,9 +509,12 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             receiver.stop()
             if let characterId {
                 clearEntityExternalPose(entityId: characterId)
+                releaseLimbs(characterId: characterId)
             }
             lock.withLock {
                 driving = false
+                bodyAnchor.reset()
+                headRest = nil
                 retargeter?.resetSmoothing()
                 jitter.reset()
             }
@@ -340,14 +530,15 @@ final class CoolMirrorMocapController: @unchecked Sendable {
     /// and retargets it onto the character. Runs every render tick, so the
     /// filter also interpolates between the phone's frames.
     func update() {
+        let now = Date()
+        let time = now.timeIntervalSinceReferenceDate
+        recordHeadset(at: time)
         let (enabled, characterId, retargeter, origin) = lock.withLock {
             (self.enabled, self.characterId, self.retargeter, characterOrigin)
         }
         guard enabled, let characterId, let retargeter else { return }
         guard let frame = receiver.latestFrame else { return }
 
-        let now = Date()
-        let time = now.timeIntervalSinceReferenceDate
         let isNew = lock.withLock { () -> Bool in
             guard frame.sequence != lastSequence else { return false }
             lastSequence = frame.sequence
@@ -363,6 +554,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 let wasDriving = lock.withLock { driving }
                 if wasDriving {
                     clearEntityExternalPose(entityId: characterId)
+                    releaseLimbs(characterId: characterId)
                     lock.withLock { driving = false }
                 }
                 hideDebugLines()
@@ -376,10 +568,20 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             defer { pendingCalibration = false }
             return pendingCalibration
         }
-        let headPose = lock.withLock { headPoseProvider }?()
+        let devicePose = lock.withLock { headPoseProvider }?()
+        let headPose = devicePose.map { simd_quatf($0) }
         if calibrate {
             retargeter.calibrate(with: smoothed)
-            lock.withLock { headReference = headPose }
+            lock.withLock {
+                headReference = headPose
+                if let devicePose {
+                    headTrack.calibrate(with: devicePose)
+                } else {
+                    headTrack.reset()
+                }
+                bodyAnchor.reset()
+                headRest = nil
+            }
         }
         guard var result = retargeter.retarget(smoothed) else { return }
         if let headPose, let reference = lock.withLock({ headReference }),
@@ -389,7 +591,8 @@ final class CoolMirrorMocapController: @unchecked Sendable {
                 pose: headPose, reference: reference, characterId: characterId, options: retargeter.options
             )
         }
-        result.rootTranslationDelta = grounded(result, characterId: characterId, origin: origin, time: time)
+        let pins = place(&result, devicePose: devicePose, characterId: characterId, origin: origin, time: time, options: retargeter.options)
+        shapeHands(&result, devicePose: devicePose, rest: retargeter.rigRestPositions, time: time, options: retargeter.options)
         setEntityExternalPose(
             entityId: characterId,
             worldRotationDeltas: result.worldRotationDeltas,
@@ -397,6 +600,7 @@ final class CoolMirrorMocapController: @unchecked Sendable {
             rootTranslationDelta: result.rootTranslationDelta,
             weight: retargeter.options.weight
         )
+        reach(result, pins: pins, devicePose: devicePose, characterId: characterId, origin: origin, time: time, options: retargeter.options)
         lock.withLock { driving = true }
 
         if lock.withLock({ debugOverlay }) {
@@ -435,35 +639,282 @@ final class CoolMirrorMocapController: @unchecked Sendable {
         return delta
     }
 
-    // MARK: - Ground lock
+    // MARK: - Where the character stands
 
-    /// The root translation with the character standing on its planted
-    /// foot: the rig's ankles as the engine composed them last frame (which
-    /// already hold the previous correction), brought into the character's
-    /// model space, drive `MocapFootAnchor`; its correction is added to the
-    /// tracked root translation. With root motion off the anchor only
-    /// holds the floor, so the character walks in place.
-    private func grounded(_ result: MocapRetargetResult, characterId: EntityID, origin: simd_float3, time: TimeInterval) -> simd_float3 {
-        let translation = result.rootTranslationDelta
-        let (enabled, floor, mapping, horizontal) = lock.withLock {
-            (groundLock, restFootHeights, retargeter?.mapping, storedOptions.rootTranslationScale > 0)
-        }
-        guard enabled, let mapping, !floor.isEmpty else { return translation }
-
-        // The rig's ankles and toes, model space.
+    /// The rig's joints as the engine composed them last frame (which
+    /// already hold the previous corrections), in the character's model
+    /// space.
+    private func composed(_ joints: [MocapJoint: String], characterId: EntityID, origin: simd_float3) -> [MocapJoint: simd_float3] {
         let rotation = getRotationQuaternion(entityId: characterId)
         let scale = max(getScale(entityId: characterId).y, 1e-4)
+        let poses = entitySkeletonJointPoses(entityId: characterId)
         var rig: [MocapJoint: simd_float3] = [:]
-        let joints = entitySkeletonJointPoses(entityId: characterId)
-        for (captured, name) in mapping.referenceJoints where floor[captured] != nil {
-            guard let joint = joints.first(where: { $0.path == name || $0.path.hasSuffix("/" + name) }) else { continue }
-            rig[captured] = rotation.inverse.act(joint.worldPosition - origin) / scale
+        for (captured, name) in joints {
+            guard let pose = poses.first(where: { Self.jointPath($0.path, matches: name) }) else { continue }
+            rig[captured] = rotation.inverse.act(pose.worldPosition - origin) / scale
         }
-        let captured = MocapFootAnchor.feet.reduce(into: [MocapJoint: simd_float3]()) { $0[$1] = result.capturedJointPositions[$1] }
-        let correction = lock.withLock {
-            footAnchor.update(captured: captured, root: translation, rig: rig, floor: floor, time: time, horizontal: horizontal)
+        return rig
+    }
+
+    /// Sets the root translation of `result` and returns the feet to hold
+    /// (leg IK), if any.
+    ///
+    /// Heights come from the feet: the rig's ankles drive
+    /// `MocapFootAnchor`, whose correction keeps the planted foot on the
+    /// floor. Across the floor the character is held by its head and its
+    /// planted feet when the headset's pose is known (see
+    /// `MocapBodyAnchor`; the torso's tilt goes into the rotations of
+    /// `result`), else the foot anchor holds the planted foot and the
+    /// phone's root says where the body is. With root motion off the
+    /// anchor only holds the floor, so the character walks in place.
+    private func place(
+        _ result: inout MocapRetargetResult, devicePose: simd_float4x4?, characterId: EntityID, origin: simd_float3,
+        time: TimeInterval, options: MocapRetargetOptions
+    ) -> [MocapJoint: MocapBodyAnchor.Pin] {
+        let phone = result.rootTranslationDelta
+        let (grounding, floor, mapping, rest, anchoring) = lock.withLock {
+            (groundLock, restFootHeights, retargeter?.mapping, restJoints, headAnchor && headTrack.isCalibrated)
         }
-        return translation + correction
+        guard let mapping else { return [:] }
+        let moving = options.rootTranslationScale > 0
+
+        // The head, where the headset has it.
+        var pose: MocapBodyAnchor.Pose?
+        var moved: simd_float3?
+        if anchoring, moving, let devicePose, let restRoot = rest[.hips] {
+            var deltas: [MocapJoint: simd_quatf] = [:]
+            for (joint, name) in mapping.joints {
+                deltas[joint] = result.worldRotationDeltas[name]
+            }
+            pose = MocapBodyAnchor.pose(rest: rest, deltas: deltas)
+            moved = lock.withLock { headTrack.displacement(of: devicePose) }.map { displacement in
+                var d = displacement
+                if options.mirror {
+                    d.x = -d.x
+                }
+                if options.flipFacing {
+                    d = simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0)).act(d)
+                }
+                return d * options.rootTranslationScale
+            }
+            if let pose, let moved {
+                lock.withLock {
+                    // The first anchored frame continues where the phone's root is.
+                    if headRest == nil {
+                        headRest = restRoot + pose.head + simd_float3(phone.x, 0, phone.z) - simd_float3(moved.x, 0, moved.z)
+                    }
+                }
+            }
+        }
+        let head = lock.withLock { headRest }
+        let anchored = pose != nil && moved != nil && head != nil
+
+        var translation = phone
+        let feet = composed(mapping.referenceJoints.filter { floor[$0.key] != nil }, characterId: characterId, origin: origin)
+        if grounding, !floor.isEmpty {
+            // By the rig's foot: in a mirror the wearer's other one drives it.
+            let captured = MocapFootAnchor.feet.reduce(into: [MocapJoint: simd_float3]()) {
+                $0[$1] = result.capturedJointPositions[options.mirror ? $1.mirrored : $1]
+            }
+            let correction = lock.withLock {
+                footAnchor.update(
+                    captured: captured, root: phone, rig: feet, floor: floor, time: time, horizontal: moving && !anchored
+                )
+            }
+            if anchored {
+                translation.y += correction.y
+            } else {
+                translation += correction
+            }
+        }
+        guard let pose, let moved, let head, let restRoot = rest[.hips] else {
+            lock.withLock { bodyAnchor.reset() }
+            result.rootTranslationDelta = translation
+            return [:]
+        }
+
+        let output = lock.withLock {
+            bodyAnchor.update(
+                pose: pose, restRoot: restRoot, head: head + moved,
+                planted: grounding ? footAnchor.planted : [],
+                composed: feet, hipShare: hipShare, time: time
+            )
+        }
+        translation.x = output.root.x
+        translation.z = output.root.z
+        result.rootTranslationDelta = translation
+        // Everything above the hips tilts with the torso; the head keeps
+        // the headset's orientation.
+        for (joint, name) in mapping.joints where Self.isAboveHips(joint) {
+            if let delta = result.worldRotationDeltas[name] {
+                result.worldRotationDeltas[name] = simd_normalize(output.torsoTilt * delta)
+            }
+        }
+        return output.pins
+    }
+
+    /// The torso from the spine up and the arms, without the head.
+    private static func isAboveHips(_ joint: MocapJoint) -> Bool {
+        guard joint != .head else { return false }
+        var current: MocapJoint? = joint
+        while let at = current {
+            if at == MocapBodyAnchor.spine {
+                return true
+            }
+            current = at.parent
+        }
+        return false
+    }
+
+    // MARK: - Reach
+
+    /// Hands the engine a reach target per limb. The arms: where the
+    /// captured hand is on the body, as an offset from the rig's shoulder.
+    /// The anchors are the rig's joints as the engine composed them last
+    /// frame; the reach does not move any of them, and measured from the
+    /// shoulder they change only as fast as the torso turns. The legs:
+    /// the spot each held foot stands on (see `MocapBodyAnchor`).
+    private func reach(
+        _ result: MocapRetargetResult, pins: [MocapJoint: MocapBodyAnchor.Pin], devicePose: simd_float4x4?,
+        characterId: EntityID, origin: simd_float3, time: TimeInterval, options: MocapRetargetOptions
+    ) {
+        let (hands, arms, legs, lengths, configured, mapping) = lock.withLock {
+            (armReach, armChains, legChains, armLengths, reachChainsConfigured, retargeter?.mapping)
+        }
+        guard let mapping, !arms.isEmpty || !legs.isEmpty else {
+            releaseLimbs(characterId: characterId)
+            return
+        }
+        if !configured {
+            setReachIKChains(entityId: characterId, chains: arms + legs)
+            lock.withLock { reachChainsConfigured = true }
+        }
+
+        var targets: [ReachIKChainTarget?] = []
+        var weights: [Float] = []
+        if !arms.isEmpty {
+            var offsets: [MocapJoint: simd_float3] = [:]
+            if hands {
+                let rig = composed(mapping.joints.filter { MocapArmReach.joints.contains($0.key) }, characterId: characterId, origin: origin)
+                var captured: [MocapJoint: simd_float3] = [:]
+                for joint in MocapArmReach.joints {
+                    captured[joint] = result.capturedJointPositions[options.mirror ? joint.mirrored : joint]
+                }
+                let hands = handsFromTheHeadset(captured: captured, devicePose: devicePose, time: time, options: options)
+                offsets = armReachSolver.targets(captured: captured, rig: rig, rigArmLength: lengths, hands: hands)
+            }
+            for arm in MocapArmReach.arms {
+                targets.append(offsets[arm.shoulder].map { ReachIKChainTarget(position: $0, space: .shoulder) })
+                weights.append(1)
+            }
+        }
+        if !legs.isEmpty {
+            for foot in MocapBodyAnchor.feet {
+                targets.append(pins[foot].map { ReachIKChainTarget(position: $0.position, space: .modelGround) })
+                weights.append(pins[foot]?.weight ?? 0)
+            }
+        }
+        guard targets.contains(where: { $0 != nil }) else {
+            releaseLimbs(characterId: characterId)
+            return
+        }
+        setReachIKChainWeights(entityId: characterId, weights: weights)
+        setReachIKChainTargets(
+            entityId: characterId,
+            targets: targets,
+            weight: options.weight,
+            halflife: Self.reachHalflife,
+            reach: Self.reachExtent,
+            targetHalflife: Self.reachTargetHalflife
+        )
+        lock.withLock { reaching = true }
+    }
+
+    /// The character's hands by the device that knows them best (see
+    /// `MocapHandLadder`), in the space of `captured` and by the rig's
+    /// hand; empty without the headset, which leaves them to the phone.
+    private func handsFromTheHeadset(
+        captured: [MocapJoint: simd_float3], devicePose: simd_float4x4?, time: TimeInterval, options: MocapRetargetOptions
+    ) -> [MocapJoint: simd_float3] {
+        let (enabled, provider, track) = lock.withLock { (headsetHands, handProvider, headTrack) }
+        guard enabled, let provider, let devicePose, track.isCalibrated, let phoneHead = captured[.head] else {
+            lock.withLock { handLadder.reset() }
+            return [:]
+        }
+        let seen = provider()
+        let head = track.joint(devicePose)
+        var inputs: [MocapJoint: MocapHandLadder.Input] = [:]
+        for (joint, side) in [(MocapJoint.leftHand, MocapHandSide.left), (.rightHand, .right)] {
+            // In a mirror the wearer's other hand drives this one.
+            let wearer: MocapHandSide = options.mirror ? (side == .left ? .right : .left) : side
+            var fromHead: simd_float3?
+            if let hand = seen[wearer], hand.isTracked {
+                var v = track.inBodyAxes(hand.wrist.position - head)
+                if options.mirror {
+                    v.x = -v.x
+                }
+                if options.flipFacing {
+                    v = simd_quatf(angle: .pi, axis: simd_float3(0, 1, 0)).act(v)
+                }
+                fromHead = v
+            }
+            inputs[joint] = MocapHandLadder.Input(headset: fromHead, phone: captured[joint].map { $0 - phoneHead })
+        }
+        let outputs = lock.withLock { handLadder.update(inputs, time: time) }
+        return outputs.mapValues { phoneHead + $0.position }
+    }
+
+    /// The hand and finger bones take the directions of the headset's
+    /// while it sees the hand (see `MocapHandRetarget`), eased over a few
+    /// frames; a hand it does not see keeps the shape it last had.
+    private func shapeHands(
+        _ result: inout MocapRetargetResult, devicePose: simd_float4x4?, rest: [String: simd_float3],
+        time: TimeInterval, options: MocapRetargetOptions
+    ) {
+        let (enabled, provider, track, rigs) = lock.withLock { (headsetHands, handProvider, headTrack, handRigs) }
+        guard enabled, let provider, devicePose != nil, track.isCalibrated, !rigs.isEmpty else {
+            lock.withLock { shownHands = [:] }
+            return
+        }
+        let seen = provider()
+        let dt = Float(lock.withLock { () -> TimeInterval in
+            defer { lastHandTime = time }
+            return lastHandTime.map { max(0, time - $0) } ?? 0
+        })
+        let ease = 1 - exp(-0.693_147_18 * dt / Self.fingerHalflife)
+        for (side, rig) in rigs {
+            // In a mirror the wearer's other hand drives this one.
+            let wearer: MocapHandSide = options.mirror ? (side == .left ? .right : .left) : side
+            var shown = lock.withLock { shownHands[side] } ?? [:]
+            if let hand = seen[wearer], hand.isTracked {
+                let captured = MocapHandRetarget.modelSpace(
+                    hand, bodyAxes: track.inBodyAxes, mirror: options.mirror, flipFacing: options.flipFacing
+                )
+                let targets = MocapHandRetarget.deltas(captured: captured, rig: rig, rest: rest)
+                for (joint, target) in targets {
+                    if let current = shown[joint] {
+                        shown[joint] = simd_normalize(simd_slerp(current, target, ease))
+                    } else {
+                        shown[joint] = target
+                    }
+                }
+            }
+            lock.withLock { shownHands[side] = shown }
+            for (joint, delta) in shown {
+                result.worldRotationDeltas[joint] = delta
+            }
+        }
+    }
+
+    /// Eases the limbs back to the pose.
+    private func releaseLimbs(characterId: EntityID) {
+        let wasReaching = lock.withLock { () -> Bool in
+            defer { reaching = false }
+            return reaching
+        }
+        if wasReaching {
+            setReachIKChainTargets(entityId: characterId, targets: [], halflife: Self.reachHalflife)
+        }
     }
 
     // MARK: - Debug overlay

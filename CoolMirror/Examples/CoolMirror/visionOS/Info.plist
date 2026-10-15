@@ -22,6 +22,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Receives body tracking from the CoolMirror Capture iPhone app on your local network.</string>
+	<key>NSHandsTrackingUsageDescription</key>
+	<string>Follows your hands so the mirror character's hands match yours.</string>
 	<key>NSWorldSensingUsageDescription</key>
 	<string>Detects the floor and nearby surfaces so the mirror character can stand in your room.</string>
 	<key>UIFileSharingEnabled</key>

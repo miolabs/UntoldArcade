@@ -94,6 +94,20 @@ Mixed-reality bowling on the shared Jolt Physics plugin — the demo that needs 
 open CoolBowling/Examples/CoolBowlingVisionOS/CoolBowlingVisionOS.xcodeproj
 ```
 
+### 🪞 CoolMirror — *visionOS + iPhone · Character Deformation · Motion Capture*
+
+![CoolMirror demo](docs/media/CoolMirror/demo.gif)
+
+A virtual mirror: a rigged, high-poly character stands in front of you and moves as you do. An iPhone on a stand tracks your body (ARKit body tracking, sent over the local network), the headset adds what it knows far better, your head and your hands, and the character is held between the two: its head where yours is, its planted feet where they landed, its hands on its body where yours are on yours. Underneath it is the showcase of the engine's character-deformation stack: switch the skinning live (vertex shader, compute linear blend, dual quaternion, Direct Delta Mush), drag morph sliders, let pose drivers fire the biceps as the elbows curl, turn on the volumetric XPBD muscle simulation or the ML deformer trained on it, and hang a Jolt soft-body cape on Batman. **Requires a physical Vision Pro and an iPhone** with a rear camera that supports body tracking.
+
+- External poses, per-limb reach IK and the deformation compute pass from the engine; cloth from the shared Jolt Physics plugin
+- Capture filtered against recorded sessions: the recordings replay as regression tests on a Mac
+- One Xcode project, two targets: the mirror (visionOS) and the capture app (iPhone)
+
+```bash
+open CoolMirror/Examples/CoolMirror/CoolMirror.xcodeproj
+```
+
 ### 🧲 UntoldJoltPhysics — *plugin · Physics Backend*
 
 [Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, as a Swift package every demo can depend on: [untoldengine/UntoldJoltPhysics](https://github.com/untoldengine/UntoldJoltPhysics). Jolt comes as source from the [untoldengine/JoltPhysics](https://github.com/untoldengine/JoltPhysics) fork (the upstream tree plus a `Package.swift`) and SwiftPM compiles it — no binaries — for macOS, iOS and visionOS. CoolBasket can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
@@ -114,6 +128,18 @@ Mixed-reality tabletop soccer: look at a real table and pinch to snap a stadium 
 
 ```bash
 open CoolFutbol/CoolFutbol.xcodeproj
+```
+
+### 🔬 UntoldViewer — *visionOS · Engine vs RealityKit*
+
+The engine's comparison bench: a catalog of objects (a dartboard and four darts to start), each with an engine model and a USDZ twin made from the same source, shown at the same spot in your room by the Untold Engine or by RealityKit, one tap apart. Look at the same wire, digit or flight in both, at the same distance, and read the engine's GPU frame time next to it. Built to keep pushing the engine against what the platform renderer does.
+
+- Foveated rendering through the compositor's rasterization rate maps, render quality up to 1.0, MSAA 4× and temporal anti-aliasing, room or studio lighting — all switchable from the window
+- The same objects through `RealityView` from their USDZ twins; frame time from Instruments' RealityKit Trace
+- Adding an object is a folder and a USDZ (`UntoldViewer/README.md`)
+
+```bash
+open UntoldViewer/UntoldViewer.xcodeproj
 ```
 
 ### 🏛️ ArchvizViewer — *visionOS*
@@ -219,11 +245,13 @@ Each demo project depends on the Untold Engine via Swift Package Manager (SPM). 
 ```bash
 UntoldArcade/
 ├── CoolSaber/           # Rendering Extension — PSVR2 lightsaber duels + SharePlay
+├── UntoldViewer/        # Engine vs RealityKit comparison bench (visionOS)
 ├── CoolWater/           # Rendering Extension — real-time animated water
 ├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
 ├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam, on either backend
 ├── CoolBowling/         # visionOS — bowling on the Jolt Physics plugin
+├── CoolMirror/          # visionOS + iPhone — virtual mirror on the character-deformation stack
 ├── CoolFutbol/          # visionOS — mixed-reality tabletop soccer + PSVR2 controls
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection

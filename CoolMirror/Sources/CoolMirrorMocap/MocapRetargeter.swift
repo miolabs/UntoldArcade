@@ -70,6 +70,11 @@ public struct MocapBoneFrame: Sendable {
     ]
 }
 
+public extension MocapBoneFrame {
+    /// The leg bones, by the joint they start at.
+    static let legs: Set<MocapJoint> = [.leftUpLeg, .rightUpLeg, .leftLeg, .rightLeg]
+}
+
 public extension MocapJoint {
     /// Joints without a reliable bone of their own that take their parent
     /// bone's frame: the hands ride on the forearms, the feet on the
@@ -253,10 +258,11 @@ public final class MocapRetargeter: @unchecked Sendable {
         // next joint for limbs). ARKit's joint orientations are not used
         // for these: they flip when it mistakes front for back while the
         // positions stay put. The delta is captured frame × rest frame⁻¹,
-        // where the rest frame is the rig's for the limbs (the user's arms
-        // hang however they hang at calibration) and the calibration
-        // pose's for the torso (the user stands straight to calibrate, and
-        // the tracker's idea of straight leans 14° forward).
+        // where the rest frame is the rig's for the arms (they hang however
+        // they hang at calibration) and the calibration pose's for the
+        // torso and the legs: the user stands straight to calibrate, and
+        // the tracker's idea of straight leans 14° forward on knees bent
+        // 25°.
         let rig = mapping.referenceJoints
         func rest(_ joint: MocapJoint) -> simd_float3? {
             rig[joint].flatMap { restPositions[$0] }
@@ -285,10 +291,12 @@ public final class MocapRetargeter: @unchecked Sendable {
         var frames: [MocapJoint: simd_quatf] = [:]
         for spec in MocapBoneFrame.order {
             guard let capturedPrimary = direction(cap(spec.joint), cap(spec.child)) else { continue }
-            // Torso bones (lateral hints) are relative to the calibration pose.
-            var isTorso = false
-            if case .lateral = spec.hint { isTorso = true }
-            guard let restPrimary = (isTorso ? direction(cal(spec.joint), cal(spec.child)) : nil) ?? direction(rest(spec.joint), rest(spec.child)) else { continue }
+            // The torso (lateral hints) and the legs are relative to the
+            // calibration pose.
+            var standing = MocapBoneFrame.legs.contains(spec.joint)
+            if case .lateral = spec.hint { standing = true }
+            let calibratedPrimary = standing ? direction(cal(spec.joint), cal(spec.child)) : nil
+            guard let restPrimary = calibratedPrimary ?? direction(rest(spec.joint), rest(spec.child)) else { continue }
             let restHint: simd_float3?
             let capturedHint: simd_float3?
             switch spec.hint {
@@ -299,7 +307,15 @@ public final class MocapRetargeter: @unchecked Sendable {
                 restHint = direction(rest(a), rest(b))
                 capturedHint = direction(cap(a), cap(b))
             case let .bend(a, b, backward):
-                restHint = restForward.map { backward ? -$0 : $0 }
+                // A knee bent enough at calibration says which way it
+                // bends; a straight one leaves that to the rig.
+                var calibratedHint: simd_float3?
+                if let primary = calibratedPrimary, let bend = direction(cal(a), cal(b)),
+                   simd_length(bend - simd_dot(bend, primary) * primary) > Self.minimumBend
+                {
+                    calibratedHint = bend
+                }
+                restHint = calibratedHint ?? restForward.map { backward ? -$0 : $0 }
                 capturedHint = direction(cap(a), cap(b))
             }
             frames[spec.joint] = Self.frameDelta(
@@ -325,6 +341,9 @@ public final class MocapRetargeter: @unchecked Sendable {
             capturedJointPositions: captured, capturedTrackedJoints: frame.trackedJoints
         )
     }
+
+    /// The sine of the least bend (15°) that says which way a limb bends.
+    static let minimumBend: Float = 0.26
 
     /// The shortest rotation taking unit vector `from` onto unit vector `to`.
     public static func swing(from: simd_float3, to: simd_float3) -> simd_quatf {
