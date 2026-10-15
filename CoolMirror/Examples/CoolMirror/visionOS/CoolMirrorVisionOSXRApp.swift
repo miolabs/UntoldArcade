@@ -21,6 +21,7 @@ final class XRHolder {
     static let shared = XRHolder()
     var xr: UntoldEngineXR?
     var game: CoolMirrorGame?
+    var hands: CoolMirrorHandSession?
     var renderThread: Thread?
 }
 
@@ -104,6 +105,9 @@ final class MirrorControls {
     var mocapRootMotion = true { didSet { pushMocapOptions() } }
     var mocapGroundLock = true { didSet { pushMocapOptions() } }
     var mocapPlantFeet = false { didSet { pushMocapOptions() } }
+    var mocapArmReach = true { didSet { pushMocapOptions() } }
+    var mocapHeadAnchor = true { didSet { pushMocapOptions() } }
+    var mocapHeadsetHands = true { didSet { pushMocapOptions() } }
     var mocapWeight: Double = 1 { didSet { pushMocapOptions() } }
     var mocapBodySmoothing: Double = 0.4 { didSet { pushMocapOptions() } }
     var mocapLegSmoothing: Double = 0.6 { didSet { pushMocapOptions() } }
@@ -122,7 +126,8 @@ final class MirrorControls {
         XRHolder.shared.game?.setMocapOptions(
             mirror: mocapMirror, flipFacing: mocapFlipFacing, weight: Float(mocapWeight), rootMotion: mocapRootMotion,
             bodySmoothing: Float(mocapBodySmoothing), legSmoothing: Float(mocapLegSmoothing), groundLock: mocapGroundLock,
-            plantFeet: mocapPlantFeet
+            plantFeet: mocapPlantFeet, armReach: mocapArmReach,
+            headAnchor: mocapHeadAnchor, headsetHands: mocapHeadsetHands
         )
     }
 
@@ -170,6 +175,9 @@ final class MirrorControls {
         ("Raise both arms slowly over your head, then lower them", 8),
         ("Take two steps forward, then two steps back", 8),
         ("Turn to your left, then back to the phone", 6),
+        ("Hold your hands in front of you and look at them", 5),
+        ("Put your hands behind your back, then bring them in front again", 8),
+        ("Look straight ahead and drop your hands to your sides, then raise them into view", 8),
         ("Stand still", 4),
     ]
     var recordingStep: String?
@@ -219,7 +227,7 @@ final class MirrorControls {
         if let result = XRHolder.shared.game?.stopMocapRecording() {
             recordingFile = result.url
             recordingFrames = result.frames
-            recordingNote = "Saved \(result.frames) frames to \(result.url.lastPathComponent). Share it (AirDrop to the Mac), or find it in Files → On My Apple Vision Pro → CoolMirror."
+            recordingNote = "Saved \(result.frames) frames and \(result.headsetSamples) headset samples to \(result.url.lastPathComponent). Share it (AirDrop to the Mac), or find it in Files → On My Apple Vision Pro → CoolMirror."
         } else {
             recordingNote = "Nothing recorded."
         }
@@ -383,6 +391,9 @@ struct CoolMirrorVisionOSXRApp: App {
                                 Toggle("Move", isOn: $controls.mocapRootMotion).toggleStyle(.button)
                                 Toggle("Ground", isOn: $controls.mocapGroundLock).toggleStyle(.button)
                                 Toggle("Plant", isOn: $controls.mocapPlantFeet).toggleStyle(.button)
+                                Toggle("Reach", isOn: $controls.mocapArmReach).toggleStyle(.button)
+                                Toggle("Head", isOn: $controls.mocapHeadAnchor).toggleStyle(.button)
+                                Toggle("Hands", isOn: $controls.mocapHeadsetHands).toggleStyle(.button)
                             }
                         }
                         GridRow {
@@ -570,7 +581,14 @@ struct CoolMirrorVisionOSXRApp: App {
                 )
                 // The wearer's head comes from the headset itself.
                 game.setMocapHeadPoseProvider { [weak xr] in
-                    xr?.currentDevicePose.map { simd_quatf($0) }
+                    xr?.currentDevicePose
+                }
+                // Its hands too: the character's follow them.
+                let hands = CoolMirrorHandSession()
+                XRHolder.shared.hands = hands
+                hands.start()
+                game.setMocapHandProvider { [weak hands] in
+                    hands?.hands ?? [:]
                 }
 
                 let t = Thread {
@@ -580,6 +598,8 @@ struct CoolMirrorVisionOSXRApp: App {
                     // engine down on the main actor so nothing keeps submitting
                     // GPU work from the background, and allow a clean reopen.
                     Task { @MainActor in
+                        XRHolder.shared.hands?.stop()
+                        XRHolder.shared.hands = nil
                         XRHolder.shared.game?.prepareForShutdown()
                         shutdownUntoldEngineXR(xr) {
                             XRHolder.shared.xr = nil
