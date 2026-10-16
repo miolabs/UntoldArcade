@@ -16,12 +16,6 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>NSWorldSensingUsageDescription</key>
-	<string>Detects the floor and nearby surfaces so the saber duel takes place in your real room.</string>
-	<key>NSAccessoryTrackingUsageDescription</key>
-	<string>Tracks your PlayStation VR2 Sense controllers so each one becomes a lightsaber hilt.</string>
-	<key>GCSupportsControllerUserInteraction</key>
-	<true/>
 	<key>GCSupportedGameControllers</key>
 	<array>
 		<dict>
@@ -33,12 +27,18 @@
 			<string>ExtendedGamepad</string>
 		</dict>
 	</array>
+	<key>GCSupportsControllerUserInteraction</key>
+	<true/>
+	<key>NSAccessoryTrackingUsageDescription</key>
+	<string>Tracks your PlayStation VR2 Sense controllers so each one becomes a lightsaber hilt.</string>
+	<key>NSWorldSensingUsageDescription</key>
+	<string>Detects the floor and nearby surfaces so the saber duel takes place in your real room.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
 		<key>UIApplicationPreferredDefaultSceneSessionRole</key>
 		<string>UIWindowSceneSessionRoleApplication</string>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
 	</dict>
 </dict>
 </plist>

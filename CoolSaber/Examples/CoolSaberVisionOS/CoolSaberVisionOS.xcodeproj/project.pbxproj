@@ -13,23 +13,23 @@
 		0381AEBD2FF56BC900219038 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 0381AEBC2FF56BC900219038 /* UntoldEngineXR */; };
 		AEEF779EA5664684FED5A349 /* SaberXRGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8305CF5771FC5CB5D3AB39E3 /* SaberXRGame.swift */; };
 		C00000000000000000000001 /* CoolSaber in Frameworks */ = {isa = PBXBuildFile; productRef = C00000000000000000000003 /* CoolSaber */; };
-		E86F705EBDEC6F06F3A9548D /* CoolSaberVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E415EA5C6AC6B2F8E6D53682 /* CoolSaberVisionOSXRApp.swift */; };
 		D200000000000000000000B2 /* SaberActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D200000000000000000000B1 /* SaberActivity.swift */; };
 		D200000000000000000000B4 /* SaberSessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D200000000000000000000B3 /* SaberSessionController.swift */; };
 		D200000000000000000000B6 /* SaberHaptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D200000000000000000000B5 /* SaberHaptics.swift */; };
 		D200000000000000000000B8 /* SaberAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = D200000000000000000000B7 /* SaberAudio.swift */; };
+		E86F705EBDEC6F06F3A9548D /* CoolSaberVisionOSXRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E415EA5C6AC6B2F8E6D53682 /* CoolSaberVisionOSXRApp.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		8305CF5771FC5CB5D3AB39E3 /* SaberXRGame.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SaberXRGame.swift; path = visionOS/SaberXRGame.swift; sourceTree = "<group>"; };
 		BB77BBC36715D839F6983304 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = Info.plist; path = visionOS/Info.plist; sourceTree = "<group>"; };
-		DC2407AD362C1A348AE76BAD /* CoolSaberVisionOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoolSaberVisionOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		E415EA5C6AC6B2F8E6D53682 /* CoolSaberVisionOSXRApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CoolSaberVisionOSXRApp.swift; path = visionOS/CoolSaberVisionOSXRApp.swift; sourceTree = "<group>"; };
 		D200000000000000000000B1 /* SaberActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SaberActivity.swift; path = visionOS/SaberActivity.swift; sourceTree = "<group>"; };
 		D200000000000000000000B3 /* SaberSessionController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SaberSessionController.swift; path = visionOS/SaberSessionController.swift; sourceTree = "<group>"; };
 		D200000000000000000000B5 /* SaberHaptics.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SaberHaptics.swift; path = visionOS/SaberHaptics.swift; sourceTree = "<group>"; };
 		D200000000000000000000B7 /* SaberAudio.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SaberAudio.swift; path = visionOS/SaberAudio.swift; sourceTree = "<group>"; };
 		D200000000000000000000B9 /* CoolSaberVisionOS.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; name = CoolSaberVisionOS.entitlements; path = visionOS/CoolSaberVisionOS.entitlements; sourceTree = "<group>"; };
+		DC2407AD362C1A348AE76BAD /* CoolSaberVisionOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoolSaberVisionOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E415EA5C6AC6B2F8E6D53682 /* CoolSaberVisionOSXRApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CoolSaberVisionOSXRApp.swift; path = visionOS/CoolSaberVisionOSXRApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -134,7 +134,7 @@
 			mainGroup = 44E94FE00A72F38D2E4E8EDA;
 			packageReferences = (
 				C00000000000000000000002 /* XCLocalSwiftPackageReference "../.." */,
-				0381AEB52FF56BC900219038 /* XCRemoteSwiftPackageReference "UntoldEngine" */,
+				0381AEB52FF56BC900219038 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */,
 			);
 			productRefGroup = E4BBF9A2E21E273BA7ACC193 /* Products */;
 			projectDirPath = "";
@@ -366,42 +366,35 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		0381AEB52FF56BC900219038 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../../UntoldEngine;
+		};
 		C00000000000000000000002 /* XCLocalSwiftPackageReference "../.." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../..;
 		};
 /* End XCLocalSwiftPackageReference section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		0381AEB52FF56BC900219038 /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/untoldengine/UntoldEngine";
-			requirement = {
-				branch = develop;
-				kind = branch;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
 /* Begin XCSwiftPackageProductDependency section */
 		0381AEB62FF56BC900219038 /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 0381AEB52FF56BC900219038 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			package = 0381AEB52FF56BC900219038 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */;
 			productName = UntoldEngine;
 		};
 		0381AEB82FF56BC900219038 /* UntoldEngineAR */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 0381AEB52FF56BC900219038 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			package = 0381AEB52FF56BC900219038 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */;
 			productName = UntoldEngineAR;
 		};
 		0381AEBA2FF56BC900219038 /* UntoldEngineShaderSupport */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 0381AEB52FF56BC900219038 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			package = 0381AEB52FF56BC900219038 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */;
 			productName = UntoldEngineShaderSupport;
 		};
 		0381AEBC2FF56BC900219038 /* UntoldEngineXR */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 0381AEB52FF56BC900219038 /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			package = 0381AEB52FF56BC900219038 /* XCLocalSwiftPackageReference "../../../../UntoldEngine" */;
 			productName = UntoldEngineXR;
 		};
 		C00000000000000000000003 /* CoolSaber */ = {

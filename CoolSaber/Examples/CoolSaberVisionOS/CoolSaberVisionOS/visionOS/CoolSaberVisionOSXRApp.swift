@@ -10,6 +10,7 @@
 import CompositorServices
 import CoolSaber
 import simd
+import Spatial
 import SwiftUI
 import UntoldEngine
 import UntoldEngineXR
@@ -33,6 +34,12 @@ final class SaberXRHolder: @unchecked Sendable {
     private let lock = NSLock()
     private var localColorStorage = SIMD3<Float>(0.35, 0.55, 1.0)
     private var fitStorage = [SaberFitDefaults.left, SaberFitDefaults.right]
+    /// SwiftUI's `immersiveSpaceDisplacement` as a matrix: ARKit-from-shared.
+    /// A pose in the group's shared immersive-space frame, multiplied by
+    /// this, lands in this device's ARKit frame (the frame the engine renders
+    /// and the wands track in). Identity outside a shared session.
+    private var displacementStorage = matrix_identity_float4x4
+    private var displacementSummaryStorage = "identity"
 
     var localColor: SIMD3<Float> {
         get { lock.withLock { localColorStorage } }
@@ -46,6 +53,24 @@ final class SaberXRHolder: @unchecked Sendable {
 
     func setFit(_ fit: SaberFitValues, forHand hand: Int) {
         lock.withLock { fitStorage[hand == 0 ? 0 : 1] = fit }
+    }
+
+    /// ARKit-from-shared (see `displacementStorage`). Read per frame by the
+    /// game thread; written from the arena's SwiftUI environment.
+    var spaceDisplacement: simd_float4x4 {
+        lock.withLock { displacementStorage }
+    }
+
+    /// Human-readable displacement for the window's diagnostics row.
+    var displacementSummary: String {
+        lock.withLock { displacementSummaryStorage }
+    }
+
+    func setSpaceDisplacement(_ matrix: simd_float4x4, summary: String) {
+        lock.withLock {
+            displacementStorage = matrix
+            displacementSummaryStorage = summary
+        }
     }
 }
 
@@ -257,6 +282,19 @@ struct CoolSaberVisionOSXRApp: App {
                         )
                         .font(.footnote.monospaced())
                         .foregroundStyle(.tertiary)
+                        // Shared-frame diagnostics: whether the session is
+                        // spatial/nearby and what displacement the system
+                        // applied to our arena. Identity during a nearby
+                        // duel means the frames were never aligned.
+                        let mailbox = SaberDuelMailbox.shared
+                        Text(
+                            "SharePlay \(mailbox.sessionActive ? "ACTIVE" : "off")"
+                                + " · spatial \(mailbox.isSpatial ? "yes" : "no")"
+                                + " · nearby \(mailbox.opponentNearby ? "yes" : "no")"
+                                + " · displacement \(holder.displacementSummary)"
+                        )
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.tertiary)
                     }
                 }
 
@@ -306,52 +344,7 @@ struct CoolSaberVisionOSXRApp: App {
         .defaultSize(width: 640, height: 640)
 
         ImmersiveSpace(id: "Saber") {
-            CompositorLayer(configuration: SaberLayerConfiguration()) { layerRenderer in
-                guard SaberXRHolder.shared.xr == nil else {
-                    print("CoolSaber: immersive space reopened before teardown finished")
-                    return
-                }
-                guard installCoolSaber() else { return }
-
-                guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
-                SaberXRHolder.shared.xr = xr
-                SaberXRHolder.shared.spaceOpen = true
-                xr.setImmersionMode(xrImmersionMode: .mixed)
-
-                // The CompositorLayer renderer closure is @MainActor, so set up
-                // directly here (matches the engine's XR template). The blocking
-                // render loop runs on its own plain Thread — NOT the main actor.
-                let game = SaberXRGame()
-                SaberXRHolder.shared.game = game
-                game.start()
-                xr.setupCallbacks(
-                    gameUpdate: { dt in game.update(deltaTime: dt) },
-                    handleInput: { game.handleInput() }
-                )
-
-                let thread = Thread {
-                    xr.start()
-                    xr.runLoop()
-                    // The layer was invalidated: the space closed (crown press,
-                    // SharePlay transition, system dismiss). Tear everything
-                    // down so the next open rebuilds cleanly instead of hitting
-                    // a dead renderer.
-                    game.shutdown()
-                    Task { @MainActor in
-                        SaberXRHolder.shared.spaceOpen = false
-                        shutdownUntoldEngineXR(xr) {
-                            SaberXRHolder.shared.xr = nil
-                            SaberXRHolder.shared.game = nil
-                            SaberXRHolder.shared.renderThread = nil
-                            print("CoolSaber: immersive space torn down, ready to reopen")
-                        }
-                    }
-                }
-                thread.name = "XR Render Thread"
-                thread.qualityOfService = .userInteractive
-                SaberXRHolder.shared.renderThread = thread
-                thread.start()
-            }
+            SaberArena()
         }
         .immersionStyle(selection: $immersionStyle, in: .mixed)
     }
@@ -409,14 +402,102 @@ struct CoolSaberVisionOSXRApp: App {
     private func cmLabel(_ name: String, _ metres: Double) -> String {
         String(format: "%@ %+.1f cm", name, metres * 100)
     }
+}
 
-    private func installCoolSaber() -> Bool {
-        switch registerCoolSaberPlugin() {
-        case .installed, .replaced:
-            return true
-        case let .rejected(failure):
-            print("CoolSaber installation rejected:", failure)
-            return false
+/// The arena's immersive-space content. A `CompositorContent` rather than a
+/// View so it can host the Metal `CompositorLayer` AND read SwiftUI's
+/// `immersiveSpaceDisplacement`: the transform the system applies to this
+/// immersive space during a shared session so the group's origin lands in a
+/// good place for everyone (for nearby people, aligned in the physical room).
+/// The wands and the device anchor stay in the local, un-displaced ARKit
+/// frame, so this displacement is the only bridge between two headsets'
+/// ARKit frames — the game applies it to every pose that crosses the wire.
+struct SaberArena: CompositorContent {
+    @Environment(\.immersiveSpaceDisplacement) private var displacement
+
+    var body: some CompositorContent {
+        CompositorLayer(configuration: SaberLayerConfiguration()) { layerRenderer in
+            guard SaberXRHolder.shared.xr == nil else {
+                print("CoolSaber: immersive space reopened before teardown finished")
+                return
+            }
+            guard installCoolSaber() else { return }
+
+            guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
+            SaberXRHolder.shared.xr = xr
+            SaberXRHolder.shared.spaceOpen = true
+            xr.setImmersionMode(xrImmersionMode: .mixed)
+
+            // The CompositorLayer renderer closure is @MainActor, so set up
+            // directly here (matches the engine's XR template). The blocking
+            // render loop runs on its own plain Thread — NOT the main actor.
+            let game = SaberXRGame()
+            SaberXRHolder.shared.game = game
+            game.start()
+            xr.setupCallbacks(
+                gameUpdate: { dt in game.update(deltaTime: dt) },
+                handleInput: { game.handleInput() }
+            )
+
+            let thread = Thread {
+                xr.start()
+                xr.runLoop()
+                // The layer was invalidated: the space closed (crown press,
+                // SharePlay transition, system dismiss). Tear everything
+                // down so the next open rebuilds cleanly instead of hitting
+                // a dead renderer.
+                game.shutdown()
+                Task { @MainActor in
+                    SaberXRHolder.shared.spaceOpen = false
+                    shutdownUntoldEngineXR(xr) {
+                        SaberXRHolder.shared.xr = nil
+                        SaberXRHolder.shared.game = nil
+                        SaberXRHolder.shared.renderThread = nil
+                        print("CoolSaber: immersive space torn down, ready to reopen")
+                    }
+                }
+            }
+            thread.name = "XR Render Thread"
+            thread.qualityOfService = .userInteractive
+            SaberXRHolder.shared.renderThread = thread
+            thread.start()
         }
+        .onChange(of: displacement, initial: true) { old, new in
+            Self.publish(new, previous: old, reason: "environment update")
+        }
+        .onWorldRecenter { phase in
+            // The environment value updates on its own; this just marks the
+            // moment in the log so a jump in the poses can be explained.
+            print("CoolSaber: world recenter \(phase) — displacement \(SaberXRHolder.shared.displacementSummary)")
+        }
+    }
+
+    private static func publish(_ pose: Pose3D, previous: Pose3D, reason: String) {
+        let summary = describe(pose)
+        SaberXRHolder.shared.setSpaceDisplacement(simd_float4x4(pose), summary: summary)
+        print(
+            "CoolSaber: immersiveSpaceDisplacement (\(reason)) → \(summary)"
+                + (previous == pose ? "" : " (was \(describe(previous)))")
+        )
+    }
+
+    private static func describe(_ pose: Pose3D) -> String {
+        guard pose != .identity else { return "identity" }
+        let p = pose.position.vector
+        let axis = pose.rotation.axis.vector
+        return String(
+            format: "pos (%.2f, %.2f, %.2f) m · rot %.1f° about (%.2f, %.2f, %.2f)",
+            p.x, p.y, p.z, pose.rotation.angle.degrees, axis.x, axis.y, axis.z
+        )
+    }
+}
+
+private func installCoolSaber() -> Bool {
+    switch registerCoolSaberPlugin() {
+    case .installed, .replaced:
+        return true
+    case let .rejected(failure):
+        print("CoolSaber installation rejected:", failure)
+        return false
     }
 }

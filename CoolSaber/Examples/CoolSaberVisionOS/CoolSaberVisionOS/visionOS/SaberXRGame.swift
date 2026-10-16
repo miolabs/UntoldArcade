@@ -9,9 +9,13 @@
 //
 //  Coordinates: the engine's XR world frame is ARKit's world origin (on the
 //  floor beneath the user at immersive-space open). PSVR2 poses arrive in the
-//  same frame. With spatial Personas in a group immersive space the origin is
-//  shared across participants, so remote blade poses render raw; otherwise
-//  they are re-based onto a fixed opponent anchor 2 m in front, facing us.
+//  same frame. In a shared session the system does NOT move ARKit's frame;
+//  it moves the immersive space by `immersiveSpaceDisplacement` so every
+//  participant's space shares one origin (nearby: aligned in the real room).
+//  So poses cross the wire in that shared frame: the sender strips its own
+//  displacement, the receiver applies its own. Without a shared frame (plain
+//  remote call) remote blades are re-based onto a fixed opponent anchor 2 m
+//  in front, facing us.
 //
 
 import CoolSaber
@@ -219,6 +223,9 @@ final class SaberXRGame {
     private var loggedControllerState = false
     private var spinnerAccumulator: Float = 0
     private var elapsed: Float = 0
+    private var lastFrameLogUptime: TimeInterval = 0
+    private var lastLoggedDisplacement = matrix_identity_float4x4
+    private var loggedFirstRemotePacket = false
 
     init() {
         clashDetector = CoolSaberClashDetector(triggerDistance: 0.05)
@@ -406,6 +413,10 @@ final class SaberXRGame {
     // MARK: - Remote opponent
 
     private func updateRemote(dt: Float) {
+        // ARKit-from-shared for THIS device; the sender already removed its own.
+        let localFromShared = SaberXRHolder.shared.spaceDisplacement
+        let sharesFrame = mailbox.sharesFrame
+
         for event in mailbox.takeRemoteEvents() {
             switch event {
             case .ignite(_, let ignited, _):
@@ -414,7 +425,10 @@ final class SaberXRGame {
                 // Dedupe: our own detector probably saw the same contact.
                 let now = ProcessInfo.processInfo.systemUptime
                 if now - lastLocalClashUptime > 0.15 {
-                    spawnCoolSaberClashSpark(at: position, intensity: intensity)
+                    let local = sharesFrame
+                        ? Self.transformPoint(localFromShared, position)
+                        : Self.opponentAnchor(position)
+                    spawnCoolSaberClashSpark(at: local, intensity: intensity)
                     audio.playClash(intensity: intensity)
                 }
             }
@@ -422,6 +436,7 @@ final class SaberXRGame {
 
         let snapshot = mailbox.remoteSnapshot()
         let now = ProcessInfo.processInfo.systemUptime
+        logFrameDiagnostics(now: now, snapshot: snapshot, localFromShared: localFromShared)
         guard mailbox.sessionActive, mailbox.opponentPresent,
               let packet = snapshot.packet,
               now - snapshot.arrivalUptime < 2.0
@@ -439,7 +454,12 @@ final class SaberXRGame {
             var state = remoteHands[hand]
             var wire = wires[hand]
 
-            if !mailbox.isSpatial {
+            if sharesFrame {
+                // The packet is in the group's shared immersive-space frame;
+                // our displacement brings it into our ARKit frame.
+                wire.hilt = Self.transformPoint(localFromShared, wire.hilt)
+                wire.direction = Self.transformDirection(localFromShared, wire.direction)
+            } else {
                 // No shared origin: re-base onto the opponent anchor 2 m in
                 // front of us, turned to face us. Both origins sit on their
                 // respective floors, so heights roughly line up.
@@ -473,6 +493,67 @@ final class SaberXRGame {
 
     private static func opponentAnchorRotation(_ vector: SIMD3<Float>) -> SIMD3<Float> {
         SIMD3<Float>(-vector.x, vector.y, -vector.z)
+    }
+
+    private static func transformPoint(_ m: simd_float4x4, _ point: SIMD3<Float>) -> SIMD3<Float> {
+        let v = m * SIMD4<Float>(point, 1)
+        return SIMD3<Float>(v.x, v.y, v.z)
+    }
+
+    private static func transformDirection(_ m: simd_float4x4, _ direction: SIMD3<Float>) -> SIMD3<Float> {
+        let v = m * SIMD4<Float>(direction, 0)
+        let rotated = SIMD3<Float>(v.x, v.y, v.z)
+        return simd_length_squared(rotated) > 1e-8 ? simd_normalize(rotated) : direction
+    }
+
+    private static func fmt(_ v: SIMD3<Float>) -> String {
+        String(format: "(%.2f, %.2f, %.2f)", v.x, v.y, v.z)
+    }
+
+    /// Every 2 s during a duel: the frames on both ends of the wire, so a
+    /// misplaced opponent blade can be traced to the displacement (identity
+    /// when the system never aligned the spaces) or to the session flags.
+    private func logFrameDiagnostics(
+        now: TimeInterval,
+        snapshot: (packet: SaberPosePacket?, arrivalUptime: TimeInterval),
+        localFromShared: simd_float4x4
+    ) {
+        guard mailbox.sessionActive else { return }
+
+        let displacementChanged = localFromShared != lastLoggedDisplacement
+        if displacementChanged {
+            lastLoggedDisplacement = localFromShared
+            print(
+                "CoolSaber[frame]: displacement now \(SaberXRHolder.shared.displacementSummary) "
+                    + "— shared origin sits at \(Self.fmt(Self.transformPoint(localFromShared, .zero))) in our ARKit frame"
+            )
+        }
+        if let packet = snapshot.packet, !loggedFirstRemotePacket {
+            loggedFirstRemotePacket = true
+            print(
+                "CoolSaber[frame]: first remote packet #\(packet.sequence) — "
+                    + "R hilt (shared) \(Self.fmt(packet.right.hilt)) → (ours) "
+                    + "\(Self.fmt(Self.transformPoint(localFromShared, packet.right.hilt)))"
+            )
+        }
+
+        guard now - lastFrameLogUptime >= 2 else { return }
+        lastFrameLogUptime = now
+
+        let sharedFromLocal = simd_inverse(localFromShared)
+        let localHilt = localHands[1].hilt
+        var line = "CoolSaber[frame]: spatial \(mailbox.isSpatial) nearby \(mailbox.opponentNearby) "
+            + "sharesFrame \(mailbox.sharesFrame) displacement \(SaberXRHolder.shared.displacementSummary)"
+            + " | local R hilt ARKit \(Self.fmt(localHilt)) → shared \(Self.fmt(Self.transformPoint(sharedFromLocal, localHilt)))"
+        if let packet = snapshot.packet {
+            let age = now - snapshot.arrivalUptime
+            line += String(format: " | remote #%u age %.2fs R hilt shared ", packet.sequence, age)
+                + Self.fmt(packet.right.hilt)
+                + " → ours \(Self.fmt(remoteHands[1].hilt)) ignited \(packet.right.ignited)"
+        } else {
+            line += " | no remote packet (opponentPresent \(mailbox.opponentPresent))"
+        }
+        print(line)
     }
 
     // MARK: - Feeding the renderer
@@ -595,7 +676,12 @@ final class SaberXRGame {
                     )
                 }
                 if mailbox.sessionActive {
-                    mailbox.pushLocalEvent(.clash(position: contact, intensity: intensity))
+                    // Events travel in the shared frame like the poses.
+                    let sharedFromLocal = simd_inverse(SaberXRHolder.shared.spaceDisplacement)
+                    mailbox.pushLocalEvent(.clash(
+                        position: Self.transformPoint(sharedFromLocal, contact),
+                        intensity: intensity
+                    ))
                 }
             }
         }
@@ -625,10 +711,13 @@ final class SaberXRGame {
         sendAccumulator = 0
 
         sequence &+= 1
+        // Strip our own immersive-space displacement so the packet is in the
+        // group's shared frame (a no-op while the displacement is identity).
+        let sharedFromLocal = simd_inverse(SaberXRHolder.shared.spaceDisplacement)
         func wire(_ hand: Int) -> SaberBladeWire {
             SaberBladeWire(
-                hilt: localHands[hand].hilt,
-                direction: localHands[hand].direction,
+                hilt: Self.transformPoint(sharedFromLocal, localHands[hand].hilt),
+                direction: Self.transformDirection(sharedFromLocal, localHands[hand].direction),
                 length: localBladeLength(hand),
                 ignited: localHands[hand].ignitedTarget
             )

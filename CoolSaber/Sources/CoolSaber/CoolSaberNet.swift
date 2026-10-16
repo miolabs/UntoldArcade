@@ -8,7 +8,9 @@ public enum SaberHand: UInt8, Codable, Sendable, CaseIterable {
     case right
 }
 
-/// One blade as sent over the wire, in the sender's immersive-space frame.
+/// One blade as sent over the wire, in the group's shared immersive-space
+/// frame: the sender's ARKit frame with the system's immersive-space
+/// displacement removed (solo, that is just the ARKit frame).
 public struct SaberBladeWire: Codable, Equatable, Sendable {
     public var hilt: SIMD3<Float>
     public var direction: SIMD3<Float>
@@ -50,7 +52,7 @@ public struct SaberPosePacket: Codable, Equatable, Sendable {
     }
 }
 
-/// Low-rate events, sent reliably.
+/// Low-rate events, sent reliably. Positions are in the shared frame too.
 public enum SaberEvent: Codable, Equatable, Sendable {
     case ignite(hand: SaberHand, ignited: Bool, color: SIMD3<Float>)
     case clash(position: SIMD3<Float>, intensity: Float)

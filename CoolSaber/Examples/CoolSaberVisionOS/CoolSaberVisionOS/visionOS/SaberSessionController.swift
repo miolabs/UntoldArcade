@@ -29,6 +29,7 @@ final class SaberDuelMailbox: @unchecked Sendable {
     private var remoteEvents: [SaberEvent] = []
     private var sessionActiveStorage = false
     private var isSpatialStorage = false
+    private var opponentNearbyStorage = false
     private var opponentPresentStorage = false
 
     // MARK: Game-thread side
@@ -61,6 +62,20 @@ final class SaberDuelMailbox: @unchecked Sendable {
     /// (spatial Personas). False means remote poses need the opponent anchor.
     var isSpatial: Bool {
         lock.withLock { isSpatialStorage }
+    }
+
+    /// True when an opponent is physically in the same room (visionOS 26
+    /// nearby SharePlay). The system aligns nearby participants' immersive
+    /// spaces in place, so their frames relate through the displacement.
+    var opponentNearby: Bool {
+        lock.withLock { opponentNearbyStorage }
+    }
+
+    /// Whether wire poses can be mapped between the two headsets through
+    /// the immersive-space displacement (spatial or nearby session). False
+    /// falls back to the fixed opponent anchor.
+    var sharesFrame: Bool {
+        lock.withLock { isSpatialStorage || opponentNearbyStorage }
     }
 
     var opponentPresent: Bool {
@@ -103,12 +118,18 @@ final class SaberDuelMailbox: @unchecked Sendable {
                 outgoingPacket = nil
                 outgoingEvents.removeAll()
                 opponentPresentStorage = false
+                opponentNearbyStorage = false
+                isSpatialStorage = false
             }
         }
     }
 
     func setIsSpatial(_ spatial: Bool) {
         lock.withLock { isSpatialStorage = spatial }
+    }
+
+    func setOpponentNearby(_ nearby: Bool) {
+        lock.withLock { opponentNearbyStorage = nearby }
     }
 
     func setOpponentPresent(_ present: Bool) {
@@ -236,6 +257,18 @@ final class SaberSessionController {
                 guard let self, let session = self.session else { return }
                 let opponents = participants.subtracting([session.localParticipant])
                 self.mailbox.setOpponentPresent(!opponents.isEmpty)
+                let nearby = opponents.contains { $0.isNearbyWithLocalParticipant }
+                self.mailbox.setOpponentNearby(nearby)
+                for participant in opponents {
+                    print(
+                        "CoolSaber: participant \(participant.id) — nearby: "
+                            + "\(participant.isNearbyWithLocalParticipant)"
+                    )
+                }
+                print(
+                    "CoolSaber: \(opponents.count) opponent(s), nearby: \(nearby), "
+                        + "spatial: \(self.mailbox.isSpatial)"
+                )
                 if case .joined = self.status {
                     self.status = .joined(participants: participants.count)
                     self.statusMessage = opponents.isEmpty
@@ -249,7 +282,11 @@ final class SaberSessionController {
     }
 
     private func configureSystemCoordinator(for session: GroupSession<SaberActivity>) async {
-        guard let coordinator = await session.systemCoordinator else { return }
+        guard let coordinator = await session.systemCoordinator else {
+            print("CoolSaber: no systemCoordinator for this session — no shared frame possible")
+            return
+        }
+        print("CoolSaber: systemCoordinator acquired — requesting group immersive space")
 
         var configuration = SystemCoordinator.Configuration()
         configuration.supportsGroupImmersiveSpace = true
@@ -260,10 +297,28 @@ final class SaberSessionController {
         tasks.append(Task { [mailbox] in
             for await state in coordinator.localParticipantStates {
                 mailbox.setIsSpatial(state.isSpatial)
+                // `pose` (visionOS 26) is our own position in the shared
+                // frame — a second, independent handle on the alignment.
+                let pose = state.pose.map { pose -> String in
+                    let p = pose.position.vector
+                    return String(
+                        format: "(%.2f, %.2f, %.2f) m, yaw-ish %.1f°",
+                        p.x, p.y, p.z, pose.rotation.angle.degrees
+                    )
+                } ?? "nil"
+                print(
+                    "CoolSaber: localParticipantState — spatial: \(state.isSpatial), "
+                        + "seat: \(String(describing: state.seat)), pose: \(pose), "
+                        + "displacement: \(SaberXRHolder.shared.displacementSummary)"
+                )
             }
         })
         tasks.append(Task { [weak self] in
             for await immersionStyle in coordinator.groupImmersionStyle {
+                print(
+                    "CoolSaber: groupImmersionStyle → "
+                        + "\(immersionStyle.map { String(describing: $0) } ?? "nil (windowed)")"
+                )
                 await MainActor.run {
                     self?.groupImmersionActive = immersionStyle != nil
                 }
