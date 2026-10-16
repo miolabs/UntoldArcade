@@ -1,0 +1,13 @@
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+DerivedData/
+.build/
+.swiftpm/
+*.xcworkspace/xcuserdata/
+
+# SwiftPM pins written by Xcode into the workspace (the root .gitignore means to skip these too)
+**/xcshareddata/swiftpm/Package.resolved

@@ -1,26 +1,220 @@
 # 🎮 UntoldArcade
 
-**UntoldArcade** is a collection of demos built with the [Untold Engine](https://github.com/untoldengine/UntoldEngine).  
-These demos give game developers a **quick look** at what the engine can do.
+<!--
+  MEDIA: top-of-README hero. Drop a short looping GIF or MP4 here (recommended: a fast
+  cut of 3-4 demos in action, 1280x720, <10s loop) at docs/media/banner.gif and
+  uncomment the line below.
+-->
+<!-- ![UntoldArcade banner](docs/media/banner.gif) -->
 
-The demos included are:
+**UntoldArcade** is the demo playground for the [Untold Engine](https://github.com/untoldengine/UntoldEngine) — a real, running Xcode project for every major thing the engine can do, from mixed-reality digital twins to GPU cloth you can punch a ball through.
 
-- 🏠 **HomeDesign** – a visionOS mixed-reality demo: pick a pre-furnished floor plan, place it on your real floor, and walk through it at full scale or from a bird's-eye view. Also shows off the engine's Rendering Extension system by integrating **CoolWater** (below) to render a real-time animated pool.
-- 🛠️ **SceneBuilder** – a declarative scene-building demo using SwiftUI-style syntax to construct 3D scenes programmatically.
+Clone it, open a folder, hit `⌘R`, and you're looking at the feature instead of reading about it.
 
-### Rendering Extensions
+---
 
-- 💧 **CoolWater** – a reusable Rendering Extension package (owns its own shader library, pipelines, and render-graph passes) that draws an animated water surface with reflection/refraction and ripple simulation. Ships with its own standalone visionOS example (`CoolWater/Examples/CoolWaterVisionOS`) and is also consumed directly by **HomeDesign** as a real-world integration example.
+## 📺 Demos
+
+Each demo has its own README with run instructions and a guided path through the checked-in code. App demos are standalone Xcode projects; the Rendering Extensions (CoolSaber, CoolWater, CoolCloth, CoolWeb) are reusable Swift packages with example Xcode apps. Each extension ships its own shader library, pipelines, and render-graph passes and can be dropped into another project.
+
+### ⚔️ CoolSaber — *visionOS · Rendering Extension*
+
+![CoolSaber demo](docs/media/CoolSaber/demo.gif)
+
+Lightsaber duels driven by PSVR2 Sense controllers — pull the trigger to ignite a glowing blade, then duel a friend over SharePlay with clashing sparks, haptic kicks, and synthesized saber audio. **Requires a physical Vision Pro** (the deferred G-buffer exceeds simulator tile memory).
+
+```bash
+open CoolSaber/Examples/CoolSaberVisionOS/CoolSaberVisionOS.xcodeproj
+```
+
+### 💧 CoolWater — *visionOS · Rendering Extension*
+
+![CoolWater demo](docs/media/CoolWater/demo.gif)
+
+Real-time animated water with reflection/refraction and ripple simulation.
+
+```bash
+open CoolWater/Examples/CoolWaterVisionOS/CoolWaterVisionOS.xcodeproj
+```
+
+### 🧵 CoolCloth — *visionOS · Rendering Extension*
+
+![CoolCloth demo](docs/media/CoolCloth/demo.gif)
+
+GPU cloth simulation (XPBD, small-steps scheme) hanging in your real room — pinch it to grab a particle, throw a ball through it, switch materials live, and let real furniture occlude it.
+
+```bash
+open CoolCloth/Examples/CoolClothVisionOS/CoolClothVisionOS.xcodeproj
+```
+
+### 🕸️ CoolWeb — *visionOS · Rendering Extension*
+
+![CoolWeb demo](docs/media/CoolWeb/demo.gif)
+
+A Spider-Man web-shooter demo — strike the classic web-shooter pose (thumb, index and pinky extended, middle and ring curled) and a web line fires from your wrist, blooms into a net on the surface it hits, and stays tethered to your hand until you open your palm to release it. **Requires a physical Vision Pro** (hand tracking and scene reconstruction aren't available in the simulator).
+
+```bash
+open CoolWeb/Examples/CoolWebVisionOS/CoolWebVisionOS.xcodeproj
+```
+
+### 🪞 CoolMirror — *visionOS*
+
+<!-- MEDIA: docs/media/CoolMirror/demo.gif -->
+<!-- ![CoolMirror demo](docs/media/CoolMirror/demo.gif) -->
+
+A *virtual mirror* for the engine's character-deformation stack: a rigged, high-poly character stands in front of you flexing, and you switch the skinning live — legacy vertex shader, compute LBS, dual-quaternion, or Direct Delta Mush — freeze the pose to compare, drag morph sliders, or let pose drivers fire the biceps automatically as the elbows curl. Switch on the muscle simulation and a full-body set of volumetric XPBD muscles (built procedurally from the rig, no extra assets) bulges under the skin as the joints bend, with a "flex all" slider for the pose-off shot, a wireframe overlay of the cages and per-muscle controls. Or pick the ML deformer: a small network trained on that simulation (`swift run CoolMirrorBake` + the engine's `train_mldeformer.py`, the `.untoldml` ships next to each hero) that predicts the same deltas from the pose in one dispatch, with a blend slider to A/B it. And the mirror part: put an iPhone on a stand facing you, run the bundled **CoolMirror Capture** app (the iPhone target of the same project, rear-camera ARKit body tracking → Bonjour/UDP; the phone stands sideways, body tracking is landscape-only), tap "Use iPhone body tracking" on the Vision Pro and follow the steps it shows (the phone's screen faces away from you, so the headset guides the setup): step into the phone's view, stand like the character, hold the pose for the 3-second calibration, and the character mirrors your body live — with any of the deformation modes on top.
+
+```bash
+open CoolMirror/Examples/CoolMirror/CoolMirror.xcodeproj   # CoolMirrorVisionOS + CoolMirrorCapture (iPhone) targets
+```
+
+### 🏀 CoolBasket — *visionOS · Physics Backend*
+
+<!-- MEDIA: docs/media/CoolBasket/demo.gif -->
+<!-- ![CoolBasket demo](docs/media/CoolBasket/demo.gif) -->
+
+Mixed-reality basketball, and the first consumer of the engine's physics backend plugin seam: a pure-Swift `PhysicsBackend` simulates the ball against your real floor, walls and furniture (ARKit plane detection), the hoop you place in your room, and your hands. Look at the floor and pinch to place the hoop, pinch near the ball to pick it up, flick to throw — a shot only counts when it comes down through the rim.
+
+- `PhysicsBackendPlugin` installed before renderer creation, driven by the engine's `PhysicsCoordinator` — zero engine changes
+- Rigid bodies, static colliders and trigger volumes expressed with the engine-owned `RigidBodyComponent`/`ColliderComponent`
+- Contact and trigger events delivered through `PhysicsEvents`
+
+```bash
+open CoolBasket/Examples/CoolBasketVisionOS/CoolBasketVisionOS.xcodeproj
+```
+
+### 🎳 CoolBowling — *visionOS · Jolt Physics*
+
+<!-- MEDIA: docs/media/CoolBowling/demo.gif -->
+<!-- ![CoolBowling demo](docs/media/CoolBowling/demo.gif) -->
+
+Mixed-reality bowling on the shared Jolt Physics plugin — the demo that needs a real rigid-body solver. Look at your floor to lay a lane, pinch to pick up the ball and roll it; ten pins (lathe meshes with convex-hull colliders) stack, wobble, topple and knock each other over, and the pins down are counted from their poses.
+
+```bash
+open CoolBowling/Examples/CoolBowlingVisionOS/CoolBowlingVisionOS.xcodeproj
+```
+
+### 🪞 CoolMirror — *visionOS + iPhone · Character Deformation · Motion Capture*
+
+![CoolMirror demo](docs/media/CoolMirror/demo.gif)
+
+A virtual mirror: a rigged, high-poly character stands in front of you and moves as you do. An iPhone on a stand tracks your body (ARKit body tracking, sent over the local network), the headset adds what it knows far better, your head and your hands, and the character is held between the two: its head where yours is, its planted feet where they landed, its hands on its body where yours are on yours. Underneath it is the showcase of the engine's character-deformation stack: switch the skinning live (vertex shader, compute linear blend, dual quaternion, Direct Delta Mush), drag morph sliders, let pose drivers fire the biceps as the elbows curl, turn on the volumetric XPBD muscle simulation or the ML deformer trained on it, and hang a Jolt soft-body cape on Batman. **Requires a physical Vision Pro and an iPhone** with a rear camera that supports body tracking.
+
+- External poses, per-limb reach IK and the deformation compute pass from the engine; cloth from the shared Jolt Physics plugin
+- Capture filtered against recorded sessions: the recordings replay as regression tests on a Mac
+- One Xcode project, two targets: the mirror (visionOS) and the capture app (iPhone)
+
+```bash
+open CoolMirror/Examples/CoolMirror/CoolMirror.xcodeproj
+```
+
+### 🧲 UntoldJoltPhysics — *plugin · Physics Backend*
+
+[Jolt Physics](https://github.com/jrouwe/JoltPhysics) behind the engine's physics backend seam, as a Swift package every demo can depend on: [untoldengine/UntoldJoltPhysics](https://github.com/untoldengine/UntoldJoltPhysics). Jolt comes as source from the [untoldengine/JoltPhysics](https://github.com/untoldengine/JoltPhysics) fork (the upstream tree plus a `Package.swift`) and SwiftPM compiles it — no binaries — for macOS, iOS and visionOS. CoolBasket can run on it instead of its built-in backend: pick "Jolt Physics" in its control window.
+
+```swift
+.package(url: "https://github.com/untoldengine/UntoldJoltPhysics.git", branch: "develop")
+```
+
+### ⚽ CoolFutbol — *visionOS*
+
+![CoolFutbol demo](docs/media/CoolFutbol/demo.gif)
+
+Mixed-reality tabletop soccer: look at a real table and pinch to snap a stadium onto it, two-hand pinch to rotate, tap to confirm — then control one player on a 5v5 pitch with a PSVR2 Sense controller (dribble, pass, shoot) while teammates hold a formation shape that shifts between attacking and defending based on who has the ball. Doubles as a worked example of the engine's core game loop; see the demo's own README for a walkthrough from app bootstrap through `update()`/`handleInput()`.
+
+- ARKit real-surface picking (`pickRealSurfacePosition`) for table-snap placement, with pinch-drag/two-hand-rotate scene manipulation
+- PSVR2 Sense controller input mapped to dribble/pass/shoot via `InputSystem.shared.gameControllerState`
+- Formation/positioning system driving off-ball teammates through custom systems (`registerCustomSystem`)
+
+```bash
+open CoolFutbol/CoolFutbol.xcodeproj
+```
+
+### 🔬 UntoldViewer — *visionOS · Engine vs RealityKit*
+
+The engine's comparison bench: a catalog of objects (a dartboard and four darts to start), each with an engine model and a USDZ twin made from the same source, shown at the same spot in your room by the Untold Engine or by RealityKit, one tap apart. Look at the same wire, digit or flight in both, at the same distance, and read the engine's GPU frame time next to it. Built to keep pushing the engine against what the platform renderer does.
+
+- Foveated rendering through the compositor's rasterization rate maps, render quality up to 1.0, MSAA 4× and temporal anti-aliasing, room or studio lighting — all switchable from the window
+- The same objects through `RealityView` from their USDZ twins; frame time from Instruments' RealityKit Trace
+- Adding an object is a folder and a USDZ (`UntoldViewer/README.md`)
+
+```bash
+open UntoldViewer/UntoldViewer.xcodeproj
+```
+
+### 🏛️ ArchvizViewer — *visionOS*
+
+![ArchvizViewer demo](docs/media/ArchvizViewer/demo.gif)
+
+Load a Blender-authored architectural visualization straight into mixed reality — lights, camera, and color management carried over exactly as the artist set them up. Pinch-drag and two-hand rotate to walk the scene around your room. Reference project for the [Archviz To Vision Pro](https://untoldengine.github.io/UntoldEngine/LearningPaths/ArchvizToVisionPro/) tutorial.
+
+- Async, non-blocking model loading (`setEntityMeshAsync`)
+- Blender-authored lights/camera/color management (`loadSceneAuthored`)
+- Vision Pro spatial picking and two-hand scene rotation
+
+```bash
+open ArchvizViewer/ArchvizViewer.xcodeproj
+```
+
+### 🛋️ BedroomTwin — *visionOS*
+
+![BedroomTwin demo](docs/media/BedroomTwin/demo.gif)
+
+A digital twin of a bedroom: the same room model, but different parts of it behave differently. The window becomes a passthrough light portal; the lamps, door, curtains, and laptop stay individually tappable and carry live mock status data. Reference project for the [Bedroom Digital Twin](https://untoldengine.github.io/UntoldEngine/LearningPaths/BedroomDigitalTwin/) tutorial.
+
+- `SceneChannel` splitting geometry into context / window / selectable objects by naming convention
+- Light-portal + passthrough ghost rendering on the window channel
+- Per-object tap selection resolved against mock digital-twin status data
+
+```bash
+open BedroomTwin/BedroomTwin.xcodeproj
+```
+
+### 🏙️ CityStreaming — *visionOS*
+
+![CityStreaming demo](docs/media/CityStreaming/demo.gif)
+
+A city too big to fit in GPU memory, streamed in tile by tile as you walk through it — nearby tiles load at full detail, distant ones fall back to LOD/HLOD, and static batching updates incrementally in the background. Reference project for [City Streaming On Vision Pro](https://untoldengine.github.io/UntoldEngine/LearningPaths/CityStreamingOnVisionPro/).
+
+- Tiled streaming manifests (`setEntityStreamScene`) instead of one monolithic model
+- Distance-based load/unload with LOD/HLOD fallback
+- Spatial debug overlays for tile bounds, octree residency, and texture streaming tiers
+
+```bash
+open CityStreaming/CityStreaming.xcodeproj
+```
+
+### 🛠️ SceneBuilder — *macOS / iOS*
+
+<!-- MEDIA: docs/media/SceneBuilder/hero.gif -->
+<!-- ![SceneBuilder demo](docs/media/SceneBuilder/hero.gif) -->
+
+A declarative, SwiftUI-style syntax for building 3D scenes in code — cubes, PBR materials, and animated waves assembled without a scene editor.
+
+```bash
+open SceneBuilder/SceneBuilder.xcodeproj
+```
+
+### 🫧 SplatTwin — *macOS*
+
+![SplatTwin demo: the same view as meshes and after the swap](docs/media/SplatTwin/demo.png)
+
+Mesh-to-Gaussian-splat twins: three objects cross-fade from their mesh to a splat "capture" as you walk up to them and back as you leave, while the mesh keeps writing depth as a shrunk occluder shell and keeps casting its shadow. The captures are synthesised at first launch, so nothing large ships. The swap policy is the demo's own code on the engine's public API, an example of extending the engine from outside; a HUD exposes the swap distance, fade, splat exposure and the occluder shells.
+
+```bash
+open SplatTwin/SplatTwin.xcodeproj
+```
 
 ---
 
 ## ⚙️ Requirements
 
 - **Xcode 26.1** or later
-- **macOS 26.01+** (for macOS demos)
-- **iOS 26.01+** (for iOS demos)
-- **visionOS 26.01+** (for Vision Pro demos)
+- **macOS 26.0+** for the current macOS demo targets
+- **iOS 26.0+** for the current SceneBuilder iOS target
+- **visionOS 2.0+** for most Vision Pro demos; CoolSaber targets visionOS 26.0 because it uses accessory tracking
 - Metal-capable GPU
+- A physical Apple Vision Pro for CoolSaber (simulator can't run the deferred renderer's G-buffer) and CoolWeb (simulator has no hand tracking or scene reconstruction)
 
 ---
 
@@ -33,20 +227,9 @@ cd UntoldArcade
 ```
 
 ### 2. Open a demo project
-Each demo is a standalone Xcode project. Navigate to the demo folder and open the `.xcodeproj` file:
+Navigate to the demo folder and open the `.xcodeproj` shown under that demo above. Rendering-extension demos keep their consumer app under `Examples/`; their top-level directory is also a Swift package that can be built and tested independently.
 
-```bash
-# For HomeDesign (visionOS)
-open HomeDesign/HomeDesign.xcodeproj
-
-# For SceneBuilder
-open SceneBuilder/SceneBuilder.xcodeproj
-
-# For the CoolWater rendering extension's own example (visionOS)
-open CoolWater/Examples/CoolWaterVisionOS/CoolWaterVisionOS.xcodeproj
-```
-
-> HomeDesign's Xcode project is generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). If you add/remove source files or change dependencies, re-run `xcodegen generate` inside `HomeDesign/` before opening/building.
+> Most demos generate their Xcode project from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen). If you add/remove source files or change dependencies, re-run `xcodegen generate` inside that demo's folder before opening/building.
 
 ### 3. Build and run
 - Select your target device (Mac, iPhone, iPad, or Vision Pro simulator)
@@ -55,25 +238,49 @@ open CoolWater/Examples/CoolWaterVisionOS/CoolWaterVisionOS.xcodeproj
 
 ## 🔗 Engine Dependency
 
-Each demo project depends on the Untold Engine via Swift Package Manager (SPM).
-
-Game developers: The workspace is already configured to fetch the engine from its develop branch on GitHub.
+Each demo project depends on the Untold Engine via Swift Package Manager (SPM). The workspace is already configured to fetch the engine from its `develop` branch on GitHub.
 
 ## 📂 Project Structure
 
 ```bash
 UntoldArcade/
-├── HomeDesign/                # visionOS mixed-reality floor-plan/home-design demo
-│   ├── Sources/                # App source code + bundled GameData (models, scenes, thumbnails)
-│   ├── Vendor/CoolWater/       # Vendored copy of the CoolWater rendering extension
-│   └── Tests/                  # Unit tests
-├── CoolWater/                  # Rendering Extension: real-time animated water
-│   ├── Sources/                 # Extension source (shaders, simulation, render passes)
-│   ├── Examples/                # Standalone visionOS consumer example
-│   └── Tests/                   # Unit tests
-└── SceneBuilder/                # Declarative scene-building demo
-    ├── Sources/                  # Demo source code
-    └── Resources/                 # Demo assets
+├── CoolSaber/           # Rendering Extension — PSVR2 lightsaber duels + SharePlay
+├── UntoldViewer/        # Engine vs RealityKit comparison bench (visionOS)
+├── CoolWater/           # Rendering Extension — real-time animated water
+├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
+├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
+├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam, on either backend
+├── CoolBowling/         # visionOS — bowling on the Jolt Physics plugin
+├── CoolMirror/          # visionOS + iPhone — virtual mirror on the character-deformation stack
+├── CoolFutbol/          # visionOS — mixed-reality tabletop soccer + PSVR2 controls
+├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
+├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
+├── CityStreaming/       # visionOS — tiled city streaming with LOD/HLOD
+├── SceneBuilder/        # macOS/iOS — declarative scene-building demo
+├── SplatTwin/           # macOS — mesh-to-Gaussian-splat twins
+└── docs/media/          # Screenshots/GIFs/video referenced by this README
+```
+
+App demo folders generally follow:
+```bash
+<Demo>/
+├── project.yml               # XcodeGen config (where used)
+├── README.md                 # Demo-specific overview + what it teaches
+└── Sources/<Demo>/
+    ├── <Demo>App.swift        # App entry point
+    ├── GameScene.swift        # Scene setup, input, per-frame logic
+    └── GameData/               # Bundled models, textures, HDRs, streamed tiles
+```
+
+Rendering-extension demos instead separate reusable package code from the consumer app:
+
+```text
+<Demo>/
+├── Package.swift
+├── README.md
+├── Sources/<Demo>/             # Plugin, extension, simulation/state, shaders
+├── Tests/<Demo>Tests/
+└── Examples/<Demo>VisionOS/    # Runnable consumer Xcode project
 ```
 
 ## 🤝 Contributing
@@ -85,8 +292,6 @@ We welcome contributions! If you'd like to:
 
 Please fork the repo, open a PR, or join discussions in the [Untold Engine repo](https://github.com/untoldengine/UntoldEngine).
 
-📜 License
+## 📜 License
 
-This project follows the same license as Untold Engine.
-
-See the LICENSE file for details.
+This project follows the same license as Untold Engine. See the [LICENSE](LICENSE) file for details.
