@@ -1,0 +1,369 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00F14736A176ED6001D306C5 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 8ADDC08B052DA3A7843EBC09 /* UntoldEngineXR */; };
+		631E717AF031ACF3FE676C85 /* ExampleScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75FE4B3994BB810BE798569 /* ExampleScene.swift */; };
+		746C93EFA3EF13B397E96EB4 /* UntoldEngineXRRealityKit in Frameworks */ = {isa = PBXBuildFile; productRef = 649A49056892574529B80646 /* UntoldEngineXRRealityKit */; };
+		8C466A9D76EA8472EC02B79A /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 4DEB0970B2ACA5F4272630BD /* UntoldEngine */; };
+		B10674B978AEDB6016EEE9F4 /* RealityKitPresenterExampleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		46F18CC0AB31E7FE4EBD7F00 /* RealityKitPresenterExample.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RealityKitPresenterExample.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A75FE4B3994BB810BE798569 /* ExampleScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExampleScene.swift; sourceTree = "<group>"; };
+		C50D6B7CBCB80A809D116139 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealityKitPresenterExampleApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D493D8E9D837AE761AF44F98 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8C466A9D76EA8472EC02B79A /* UntoldEngine in Frameworks */,
+				00F14736A176ED6001D306C5 /* UntoldEngineXR in Frameworks */,
+				746C93EFA3EF13B397E96EB4 /* UntoldEngineXRRealityKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A15AA5B3B8740C2A6595C20E /* RealityKitPresenterExample */ = {
+			isa = PBXGroup;
+			children = (
+				A75FE4B3994BB810BE798569 /* ExampleScene.swift */,
+				CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */,
+			);
+			path = RealityKitPresenterExample;
+			sourceTree = "<group>";
+		};
+		A24AEAA5C90B32EC07B64965 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				46F18CC0AB31E7FE4EBD7F00 /* RealityKitPresenterExample.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AD2AE50D1B625AA2ED0A4034 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				A15AA5B3B8740C2A6595C20E /* RealityKitPresenterExample */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		AF117F943026AC4C7EF57E17 = {
+			isa = PBXGroup;
+			children = (
+				BDDA0B50EBEE6AB5C34BD6F1 /* Config */,
+				AD2AE50D1B625AA2ED0A4034 /* Sources */,
+				A24AEAA5C90B32EC07B64965 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		BDDA0B50EBEE6AB5C34BD6F1 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				C50D6B7CBCB80A809D116139 /* Config.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8FEB8ABE58E68CEDEC082BCB /* RealityKitPresenterExample */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D9324763B5C8F01DE64586B3 /* Build configuration list for PBXNativeTarget "RealityKitPresenterExample" */;
+			buildPhases = (
+				29BAD34B8DB91071C69F3FF7 /* Sources */,
+				D493D8E9D837AE761AF44F98 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RealityKitPresenterExample;
+			packageProductDependencies = (
+				4DEB0970B2ACA5F4272630BD /* UntoldEngine */,
+				8ADDC08B052DA3A7843EBC09 /* UntoldEngineXR */,
+				649A49056892574529B80646 /* UntoldEngineXRRealityKit */,
+			);
+			productName = RealityKitPresenterExample;
+			productReference = 46F18CC0AB31E7FE4EBD7F00 /* RealityKitPresenterExample.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		04CFFA06413A8052B1E8D65D /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					8FEB8ABE58E68CEDEC082BCB = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = F10513FE4F900903BD451C88 /* Build configuration list for PBXProject "RealityKitPresenterExample" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = AF117F943026AC4C7EF57E17;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A24AEAA5C90B32EC07B64965 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8FEB8ABE58E68CEDEC082BCB /* RealityKitPresenterExample */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		29BAD34B8DB91071C69F3FF7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				631E717AF031ACF3FE676C85 /* ExampleScene.swift in Sources */,
+				B10674B978AEDB6016EEE9F4 /* RealityKitPresenterExampleApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		529B9B86B8729A774203FEC7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				XROS_DEPLOYMENT_TARGET = 2.0;
+			};
+			name = Debug;
+		};
+		586ABFC714FC2C7C5C2B8DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C50D6B7CBCB80A809D116139 /* Config.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sources/RealityKitPresenterExample/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MTL_HEADER_SEARCH_PATHS = "$(inherited) $(UNTOLD_ENGINE_PACKAGE_ROOT)/Sources/UntoldEngineShaderSupport/include";
+				SDKROOT = xros;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+				UNTOLD_ENGINE_PACKAGE_ROOT = "$(BUILD_DIR)/../../SourcePackages/checkouts/UntoldEngine";
+			};
+			name = Release;
+		};
+		D0DD14B150C37C47EB200C30 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				XROS_DEPLOYMENT_TARGET = 2.0;
+			};
+			name = Release;
+		};
+		FD25435DFF1B564D4F9807CA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C50D6B7CBCB80A809D116139 /* Config.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sources/RealityKitPresenterExample/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MTL_HEADER_SEARCH_PATHS = "$(inherited) $(UNTOLD_ENGINE_PACKAGE_ROOT)/Sources/UntoldEngineShaderSupport/include";
+				SDKROOT = xros;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+				UNTOLD_ENGINE_PACKAGE_ROOT = "$(BUILD_DIR)/../../SourcePackages/checkouts/UntoldEngine";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		D9324763B5C8F01DE64586B3 /* Build configuration list for PBXNativeTarget "RealityKitPresenterExample" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FD25435DFF1B564D4F9807CA /* Debug */,
+				586ABFC714FC2C7C5C2B8DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F10513FE4F900903BD451C88 /* Build configuration list for PBXProject "RealityKitPresenterExample" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				529B9B86B8729A774203FEC7 /* Debug */,
+				D0DD14B150C37C47EB200C30 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/miolabs/UntoldEngine.git";
+			requirement = {
+				branch = feature/xr_realitykit_presenter;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4DEB0970B2ACA5F4272630BD /* UntoldEngine */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			productName = UntoldEngine;
+		};
+		649A49056892574529B80646 /* UntoldEngineXRRealityKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			productName = UntoldEngineXRRealityKit;
+		};
+		8ADDC08B052DA3A7843EBC09 /* UntoldEngineXR */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */;
+			productName = UntoldEngineXR;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 04CFFA06413A8052B1E8D65D /* Project object */;
+}
