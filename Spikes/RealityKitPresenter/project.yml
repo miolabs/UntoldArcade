@@ -1,0 +1,73 @@
+# Stage 0 spike of the engine plan docs/proposals/XRRealityKitPresenter.md: a throwaway
+# visionOS app with no engine code that settles the four unknowns of the RealityKit
+# presenter on the headset. Regenerate the Xcode project from this folder with
+#
+#     xcodegen generate
+#
+# Signing: Config/Config.xcconfig composes the bundle identifier; the gitignored
+# Config/Local.xcconfig holds the team (see that file).
+name: RealityKitPresenter
+options:
+  xcodeVersion: "27.0"
+  createIntermediateGroups: true
+  deploymentTarget:
+    visionOS: "2.0"
+schemes:
+  RealityKitPresenter:
+    build:
+      targets:
+        RealityKitPresenter: all
+    run:
+      config: Debug
+      # Metal's own HUD as a cross-check of the numbers window.
+      environmentVariables:
+        MTL_HUD_ENABLED: "1"
+    profile:
+      config: Release
+    archive:
+      config: Release
+targets:
+  RealityKitPresenter:
+    type: application
+    platform: visionOS
+    sources:
+      - path: Sources/RealityKitPresenter
+        excludes:
+          - "Resources"
+          - "Info.plist"
+          - "RealityKitPresenter.entitlements"
+      # The hand-written MaterialX graph, copied loose into the bundle.
+      - path: Sources/RealityKitPresenter/Resources
+        buildPhase: resources
+    info:
+      path: Sources/RealityKitPresenter/Info.plist
+      properties:
+        CFBundleDisplayName: RK Presenter Spike
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSWorldSensingUsageDescription: "The spike reads the device pose through ARKit to place the frame grids."
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
+    entitlements:
+      path: Sources/RealityKitPresenter/RealityKitPresenter.entitlements
+      properties:
+        com.apple.developer.group-session: true
+    configFiles:
+      Debug: Config/Config.xcconfig
+      Release: Config/Config.xcconfig
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "7"
+        GENERATE_INFOPLIST_FILE: false
+        CODE_SIGN_STYLE: Automatic
+        # The uniforms struct shared between Swift and the Metal shaders.
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/RealityKitPresenter/Shaders/SpikeShaderTypes.h
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: -Onone
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+        Release:
+          SWIFT_COMPILATION_MODE: wholemodule
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
