@@ -103,9 +103,18 @@ final class ExampleModel {
     /// rasterization rate map: the same 1920 × 1824 physical pixels per eye spread evenly in
     /// angle, so the centre of view is about 1.36 times denser than the uniform frame (the grid
     /// is then the map's, a vertex every 8 texels: 241 × 229). The launch argument
-    /// `--foveation` sets it for the launch; remembered across launches otherwise.
-    var rateMap = UserDefaults.standard.bool(forKey: "rateMap") {
+    /// `--foveation equiangular|none` sets where the toggle starts; remembered across launches
+    /// otherwise.
+    var rateMap = ExampleModel.rateMapFromArgumentsOrRemembered() {
         didSet { UserDefaults.standard.set(rateMap, forKey: "rateMap") }
+    }
+
+    static func rateMapFromArgumentsOrRemembered() -> Bool {
+        let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--foveation"), index + 1 < arguments.count {
+            return arguments[index + 1].lowercased() == "equiangular"
+        }
+        return UserDefaults.standard.bool(forKey: "rateMap")
     }
 
     /// The configuration of the next space opened: the launch arguments', then the window's
@@ -118,9 +127,7 @@ final class ExampleModel {
         }
         if nearShell { configuration.farShellMetres = 50 }
         if viewOffsetTest { configuration.viewOffsetMetres = SIMD3<Float>(0, 0.03, 0) }
-        if !CommandLine.arguments.contains("--foveation") {
-            configuration.foveation = rateMap ? .equiAngular : .none
-        }
+        configuration.foveation = rateMap ? .equiAngular : .none
         return configuration
     }
     let scene = ExampleScene()
@@ -151,9 +158,6 @@ final class ExampleModel {
         if arguments.contains("--fixed-diagonal") { configuration.adaptiveDiagonal = false }
         if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
         if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
-        if let foveation = value(after: "--foveation")?.lowercased() {
-            configuration.foveation = foveation == "equiangular" ? .equiAngular : .none
-        }
         return configuration
     }
 
