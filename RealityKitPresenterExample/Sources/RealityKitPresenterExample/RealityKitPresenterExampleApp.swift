@@ -12,7 +12,9 @@
 //  screenshots of one build compare with the next). The presenter's settings, for comparisons
 //  from the command line: `--grid 64x60`, `--skirt 0` (texels), `--adaptive-diagonal` or
 //  `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms), `--tear 0.5` (metres); the engine's
-//  anti-aliasing with `--aa fxaa|smaa|msaa|taa|msaataa`.
+//  anti-aliasing with `--aa fxaa|smaa|msaa|taa|msaataa`. All but the grid change from the
+//  window while the space is open too (the presenter's `settings`), for comparisons on the
+//  headset without a relaunch.
 //
 
 import os
@@ -68,6 +70,16 @@ final class ExampleModel {
     var spaceOpen = false
     var statusLine = "The space is closed."
     var materialLine = ""
+    /// The presenter's settings as the window shows them (the launch arguments' to start
+    /// with); written through to the presenter.
+    var settings = XRPresenterSettings(configuration: ExampleModel.configurationFromArguments()) {
+        didSet { presenter?.settings = settings }
+    }
+    /// The engine's anti-aliasing as the window shows it; asked of the scene when it changes,
+    /// which applies it on the engine's thread before the next frame.
+    var antiAliasing = ExampleAntiAliasing.fromArguments() {
+        didSet { if spaceOpen, antiAliasing != oldValue { scene.setAntiAliasing(antiAliasing) } }
+    }
     let scene = ExampleScene()
     private(set) var presenter: XRRealityKitPresenter?
     /// The numbers go to the unified log too (subsystem `com.untoldengine.realitykitpresenterexample`,
@@ -103,14 +115,12 @@ final class ExampleModel {
         self.presenter = presenter
         // The window reads the numbers; the presenter's own log line would reset them.
         presenter.reportInterval = 0
-        let c = presenter.configuration
-        materialLine = (presenter.usesShaderGraphMaterial
-            ? "Eye material: the shader graph (each eye sees its own grid). "
-            : "Eye material: the FALLBACK (both eyes see both grids). ")
-            + "Grid \(c.gridColumns)×\(c.gridRows), skirt \(c.skirtTexels) texels, \(c.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : "off"), lead \(Int(c.leadSeconds * 1000)) ms, tear \(c.tearThresholdMetres) m."
-        log.notice("\(self.materialLine, privacy: .public)")
+        settings = presenter.settings
         scene.start(xr)
+        antiAliasing = scene.antiAliasing
         spaceOpen = true
+        describeSettings()
+        log.notice("\(self.materialLine, privacy: .public)")
         // Once a second while the space is open, whether or not the window is (a hidden window
         // ends its own tasks).
         refreshTask = Task { [weak self] in
@@ -130,9 +140,21 @@ final class ExampleModel {
         statusLine = "The space is closed."
     }
 
+    /// The material and settings line, from the presenter: what is in force.
+    private func describeSettings() {
+        guard let presenter else { return }
+        let c = presenter.configuration
+        let s = presenter.settings
+        materialLine = (presenter.usesShaderGraphMaterial
+            ? "Eye material: the shader graph (each eye sees its own grid). "
+            : "Eye material: the FALLBACK (both eyes see both grids). ")
+            + "Grid \(c.gridColumns)×\(c.gridRows), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), lead \(Int((s.leadSeconds * 1000).rounded())) ms, tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)."
+    }
+
     /// Once a second from the window.
     func refresh() {
         guard let presenter else { return }
+        describeSettings()
         let numbers = presenter.statistics.snapshot()
         statusLine = String(
             format: "%.0f updates/s · %.0f frames/s · %d dropped (%d in all) · replace %.2f ms (max %.2f) · pickup age %.1f ms · frame %.1f ms · GPU %.1f ms (max %.1f) · %d taps",
@@ -182,6 +204,28 @@ struct ControlView: View {
                 }
                 .disabled(!model.spaceOpen)
             }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Settings (change them with the space open; the grid needs a relaunch)")
+                    .font(.headline)
+                HStack(spacing: 24) {
+                    Toggle("Edge band", isOn: $model.settings.edgeBlending)
+                        .disabled(!(model.presenter?.hasEdgeBand ?? true))
+                    Toggle("Adaptive diagonal", isOn: $model.settings.adaptiveDiagonal)
+                }
+                HStack(spacing: 24) {
+                    Stepper("Skirt \(Int(model.settings.skirtTexels)) texels", value: $model.settings.skirtTexels, in: 0 ... 8, step: 1)
+                    Stepper(String(format: "Tear %.1f m", model.settings.tearThresholdMetres), value: $model.settings.tearThresholdMetres, in: 0.1 ... 3, step: 0.1)
+                    Stepper("Lead \(Int((model.settings.leadSeconds * 1000).rounded())) ms", value: $model.settings.leadSeconds, in: 0 ... 0.06, step: 0.0055)
+                }
+                Picker("Anti-aliasing", selection: $model.antiAliasing) {
+                    ForEach(ExampleAntiAliasing.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+            .disabled(!model.spaceOpen)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")

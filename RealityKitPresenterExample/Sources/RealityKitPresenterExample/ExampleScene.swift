@@ -29,6 +29,28 @@ final class ExampleScene: @unchecked Sendable {
         return taps
     }
 
+    /// The engine's anti-aliasing wanted: set from the window (or at start), applied on the
+    /// engine's thread at the top of the next update, before the eyes are rendered, so that a
+    /// frame is built and presented under one mode (the renderer reads the mode several times
+    /// per frame; set from another thread mid-frame, one eye could mix two modes for a frame).
+    private var wantedAntiAliasing = ExampleAntiAliasing.msaa
+    /// The mode the engine's thread last applied (its own).
+    private var appliedAntiAliasing: ExampleAntiAliasing?
+
+    /// The engine's anti-aliasing wanted (in force from the next frame).
+    var antiAliasing: ExampleAntiAliasing {
+        lock.lock()
+        defer { lock.unlock() }
+        return wantedAntiAliasing
+    }
+
+    /// Asks for the engine's anti-aliasing; from the window while the space is open, or at start.
+    func setAntiAliasing(_ mode: ExampleAntiAliasing) {
+        lock.lock()
+        wantedAntiAliasing = mode
+        lock.unlock()
+    }
+
     /// Builds the scene and installs the callbacks: once, from the presenter view's `onReady`.
     @MainActor
     func start(_ xr: UntoldEngineXR) {
@@ -39,18 +61,7 @@ final class ExampleScene: @unchecked Sendable {
         // MSAA by default: of the modes, only MSAA leaves coverage in the alpha at a silhouette
         // (quarter steps), which the presenter's edge band blends into a filtered edge; FXAA
         // leaves one texel at a constant value and SMAA none.
-        var antiAliasing = AntiAliasingMode.msaa
-        if let index = CommandLine.arguments.firstIndex(of: "--aa"), index + 1 < CommandLine.arguments.count {
-            switch CommandLine.arguments[index + 1].lowercased() {
-            case "fxaa": antiAliasing = .fxaa
-            case "smaa": antiAliasing = .smaa
-            case "msaa": antiAliasing = .msaa
-            case "taa": antiAliasing = .taa
-            case "msaataa": antiAliasing = .msaaTaa
-            default: break
-            }
-        }
-        setRendering(.antiAliasing(antiAliasing))
+        setAntiAliasing(ExampleAntiAliasing.fromArguments())
 
         // The ARKit origin is on the floor where the session began; the slab stands at table
         // height 1.6 m ahead (-Z), the cubes on it, the sphere above.
@@ -103,6 +114,12 @@ final class ExampleScene: @unchecked Sendable {
     }
 
     private func update(deltaTime: Float) {
+        // On the engine's thread, before this frame's eyes: the anti-aliasing wanted.
+        let wanted = antiAliasing
+        if wanted != appliedAntiAliasing {
+            setRendering(.antiAliasing(wanted.engineMode))
+            appliedAntiAliasing = wanted
+        }
         guard turning else { return }
         angle += deltaTime * 0.5
         lock.lock()
@@ -126,5 +143,40 @@ final class ExampleScene: @unchecked Sendable {
         if on { lit.insert(picked) } else { lit.remove(picked) }
         lock.unlock()
         updateMaterialEmmisive(entityId: picked, emmissive: on ? simd_float3(2.0, 0.9, 0.2) : .zero)
+    }
+}
+
+/// The engine's anti-aliasing modes the example offers (`--aa`, and the window's picker).
+enum ExampleAntiAliasing: String, CaseIterable, Identifiable {
+    case fxaa, smaa, msaa, taa, msaataa
+
+    var id: String { rawValue }
+
+    /// The mode the launch arguments ask for (`--aa`), MSAA by default.
+    static func fromArguments() -> ExampleAntiAliasing {
+        guard let index = CommandLine.arguments.firstIndex(of: "--aa"), index + 1 < CommandLine.arguments.count,
+              let chosen = ExampleAntiAliasing(rawValue: CommandLine.arguments[index + 1].lowercased())
+        else { return .msaa }
+        return chosen
+    }
+
+    var label: String {
+        switch self {
+        case .fxaa: return "FXAA"
+        case .smaa: return "SMAA"
+        case .msaa: return "MSAA"
+        case .taa: return "TAA"
+        case .msaataa: return "MSAA+TAA"
+        }
+    }
+
+    var engineMode: AntiAliasingMode {
+        switch self {
+        case .fxaa: return .fxaa
+        case .smaa: return .smaa
+        case .msaa: return .msaa
+        case .taa: return .taa
+        case .msaataa: return .msaaTaa
+        }
     }
 }
