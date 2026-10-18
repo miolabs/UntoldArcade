@@ -3,8 +3,9 @@
 //  RealityKitPresenterExample
 //
 //  A procedural scene with nothing to load: a slab 1.6 m ahead of where the session began,
-//  three cubes turning on it, a sphere above, a sun. A pinch on a cube lights it up, so that
-//  pinches reaching the engine through the presenter's input target can be seen.
+//  three cubes on it, a sphere above, a sun. A pinch on a cube lights it up, so that pinches
+//  reaching the engine through the presenter's input target can be seen. The scene is still, so
+//  that screenshots of one build compare with the next; `--turning` turns the cubes.
 //
 
 import Foundation
@@ -18,6 +19,9 @@ final class ExampleScene: @unchecked Sendable {
     private var lit: Set<EntityID> = []
     private var angle: Float = 0
     private var taps = 0
+    /// Whether the cubes turn (the `--turning` launch argument); still by default, for
+    /// screenshots that compare.
+    let turning = CommandLine.arguments.contains("--turning")
 
     var tapCount: Int {
         lock.lock()
@@ -47,6 +51,7 @@ final class ExampleScene: @unchecked Sendable {
             setEntityName(entityId: cube, name: "Cube\(index)")
             setEntityMeshDirect(entityId: cube, meshes: BasicPrimitives.createCube(extent: 0.2), assetName: "Cube\(index)")
             translateTo(entityId: cube, position: simd_float3(x, 1.025, -1.6))
+            rotateTo(entityId: cube, angle: Float(index) * 20 - 20, axis: simd_float3(0, 1, 0))
             updateMaterialRoughness(entityId: cube, roughness: 0.4)
             updateMaterialMetallic(entityId: cube, metallic: Float(index) * 0.4)
             cubes.append(cube)
@@ -82,6 +87,7 @@ final class ExampleScene: @unchecked Sendable {
     }
 
     private func update(deltaTime: Float) {
+        guard turning else { return }
         angle += deltaTime * 0.5
         lock.lock()
         let cubes = cubes

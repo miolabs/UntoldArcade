@@ -9,8 +9,9 @@ SharePlay session, native entities, SwiftUI attachments. The why and the plan ar
 repository, `docs/proposals/SpatialPersonasResearch.md` and `XRRealityKitPresenter.md`
 (untoldengine/UntoldEngine#1371); this app is the try-out of its stage 2.
 
-The scene has nothing to load: a slab 1.6 m ahead of where the session began, three cubes
-turning on it, a sphere above, a sun. A pinch on a cube lights it up.
+The scene has nothing to load: a slab 1.6 m ahead of where the session began, three cubes on
+it, a sphere above, a sun. A pinch on a cube lights it up. The scene is still, so that
+screenshots of one build compare with the next; `--turning` turns the cubes.
 
 ## Running it
 
@@ -26,7 +27,8 @@ engine comes from the fork branch the presenter is developed on until it lands u
 
 Runs in the simulator (visionOS 2 and later; the eye switch shows the left eye's grid in the
 simulator's single view) and on an Apple Vision Pro. Launch arguments `--open-space` and
-`--hide-window` open the space at start and close the window, for simulator screenshots.
+`--hide-window` open the space at start and close the window, for simulator screenshots;
+`--turning` turns the cubes.
 
 ## What to look for
 

@@ -8,7 +8,8 @@
 //  numbers once a second.
 //
 //  Launch arguments: `--open-space` opens the space at start, `--hide-window` then closes the
-//  window (simulator screenshots).
+//  window (simulator screenshots), `--turning` turns the cubes (still by default, so that
+//  screenshots of one build compare with the next).
 //
 
 import os
@@ -154,7 +155,7 @@ struct ControlView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes turn slowly on a slab 1.6 m ahead, with a sphere above them. They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark.")
                     .foregroundStyle(.secondary)
             }
 
