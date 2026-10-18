@@ -11,10 +11,12 @@
 //  window (simulator screenshots), `--turning` turns the cubes (still by default, so that
 //  screenshots of one build compare with the next). The presenter's settings, for comparisons
 //  from the command line: `--grid 64x60`, `--skirt 0` (texels), `--adaptive-diagonal` or
-//  `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms), `--tear 0.5` (metres); the engine's
-//  anti-aliasing with `--aa fxaa|smaa|msaa|taa|msaataa`. All but the grid change from the
-//  window while the space is open too (the presenter's `settings`), for comparisons on the
-//  headset without a relaunch.
+//  `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms), `--tear 0.5` (metres), the
+//  presenter's own rasterization rate map with `--foveation equiangular` (or `none`); the
+//  engine's anti-aliasing with `--aa fxaa|smaa|msaa|taa|msaataa`. All but the grid and the
+//  rate map change from the window while the space is open too (the presenter's `settings`),
+//  for comparisons on the headset without a relaunch; the grid and the map are chosen in the
+//  window for the next space opened.
 //
 
 import os
@@ -97,6 +99,14 @@ final class ExampleModel {
     var viewOffsetTest = UserDefaults.standard.bool(forKey: "viewOffsetTest") {
         didSet { UserDefaults.standard.set(viewOffsetTest, forKey: "viewOffsetTest") }
     }
+    /// Whether the next space opened draws each eye through the presenter's own equi-angular
+    /// rasterization rate map: the same 1920 × 1824 physical pixels per eye spread evenly in
+    /// angle, so the centre of view is about 1.36 times denser than the uniform frame (the grid
+    /// is then the map's, a vertex every 8 texels: 241 × 229). The launch argument
+    /// `--foveation` sets it for the launch; remembered across launches otherwise.
+    var rateMap = UserDefaults.standard.bool(forKey: "rateMap") {
+        didSet { UserDefaults.standard.set(rateMap, forKey: "rateMap") }
+    }
 
     /// The configuration of the next space opened: the launch arguments', then the window's
     /// choices for what the presenter fixes when it is made.
@@ -108,6 +118,9 @@ final class ExampleModel {
         }
         if nearShell { configuration.farShellMetres = 50 }
         if viewOffsetTest { configuration.viewOffsetMetres = SIMD3<Float>(0, 0.03, 0) }
+        if !CommandLine.arguments.contains("--foveation") {
+            configuration.foveation = rateMap ? .equiAngular : .none
+        }
         return configuration
     }
     let scene = ExampleScene()
@@ -138,6 +151,9 @@ final class ExampleModel {
         if arguments.contains("--fixed-diagonal") { configuration.adaptiveDiagonal = false }
         if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
         if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
+        if let foveation = value(after: "--foveation")?.lowercased() {
+            configuration.foveation = foveation == "equiangular" ? .equiAngular : .none
+        }
         return configuration
     }
 
@@ -178,7 +194,8 @@ final class ExampleModel {
         materialLine = (presenter.usesShaderGraphMaterial
             ? "Eye material: the shader graph (each eye sees its own grid). "
             : "Eye material: the FALLBACK (both eyes see both grids). ")
-            + "Grid \(c.gridColumns)×\(c.gridRows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), lead \(Int((s.leadSeconds * 1000).rounded())) ms, tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)."
+            + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels). " } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels. ")
+            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), lead \(Int((s.leadSeconds * 1000).rounded())) ms, tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)."
     }
 
     /// Once a second from the window.
@@ -270,6 +287,7 @@ struct ControlView: View {
                     Toggle("Shell 50 m", isOn: $model.nearShell)
                     Toggle("View +3 cm", isOn: $model.viewOffsetTest)
                 }
+                Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
             }
 
             VStack(alignment: .leading, spacing: 6) {
