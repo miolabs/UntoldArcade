@@ -72,15 +72,50 @@ final class ExampleModel {
     var spaceOpen = false
     var statusLine = "The space is closed."
     var materialLine = ""
-    /// The presenter's settings as the window shows them (the launch arguments' to start
-    /// with); written through to the presenter.
-    var settings = XRPresenterSettings(configuration: ExampleModel.configurationFromArguments()) {
-        didSet { presenter?.settings = settings }
+    /// The presenter's settings as the window shows them, at any time: written through to the
+    /// presenter while a space is open, applied to the next one when it opens, and remembered
+    /// across launches (a launch argument wins over the remembered value for its setting).
+    var settings = ExampleModel.rememberedSettings() {
+        didSet {
+            presenter?.settings = settings
+            Self.remember(settings)
+        }
     }
-    /// The engine's anti-aliasing as the window shows it; asked of the scene when it changes,
-    /// which applies it on the engine's thread before the next frame.
-    var antiAliasing = ExampleAntiAliasing.fromArguments() {
-        didSet { if spaceOpen, antiAliasing != oldValue { scene.setAntiAliasing(antiAliasing) } }
+    /// The engine's anti-aliasing as the window shows it, at any time; asked of the scene when
+    /// it changes, which applies it on the engine's thread before the next frame; remembered.
+    var antiAliasing = ExampleModel.rememberedAntiAliasing() {
+        didSet {
+            if spaceOpen, antiAliasing != oldValue { scene.setAntiAliasing(antiAliasing) }
+            UserDefaults.standard.set(antiAliasing.rawValue, forKey: "antiAliasing")
+        }
+    }
+
+    /// The settings to start with: the launch arguments' where given, else the remembered ones,
+    /// else the configuration's defaults.
+    static func rememberedSettings() -> XRPresenterSettings {
+        var settings = XRPresenterSettings(configuration: configurationFromArguments())
+        let arguments = CommandLine.arguments
+        let defaults = UserDefaults.standard
+        if !arguments.contains("--skirt"), let skirt = defaults.object(forKey: "skirtTexels") as? Float { settings.skirtTexels = skirt }
+        if !arguments.contains("--tear"), let tear = defaults.object(forKey: "tearThresholdMetres") as? Float { settings.tearThresholdMetres = tear }
+        if !arguments.contains("--lead"), let lead = defaults.object(forKey: "leadSeconds") as? Double { settings.leadSeconds = lead }
+        if !arguments.contains("--adaptive-diagonal"), !arguments.contains("--fixed-diagonal"), let adaptive = defaults.object(forKey: "adaptiveDiagonal") as? Bool { settings.adaptiveDiagonal = adaptive }
+        if !arguments.contains("--no-edge-band"), let band = defaults.object(forKey: "edgeBlending") as? Bool { settings.edgeBlending = band }
+        return settings
+    }
+
+    static func remember(_ settings: XRPresenterSettings) {
+        let defaults = UserDefaults.standard
+        defaults.set(settings.skirtTexels, forKey: "skirtTexels")
+        defaults.set(settings.tearThresholdMetres, forKey: "tearThresholdMetres")
+        defaults.set(settings.leadSeconds, forKey: "leadSeconds")
+        defaults.set(settings.adaptiveDiagonal, forKey: "adaptiveDiagonal")
+        defaults.set(settings.edgeBlending, forKey: "edgeBlending")
+    }
+
+    static func rememberedAntiAliasing() -> ExampleAntiAliasing {
+        if CommandLine.arguments.contains("--aa") { return ExampleAntiAliasing.fromArguments() }
+        return ExampleAntiAliasing(rawValue: UserDefaults.standard.string(forKey: "antiAliasing") ?? "") ?? ExampleAntiAliasing.fromArguments()
     }
     /// The grid each eye is shown on, for the next space opened (the grids are made with the
     /// space); remembered across launches.
@@ -165,9 +200,11 @@ final class ExampleModel {
         self.presenter = presenter
         // The window reads the numbers; the presenter's own log line would reset them.
         presenter.reportInterval = 0
-        settings = presenter.settings
+        // The window's settings, not the new presenter's defaults: what was chosen stays
+        // chosen across a close and an open.
+        presenter.settings = settings
         scene.start(xr)
-        antiAliasing = scene.antiAliasing
+        scene.setAntiAliasing(antiAliasing)
         spaceOpen = true
         describeSettings()
         log.notice("\(self.materialLine, privacy: .public)")
@@ -257,7 +294,7 @@ struct ControlView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Settings (change them with the space open)")
+                Text("Settings (at any time; they stay across a close and an open)")
                     .font(.headline)
                 HStack(spacing: 24) {
                     Toggle("Edge band", isOn: $model.settings.edgeBlending)
@@ -276,7 +313,6 @@ struct ControlView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            .disabled(!model.spaceOpen)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("For the next space opened (close and open the space)")
