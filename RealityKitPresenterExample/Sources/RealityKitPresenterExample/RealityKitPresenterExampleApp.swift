@@ -35,7 +35,7 @@ struct RealityKitPresenterExampleApp: App {
 
         ImmersiveSpace(id: "presenter") {
             UntoldXRPresenterView(
-                configuration: ExampleModel.configurationFromArguments(),
+                configuration: model.configurationForNextSpace(),
                 immersionMode: model.immersion == .full ? .full : .mixed,
                 onReady: { xr, presenter in
                     model.spaceOpened(xr: xr, presenter: presenter)
@@ -79,6 +79,36 @@ final class ExampleModel {
     /// which applies it on the engine's thread before the next frame.
     var antiAliasing = ExampleAntiAliasing.fromArguments() {
         didSet { if spaceOpen, antiAliasing != oldValue { scene.setAntiAliasing(antiAliasing) } }
+    }
+    /// The grid each eye is shown on, for the next space opened (the grids are made with the
+    /// space); remembered across launches.
+    var grid = ExampleGrid.remembered() {
+        didSet { grid.remember() }
+    }
+    /// Whether the far shell stands at 50 m instead of 100 (the 512 grid's hairlines are
+    /// RealityKit's interpolation across the stretched triangles, which a nearer shell removes);
+    /// for the next space opened.
+    var nearShell = UserDefaults.standard.bool(forKey: "nearShell") {
+        didSet { UserDefaults.standard.set(nearShell, forKey: "nearShell") }
+    }
+    /// A deliberate 3 cm upward offset of both eyes' viewpoints for the next space opened: a
+    /// parallax test. A silhouette defect that changes with it comes from a vertex at a wrong
+    /// depth seen from a displaced camera; one that does not is in the texture or its mapping.
+    var viewOffsetTest = UserDefaults.standard.bool(forKey: "viewOffsetTest") {
+        didSet { UserDefaults.standard.set(viewOffsetTest, forKey: "viewOffsetTest") }
+    }
+
+    /// The configuration of the next space opened: the launch arguments', then the window's
+    /// choices for what the presenter fixes when it is made.
+    func configurationForNextSpace() -> XRRealityKitPresenterConfiguration {
+        var configuration = Self.configurationFromArguments()
+        if !CommandLine.arguments.contains("--grid") {
+            configuration.gridColumns = grid.columns
+            configuration.gridRows = grid.rows
+        }
+        if nearShell { configuration.farShellMetres = 50 }
+        if viewOffsetTest { configuration.viewOffsetMetres = SIMD3<Float>(0, 0.03, 0) }
+        return configuration
     }
     let scene = ExampleScene()
     private(set) var presenter: XRRealityKitPresenter?
@@ -148,7 +178,7 @@ final class ExampleModel {
         materialLine = (presenter.usesShaderGraphMaterial
             ? "Eye material: the shader graph (each eye sees its own grid). "
             : "Eye material: the FALLBACK (both eyes see both grids). ")
-            + "Grid \(c.gridColumns)×\(c.gridRows), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), lead \(Int((s.leadSeconds * 1000).rounded())) ms, tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)."
+            + "Grid \(c.gridColumns)×\(c.gridRows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), lead \(Int((s.leadSeconds * 1000).rounded())) ms, tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)."
     }
 
     /// Once a second from the window.
@@ -206,7 +236,7 @@ struct ControlView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Settings (change them with the space open; the grid needs a relaunch)")
+                Text("Settings (change them with the space open)")
                     .font(.headline)
                 HStack(spacing: 24) {
                     Toggle("Edge band", isOn: $model.settings.edgeBlending)
@@ -226,6 +256,21 @@ struct ControlView: View {
                 .pickerStyle(.segmented)
             }
             .disabled(!model.spaceOpen)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("For the next space opened (close and open the space)")
+                    .font(.headline)
+                HStack(spacing: 24) {
+                    Picker("Grid", selection: $model.grid) {
+                        ForEach(ExampleGrid.allCases) { grid in
+                            Text(grid.label).tag(grid)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle("Shell 50 m", isOn: $model.nearShell)
+                    Toggle("View +3 cm", isOn: $model.viewOffsetTest)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
@@ -258,5 +303,25 @@ struct ControlView: View {
                 }
             }
         }
+    }
+}
+
+
+/// The grids the window offers, each eye's vertex count.
+enum ExampleGrid: String, CaseIterable, Identifiable {
+    case standard, dense
+
+    var id: String { rawValue }
+
+    var columns: Int { self == .dense ? 512 : 256 }
+    var rows: Int { self == .dense ? 480 : 240 }
+    var label: String { "\(columns)×\(rows)" }
+
+    static func remembered() -> ExampleGrid {
+        ExampleGrid(rawValue: UserDefaults.standard.string(forKey: "grid") ?? "") ?? .standard
+    }
+
+    func remember() {
+        UserDefaults.standard.set(rawValue, forKey: "grid")
     }
 }
