@@ -9,7 +9,10 @@
 //
 //  Launch arguments: `--open-space` opens the space at start, `--hide-window` then closes the
 //  window (simulator screenshots), `--turning` turns the cubes (still by default, so that
-//  screenshots of one build compare with the next).
+//  screenshots of one build compare with the next). The presenter's settings, for comparisons
+//  from the command line: `--grid 64x60`, `--skirt 0` (texels), `--adaptive-diagonal` or
+//  `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms), `--tear 0.5` (metres); the engine's
+//  anti-aliasing with `--aa fxaa|smaa|msaa|taa|msaataa`.
 //
 
 import os
@@ -30,6 +33,7 @@ struct RealityKitPresenterExampleApp: App {
 
         ImmersiveSpace(id: "presenter") {
             UntoldXRPresenterView(
+                configuration: ExampleModel.configurationFromArguments(),
                 immersionMode: model.immersion == .full ? .full : .mixed,
                 onReady: { xr, presenter in
                     model.spaceOpened(xr: xr, presenter: presenter)
@@ -71,13 +75,40 @@ final class ExampleModel {
     private let log = os.Logger(subsystem: "com.untoldengine.realitykitpresenterexample", category: "numbers")
     private var refreshTask: Task<Void, Never>?
 
+    /// The presenter's configuration with the launch arguments' overrides applied.
+    static func configurationFromArguments() -> XRRealityKitPresenterConfiguration {
+        var configuration = XRRealityKitPresenterConfiguration()
+        let arguments = CommandLine.arguments
+        func value(after flag: String) -> String? {
+            guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+            return arguments[index + 1]
+        }
+        if let grid = value(after: "--grid") {
+            let parts = grid.lowercased().split(separator: "x").compactMap { Int($0) }
+            if parts.count == 2, parts[0] >= 2, parts[1] >= 2 {
+                configuration.gridColumns = parts[0]
+                configuration.gridRows = parts[1]
+            }
+        }
+        if let skirt = value(after: "--skirt").flatMap(Float.init) { configuration.skirtTexels = skirt }
+        if let lead = value(after: "--lead").flatMap(Double.init) { configuration.leadSeconds = lead / 1000 }
+        if let tear = value(after: "--tear").flatMap(Float.init) { configuration.tearThresholdMetres = tear }
+        if arguments.contains("--fixed-diagonal") { configuration.adaptiveDiagonal = false }
+        if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
+        if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
+        return configuration
+    }
+
     func spaceOpened(xr: UntoldEngineXR, presenter: XRRealityKitPresenter) {
         self.presenter = presenter
         // The window reads the numbers; the presenter's own log line would reset them.
         presenter.reportInterval = 0
-        materialLine = presenter.usesShaderGraphMaterial
-            ? "Eye material: the shader graph (each eye sees its own grid)."
-            : "Eye material: the FALLBACK (both eyes see both grids)."
+        let c = presenter.configuration
+        materialLine = (presenter.usesShaderGraphMaterial
+            ? "Eye material: the shader graph (each eye sees its own grid). "
+            : "Eye material: the FALLBACK (both eyes see both grids). ")
+            + "Grid \(c.gridColumns)×\(c.gridRows), skirt \(c.skirtTexels) texels, \(c.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : "off"), lead \(Int(c.leadSeconds * 1000)) ms, tear \(c.tearThresholdMetres) m."
+        log.notice("\(self.materialLine, privacy: .public)")
         scene.start(xr)
         spaceOpen = true
         // Once a second while the space is open, whether or not the window is (a hidden window

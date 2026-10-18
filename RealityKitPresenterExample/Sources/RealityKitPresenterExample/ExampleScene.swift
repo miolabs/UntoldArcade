@@ -35,6 +35,22 @@ final class ExampleScene: @unchecked Sendable {
         gameMode = true
         InputSystem.shared.registerXREvents()
         InputSystem.shared.setXRSpatialPickingBackendPreference(.octreeGPUPreferred)
+        // The engine's anti-aliasing for the presenter's frames (`--aa fxaa|smaa|msaa|taa|msaataa`),
+        // MSAA by default: of the modes, only MSAA leaves coverage in the alpha at a silhouette
+        // (quarter steps), which the presenter's edge band blends into a filtered edge; FXAA
+        // leaves one texel at a constant value and SMAA none.
+        var antiAliasing = AntiAliasingMode.msaa
+        if let index = CommandLine.arguments.firstIndex(of: "--aa"), index + 1 < CommandLine.arguments.count {
+            switch CommandLine.arguments[index + 1].lowercased() {
+            case "fxaa": antiAliasing = .fxaa
+            case "smaa": antiAliasing = .smaa
+            case "msaa": antiAliasing = .msaa
+            case "taa": antiAliasing = .taa
+            case "msaataa": antiAliasing = .msaaTaa
+            default: break
+            }
+        }
+        setRendering(.antiAliasing(antiAliasing))
 
         // The ARKit origin is on the floor where the session began; the slab stands at table
         // height 1.6 m ahead (-Z), the cubes on it, the sphere above.

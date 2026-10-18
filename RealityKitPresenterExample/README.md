@@ -28,7 +28,17 @@ engine comes from the fork branch the presenter is developed on until it lands u
 Runs in the simulator (visionOS 2 and later; the eye switch shows the left eye's grid in the
 simulator's single view) and on an Apple Vision Pro. Launch arguments `--open-space` and
 `--hide-window` open the space at start and close the window, for simulator screenshots;
-`--turning` turns the cubes.
+`--turning` turns the cubes; `--aa fxaa|smaa|msaa|taa|msaataa` picks the engine's
+anti-aliasing (MSAA by default: of the modes, only MSAA leaves coverage in the frame's alpha at
+a silhouette, which the presenter's edge band blends into a filtered edge; FXAA leaves one
+texel per edge at a constant value and SMAA none); `--no-edge-band` turns the band off.
+
+Two things the simulator cannot show. The engine renders single-sampled there (its deferred
+fallback samples the G-buffer as a plain texture), so the frame's alpha is binary in every mode
+and the edge band has nothing to blend: silhouettes step texel by texel in the simulator whatever
+the arguments. And the simulated viewing pose equals the rendering pose, so each eye's grid
+projects back onto its texture exactly: the simulator shows the texture's own edge and nothing
+of the grid's quality. Both are the headset's to judge.
 
 ## What to look for
 
