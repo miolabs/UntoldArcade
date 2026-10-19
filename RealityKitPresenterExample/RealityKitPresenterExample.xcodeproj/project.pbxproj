@@ -11,6 +11,7 @@
 		343AEA8A7765CB91413AD8DB /* SwimProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1B37DAB6C1CEB741B38764 /* SwimProbe.swift */; };
 		631E717AF031ACF3FE676C85 /* ExampleScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75FE4B3994BB810BE798569 /* ExampleScene.swift */; };
 		746C93EFA3EF13B397E96EB4 /* UntoldEngineXRRealityKit in Frameworks */ = {isa = PBXBuildFile; productRef = 649A49056892574529B80646 /* UntoldEngineXRRealityKit */; };
+		8BA18D2C98A9277E0A4C1100 /* ControlCube.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0BBA340844FB06491C01CEF /* ControlCube.swift */; };
 		8C466A9D76EA8472EC02B79A /* UntoldEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 4DEB0970B2ACA5F4272630BD /* UntoldEngine */; };
 		B10674B978AEDB6016EEE9F4 /* RealityKitPresenterExampleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */; };
 /* End PBXBuildFile section */
@@ -19,6 +20,7 @@
 		2E1B37DAB6C1CEB741B38764 /* SwimProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwimProbe.swift; sourceTree = "<group>"; };
 		46F18CC0AB31E7FE4EBD7F00 /* RealityKitPresenterExample.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RealityKitPresenterExample.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A75FE4B3994BB810BE798569 /* ExampleScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExampleScene.swift; sourceTree = "<group>"; };
+		B0BBA340844FB06491C01CEF /* ControlCube.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlCube.swift; sourceTree = "<group>"; };
 		C50D6B7CBCB80A809D116139 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 		CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealityKitPresenterExampleApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -40,6 +42,7 @@
 		A15AA5B3B8740C2A6595C20E /* RealityKitPresenterExample */ = {
 			isa = PBXGroup;
 			children = (
+				B0BBA340844FB06491C01CEF /* ControlCube.swift */,
 				A75FE4B3994BB810BE798569 /* ExampleScene.swift */,
 				CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */,
 				2E1B37DAB6C1CEB741B38764 /* SwimProbe.swift */,
@@ -145,6 +148,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8BA18D2C98A9277E0A4C1100 /* ControlCube.swift in Sources */,
 				631E717AF031ACF3FE676C85 /* ExampleScene.swift in Sources */,
 				B10674B978AEDB6016EEE9F4 /* RealityKitPresenterExampleApp.swift in Sources */,
 				343AEA8A7765CB91413AD8DB /* SwimProbe.swift in Sources */,

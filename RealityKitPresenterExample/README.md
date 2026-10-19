@@ -34,6 +34,8 @@ a silhouette, which the presenter's edge band blends into a filtered edge; FXAA 
 texel per edge at a constant value and SMAA none); `--no-edge-band` turns the band off;
 `--lead 22` sets the fixed lead in milliseconds, `--adaptive-lead` (or `--fixed-lead`) chooses
 the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe;
+`--control-cube` stands a plain RealityKit cube beside the engine's cubes (the control for the
+edge measurements on the headset's captures, below);
 `--pipeline-depth 1` runs the pipeline one refresh deep, as it was; `2`, the default, two
 refreshes deep (the engine's frame starts a refresh earlier, so a frame whose GPU span is
 stretched by up to a refresh still lands on time, at the price of one refresh more lead);
@@ -89,6 +91,17 @@ of the grid's quality. Both are the headset's to judge.
   price is the engine's GPU frame, 2.25 times the pixels: read the GPU and the late count on
   the numbers line under the two-refresh pipeline (on the Mac the engine's GPU time per frame
   through the presenter grew by about the pixel ratio).
+- The control cube (`--control-cube`, or its toggle, at any time): a plain RealityKit cube of
+  the engine cubes' size to the right of the three, one step further at the same gap and the
+  same height (the slab is 1.2 m wide, so it stands just past the slab's end, on the plane of
+  its top), a like pale blue, lit by the room (a `SimpleMaterial`; `ControlCube.swift`). The
+  engine's cubes reach the display through the presenter (the eye texture, the grid, the edge
+  band) and then the device's own render of the grids; the control through the device's render
+  alone. Capture both in one frame and measure the control's top edge with the engine cubes'
+  by the same script: the same wobble on the control is the device's render or the capture,
+  which no presenter change can touch; a straight control beside a wavy engine cube is the
+  presenter's materials under the device's render. The settings line says `control cube on`
+  while it stands.
 - Close one eye at a time on the headset: the picture must be whole in each eye. A doubled
   picture means the eye material fell back (the window's material line says which).
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the

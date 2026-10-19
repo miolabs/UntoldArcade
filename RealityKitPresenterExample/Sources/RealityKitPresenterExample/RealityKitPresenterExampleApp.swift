@@ -17,8 +17,10 @@
 //  Launch arguments: `--open-space` opens the space at start, `--hide-window` then closes the
 //  window (simulator screenshots), `--turning` turns the cubes (still by default, so that
 //  screenshots of one build compare with the next), `--swim-probe` shows the swim probe (a
-//  cross locked to the room, a dot locked to the head; `SwimProbe`). The presenter's settings,
-//  for comparisons from the command line: `--grid 64x60`, `--skirt 0` (texels),
+//  cross locked to the room, a dot locked to the head; `SwimProbe`), `--control-cube` stands
+//  a plain RealityKit cube beside the engine's cubes (`ControlCube`: the control for the edge
+//  measurements on the headset's captures). The presenter's settings, for comparisons from
+//  the command line: `--grid 64x60`, `--skirt 0` (texels),
 //  `--adaptive-diagonal` or `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms, the fixed
 //  lead), `--adaptive-lead` or `--fixed-lead`, `--display-latency 16` (ms, the adaptive lead's
 //  constant), `--tear 0.5` (metres), the presenter's own rasterization rate map with
@@ -35,6 +37,7 @@
 //
 
 import os
+import RealityKit
 import SwiftUI
 import UntoldEngine
 import UntoldEngineXR
@@ -174,6 +177,21 @@ final class ExampleModel {
         }
     }
 
+    /// Whether a plain RealityKit cube stands beside the engine's cubes (`ControlCube`): the
+    /// control for the edge measurements on the headset's captures, drawn by the device's own
+    /// render with no presenter between; at any time, remembered across launches,
+    /// `--control-cube` at a launch.
+    var controlCube = CommandLine.arguments.contains("--control-cube") || UserDefaults.standard.bool(forKey: "controlCube") {
+        didSet {
+            controlCubeEntity?.isEnabled = controlCube
+            UserDefaults.standard.set(controlCube, forKey: "controlCube")
+        }
+    }
+
+    /// The control cube's entity while a space is open: a child of the presenter's root beside
+    /// the grid entities, world-locked like them, nothing the presenter manages.
+    private var controlCubeEntity: ModelEntity?
+
     static func rateMapFromArgumentsOrRemembered() -> Bool {
         let arguments = CommandLine.arguments
         if let index = arguments.firstIndex(of: "--foveation"), index + 1 < arguments.count {
@@ -291,6 +309,12 @@ final class ExampleModel {
         scene.start(xr)
         scene.setAntiAliasing(antiAliasing)
         scene.swimProbe.setEnabled(swimProbe)
+        // The control cube beside the grids, in the presenter's root (so in the space's world,
+        // like them), shown when the toggle says so.
+        let control = ControlCube.makeEntity()
+        control.isEnabled = controlCube
+        presenter.root.addChild(control)
+        controlCubeEntity = control
         // The engine's passes timed by the GPU, so the numbers line can show the engine's own
         // GPU time beside the ticket's span (which also holds whatever else the shared GPU ran).
         setRendering(.gpuPassTiming(.enabled))
@@ -311,6 +335,8 @@ final class ExampleModel {
         refreshTask?.cancel()
         refreshTask = nil
         scene.stop()
+        controlCubeEntity?.removeFromParent()
+        controlCubeEntity = nil
         presenter = nil
         spaceOpen = false
         statusLine = "The space is closed."
@@ -330,7 +356,7 @@ final class ExampleModel {
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
-            + "tear \(s.tearThresholdMetres) m, pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")."
+            + "tear \(s.tearThresholdMetres) m, pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")\(controlCubeEntity?.isEnabled == true ? ", control cube on" : "")."
     }
 
     /// Once a second from the window.
@@ -412,7 +438,10 @@ struct ControlView: View {
                     Toggle("Adaptive lead", isOn: $model.settings.adaptiveLead)
                     Stepper("Display latency \(Int((model.settings.displayLatencySeconds * 1000).rounded())) ms", value: $model.settings.displayLatencySeconds, in: 0 ... 0.06, step: 0.001)
                         .disabled(!model.settings.adaptiveLead)
+                }
+                HStack(spacing: 24) {
                     Toggle("Swim probe", isOn: $model.swimProbe)
+                    Toggle("Control cube (a plain RealityKit cube beside the engine's, for the captures)", isOn: $model.controlCube)
                 }
                 Picker("Anti-aliasing", selection: $model.antiAliasing) {
                     ForEach(ExampleAntiAliasing.allCases) { mode in
@@ -443,7 +472,7 @@ struct ControlView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's.")
                     .foregroundStyle(.secondary)
             }
 
