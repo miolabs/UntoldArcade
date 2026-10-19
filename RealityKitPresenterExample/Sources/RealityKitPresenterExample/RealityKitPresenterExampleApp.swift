@@ -30,9 +30,12 @@
 //  refresh still lands on time, at the price of a refresh more lead) or `1`; the render scale
 //  with `--render-scale 1.5` (each eye rendered at 1.5 times the drawable size, 2880 × 2736,
 //  for more texels per degree than the display's pixels; `1`, the default, is the drawable
-//  size). All but the grid, the rate map, the pipeline's depth and the render scale change
+//  size); the silhouette with `--blended-core` (the grids drawn blended with their depth
+//  kept and no band, so there is no alpha test along a silhouette) or `--cut-and-band` (the
+//  default: the alpha-tested core with the band over the cells along silhouettes). All but
+//  the grid, the rate map, the pipeline's depth, the render scale and the silhouette change
 //  from the window while the space is open too (the presenter's `settings`), for comparisons
-//  on the headset without a relaunch; those four are chosen in the window for the next space
+//  on the headset without a relaunch; those five are chosen in the window for the next space
 //  opened (the presenter is made with them).
 //
 
@@ -247,6 +250,27 @@ final class ExampleModel {
         return (UserDefaults.standard.object(forKey: "renderScale") as? Float) ?? 1
     }
 
+    /// Whether the next space opened draws the grids as a blended core: each eye's grid
+    /// through the band's blended graph itself, its depth write kept (the grid still occludes
+    /// RealityKit's content and the Personas the system composites by depth), and no band
+    /// meshes, so that no alpha test lies anywhere along a silhouette. The experiment the
+    /// control cube called for: on the headset the engine's cubes shimmer beside a plain
+    /// RealityKit cube that does not, through the same device render, and the shipped core's
+    /// hard cut, rasterized by the device without anti-aliasing, is the suspect; on the Mac
+    /// the two chains give the same picture. Off by default (the shipped cut and band); the
+    /// launch argument `--blended-core` (or `--cut-and-band`) sets where the toggle starts;
+    /// remembered across launches otherwise.
+    var blendedCore = ExampleModel.blendedCoreFromArgumentsOrRemembered() {
+        didSet { UserDefaults.standard.set(blendedCore, forKey: "blendedCore") }
+    }
+
+    static func blendedCoreFromArgumentsOrRemembered() -> Bool {
+        let arguments = CommandLine.arguments
+        if arguments.contains("--blended-core") { return true }
+        if arguments.contains("--cut-and-band") { return false }
+        return UserDefaults.standard.bool(forKey: "blendedCore")
+    }
+
     /// The configuration of the next space opened: the launch arguments', then the window's
     /// choices for what the presenter fixes when it is made.
     func configurationForNextSpace() -> XRRealityKitPresenterConfiguration {
@@ -260,6 +284,7 @@ final class ExampleModel {
         configuration.foveation = rateMap ? .equiAngular : .none
         configuration.pipelineDepth = twoRefreshPipeline ? 2 : 1
         configuration.renderScale = renderScale
+        configuration.silhouette = blendedCore ? .blendedCore : .cutAndBand
         return configuration
     }
     let scene = ExampleScene()
@@ -294,6 +319,8 @@ final class ExampleModel {
         if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
         if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
         if let scale = value(after: "--render-scale").flatMap(Float.init) { configuration.renderScale = scale }
+        if arguments.contains("--blended-core") { configuration.silhouette = .blendedCore }
+        if arguments.contains("--cut-and-band") { configuration.silhouette = .cutAndBand }
         return configuration
     }
 
@@ -352,11 +379,25 @@ final class ExampleModel {
             : "Eye material: the FALLBACK (both eyes see both grids). ")
             + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels)" } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels")
             + String(format: " (render scale %.2g, %.1f texels/° at the centre of view). ", presenter.renderScale, presenter.centreTexelsPerDegree)
-            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), "
+            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
             + "tear \(s.tearThresholdMetres) m, pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")\(controlCubeEntity?.isEnabled == true ? ", control cube on" : "")."
+    }
+
+    /// The silhouette in force, for the settings line: the shipped cut with its band's state,
+    /// or the blended core; and when the blended core was asked for but its graph did not
+    /// load, that the shipped one stands in.
+    private func silhouetteDescription(_ presenter: XRRealityKitPresenter) -> String {
+        switch presenter.silhouette {
+        case .cutAndBand:
+            let band = "edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable")"
+            let fallback = presenter.configuration.silhouette == .blendedCore ? "; the blended core's graph did not load" : ""
+            return "cut and band (\(band)\(fallback))"
+        case .blendedCore:
+            return "blended core (depth written, no band)"
+        }
     }
 
     /// Once a second from the window.
@@ -467,12 +508,13 @@ struct ControlView: View {
                 Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
                 Toggle("Two-refresh pipeline (the engine's frame starts a refresh earlier, so a frame stretched by up to a refresh still lands on time; one refresh more lead)", isOn: $model.twoRefreshPipeline)
                 Toggle("Render scale 1.5× (each eye rendered at 2880×2736 instead of 1920×1824: more texels per degree than the display's pixels, so the engine's edge steps are no longer magnified; 2.25× the engine's pixels)", isOn: $model.renderScaleRaised)
+                Toggle("Blended core (the grids drawn blended with their depth kept and no band: no alpha test anywhere along a silhouette; off is the shipped cut with the band)", isOn: $model.blendedCore)
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's. With the blended core (its toggle, or --blended-core, for the next space opened) the grids blend with their depth kept and there is no band and no alpha test along a silhouette: beside the control cube, the engine cubes' edges should hold as still as the control's if the shipped cut's rasterization was the shimmer, and still shimmer if it is the texture's own change from frame to frame; the gpu on the numbers line should read under the shipped core plus band (one pass over the grid instead of two).")
                     .foregroundStyle(.secondary)
             }
 

@@ -41,10 +41,13 @@ refreshes deep (the engine's frame starts a refresh earlier, so a frame whose GP
 stretched by up to a refresh still lands on time, at the price of one refresh more lead);
 `--render-scale 1.5` renders each eye at 1.5 times the drawable size (2880 × 2736 instead of
 1920 × 1824, 2.25 times the engine's pixels), for more texels per degree than the display's
-pixels (`1`, the default, is the drawable size). Every setting is
-also in the window, at any time (the grid, the rate map, the pipeline's depth and the render
-scale for the next space opened), and remembered across launches (a launch argument wins for
-its setting).
+pixels (`1`, the default, is the drawable size); `--blended-core` draws the grids as a blended
+core (each eye's grid through the band's blended graph itself, its depth write kept, no band
+meshes, so no alpha test lies anywhere along a silhouette; `--cut-and-band`, the default, is the
+alpha-tested core with the band over the cells along silhouettes). Every setting is
+also in the window, at any time (the grid, the rate map, the pipeline's depth, the render
+scale and the silhouette for the next space opened), and remembered across launches (a launch
+argument wins for its setting).
 
 Two things the simulator cannot show. The engine renders single-sampled there (its deferred
 fallback samples the G-buffer as a plain texture), so the frame's alpha is binary in every mode
@@ -102,6 +105,25 @@ of the grid's quality. Both are the headset's to judge.
   which no presenter change can touch; a straight control beside a wavy engine cube is the
   presenter's materials under the device's render. The settings line says `control cube on`
   while it stands.
+- The blended core (`--blended-core`, or its toggle for the next space opened): the grids
+  are drawn through the band's blended graph itself with their depth write kept, and no band
+  is made, so a silhouette has no alpha test anywhere along it (the shipped core cuts at an
+  alpha of 0.9 and leaves the partly covered texels to the band). The experiment the control
+  cube called for: on the Mac the two chains give the same picture, so what the device
+  renders differently is what this shows. Beside the control cube, the engine cubes' edges
+  should hold as still as the control's under head motion if the device's rasterization of the
+  shipped cut was the shimmer; if they still shimmer, it is the texture's own change from
+  frame to frame at the silhouette, and the lever left is temporal. The `gpu` on the numbers
+  line should read under the shipped core plus band: one pass over the grid instead of two (the
+  whole-grid band cost about 11 ms on the device as a second pass). The settings line says
+  `silhouette blended core (depth written, no band)`, or `cut and band (edge band on)`. Its
+  depth footprint is the shipped chain's: the skirt's texels and the near part of the triangles
+  stretched across a depth jump write depth at an opacity near 0, so a RealityKit entity
+  standing in the sliver beside a silhouette, between an engine object and what lies behind
+  it, is hidden there, as it is under the shipped band's cells, which blend over the same
+  texels and write depth too (the same halo on the Mac, measured); the other eye's grid is
+  collapsed in the vertex stage and writes nothing, so the picture must still be whole in
+  each eye.
 - Close one eye at a time on the headset: the picture must be whole in each eye. A doubled
   picture means the eye material fell back (the window's material line says which).
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the
