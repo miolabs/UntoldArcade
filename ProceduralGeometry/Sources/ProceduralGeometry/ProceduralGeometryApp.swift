@@ -10,7 +10,28 @@ import SwiftUI
 import Combine
 import Foundation
 import CompositorServices
+import UntoldEngine
 import UntoldEngineXR
+
+/// What the demo was launched with, for a run without hands on it (a simulator from the
+/// command line): `--open-space` opens the immersive space at once, `--stats-window` opens
+/// the Engine Stats window, `--log-stats` logs the engine's compact stats line once a second
+/// (the same text the window shows; it needs a build with ENGINE_STATS_ENABLED).
+enum LaunchOptions {
+    static let arguments = CommandLine.arguments
+
+    static var opensSpace: Bool {
+        arguments.contains("--open-space")
+    }
+
+    static var opensStatsWindow: Bool {
+        arguments.contains("--stats-window")
+    }
+
+    static var logsStats: Bool {
+        arguments.contains("--log-stats")
+    }
+}
 
 
 
@@ -35,7 +56,7 @@ struct ProceduralGeometryApp: App {
 
     @State private var immersionStyle: ImmersionStyle = .mixed
 
-    var body: some Scene {
+    var body: some SwiftUI.Scene {
         WindowGroup {
             ContentView()
         }
@@ -97,6 +118,7 @@ struct ProceduralGeometryApp: App {
 struct ContentView: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.openWindow) private var openWindow
+    @State private var launchOptionsApplied = false
 
     var body: some View {
         VStack(spacing: 30) {
@@ -138,6 +160,19 @@ struct ContentView: View {
             .controlSize(.large)
         }
         .padding(60)
+        .task {
+            guard !launchOptionsApplied else { return }
+            launchOptionsApplied = true
+            if LaunchOptions.logsStats {
+                setEngineStatsLogging(enabled: true, profile: .compact, intervalSeconds: 1.0)
+            }
+            if LaunchOptions.opensStatsWindow {
+                openWindow(id: "EngineStatsPanel")
+            }
+            if LaunchOptions.opensSpace {
+                await openImmersiveSpace(id: "ImmersiveSpace")
+            }
+        }
     }
 }
 
@@ -154,6 +189,16 @@ struct EngineStatsWindowView: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
             }
+
+            // The frames' stages over the last second, on a line of their own that reads on
+            // the headset: the GPU span's maximum, the frames late against the refresh period
+            // measured from the frames' cadence, and the worst frame's split into its CPU
+            // frame, its wait for the GPU and its GPU span. The same numbers, with the same
+            // definitions, as the RealityKit presenter example's numbers line.
+            Text(store.stagesText)
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
 
             ScrollView {
                 Text(store.advancedMode ? store.expandedText : store.compactText)

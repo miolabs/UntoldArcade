@@ -40,6 +40,26 @@ Dependencies are resolved from real remotes — `UntoldEngine` and `ProceduralGe
 xcodegen generate
 ```
 
+### Engine stats
+
+The **Engine Stats** button on the start window opens a window with the engine's stats: a line with the frames' stages over the last second, then the compact stats text (the **Advanced** toggle shows the expanded text). The stages line reads
+
+```
+gpu span max 20.0 ms · late 3 of 100 (refresh 10.0 ms) · worst 24.8 = cpu 4.0 + wait 0.1 + gpu 20.0
+```
+
+where `gpu span max` is the longest raw span of a frame's command buffer on the GPU (`gpuStartTime` to `gpuEndTime`); `late N of F` counts, of the F frames completed in the second, those whose completion exceeded the refresh period measured from the frames' cadence (`refresh`); and `worst` is the frame with the longest completion, split into its CPU frame (from the loop beginning the frame to committing its command buffer, the wait for the compositor's optimal input time left out), its wait (from the commit to the GPU starting on the buffer) and its GPU span. A ` · N past the deadline` follows when frames ended past the compositor's rendering deadline. These are the same numbers, with the same definitions, as the RealityKitPresenterExample's numbers line, so the two presentation paths can be read against each other.
+
+The stats need the engine built with `ENGINE_STATS_ENABLED`, which the engine package defines for Debug only. A Release build with the stats passes the condition on the command line; it reaches the package targets and keeps their own:
+
+```sh
+xcodebuild -project ProceduralGeometry.xcodeproj -scheme ProceduralGeometry -configuration Release \
+  -destination 'generic/platform=visionOS' \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) ENGINE_STATS_ENABLED' build
+```
+
+Launch options, for a run without hands on it (a simulator from the command line): `--open-space` opens the immersive space at once, `--stats-window` opens the Engine Stats window, `--log-stats` logs the compact stats line once a second.
+
 ## Incorporating ProceduralGeometryExtension into your own project
 
 ### Requirements

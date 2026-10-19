@@ -252,6 +252,9 @@ final class EngineStatsWindowStore: ObservableObject {
     @Published var advancedMode: Bool = false
     @Published private(set) var compactText: String = ""
     @Published private(set) var expandedText: String = ""
+    /// The frames' stages of the last second (`formatEngineFrameStages`), for the window's
+    /// own line.
+    @Published private(set) var stagesText: String = ""
 
     private var timer: Timer?
 
@@ -273,5 +276,6 @@ final class EngineStatsWindowStore: ObservableObject {
         let snapshot = getEngineStatsSnapshot()
         compactText = formatEngineStatsCompact(snapshot)
         expandedText = formatEngineStatsOverlay(snapshot)
+        stagesText = formatEngineFrameStages(snapshot)
     }
 }
