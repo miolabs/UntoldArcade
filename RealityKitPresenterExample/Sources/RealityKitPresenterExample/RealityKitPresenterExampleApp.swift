@@ -5,10 +5,14 @@
 //  The engine's XR frame presented by RealityKit: the immersive space holds an
 //  `UntoldXRPresenterView` where the other visionOS examples hold a `CompositorLayer`. A
 //  control window opens and closes the space, picks the immersion, and shows the presenter's
-//  numbers once a second: the ticket command buffer's GPU span (on the headset's shared GPU,
-//  it also holds the compositor's and RealityKit's own work in between, and it stretches on a
-//  warm device), the engine's own GPU time (the union of its passes' stage spans, timed by the
-//  GPU) and the device's thermal state beside it.
+//  numbers once a second: each frame split into its stages from the ticket's pickup (the CPU
+//  frame to the commit, the wait for the GPU to start, the GPU span, which on the headset's
+//  shared GPU also holds the compositor's and RealityKit's own work in between and stretches
+//  on a warm device) with each stage's maximum, the frames that overran the refresh measured
+//  from the update rate (a late frame lands a refresh late and RealityKit shows the previous
+//  one twice), the worst frame's split ("worst 16.6 = cpu 3.1 + wait 9.2 + gpu 4.3" says where
+//  it spent its time), the engine's own GPU time (the union of its passes' stage spans, timed
+//  by the GPU) and the device's thermal state beside it.
 //
 //  Launch arguments: `--open-space` opens the space at start, `--hide-window` then closes the
 //  window (simulator screenshots), `--turning` turns the cubes (still by default, so that
@@ -275,11 +279,17 @@ final class ExampleModel {
         guard let presenter else { return }
         describeSettings()
         let numbers = presenter.statistics.snapshot()
+        // Each frame's stages (pickup to commit, commit to GPU start, the GPU span) with their
+        // maxima, the frames that overran the refresh, and the worst frame's split; the
+        // replace call's maximum is left out (the main thread's microseconds), the lead's kept
+        // for calibrating the adaptive lead.
         statusLine = String(
-            format: "%.0f updates/s · %.0f frames/s · %d dropped (%d in all) · replace %.2f ms (max %.2f) · pickup age %.1f ms · frame %.1f ms · to completion %.1f ms (max %.1f) · GPU span %.1f ms (max %.1f) · engine GPU %.1f ms · lead %.1f ms (max %.1f) · thermal %@ · %d taps",
-            numbers.updatesPerSecond, numbers.framesPerSecond, numbers.ticketsDropped, numbers.ticketsDroppedTotal,
-            numbers.replaceMsAverage, numbers.replaceMsMax, numbers.pickupAgeMsAverage, numbers.frameMsAverage,
-            numbers.completionMsAverage, numbers.completionMsMax, numbers.gpuMsAverage, numbers.gpuMsMax, numbers.engineGPUMsAverage,
+            format: "%.0f updates/s (refresh %.1f ms) · %.0f frames/s · %d dropped (%d in all) · %d late · replace %.2f ms · pickup age %.1f ms · cpu %.1f ms (max %.1f) · wait %.1f ms (max %.1f) · gpu %.1f ms (max %.1f) · completion %.1f ms (max %.1f) · worst %@ · engine GPU %.1f ms · lead %.1f ms (max %.1f) · thermal %@ · %d taps",
+            numbers.updatesPerSecond, numbers.refreshMs, numbers.framesPerSecond, numbers.ticketsDropped, numbers.ticketsDroppedTotal,
+            numbers.lateFrames, numbers.replaceMsAverage, numbers.pickupAgeMsAverage,
+            numbers.frameMsAverage, numbers.frameMsMax, numbers.waitMsAverage, numbers.waitMsMax,
+            numbers.gpuMsAverage, numbers.gpuMsMax, numbers.completionMsAverage, numbers.completionMsMax,
+            numbers.worstFrame.splitDescription, numbers.engineGPUMsAverage,
             numbers.leadMsAverage, numbers.leadMsMax, numbers.thermalStateName, scene.tapCount
         )
         log.notice("\(self.statusLine, privacy: .public)")

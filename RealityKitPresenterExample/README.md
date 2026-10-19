@@ -67,8 +67,16 @@ of the grid's quality. Both are the headset's to judge.
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the
   engine through the presenter's input target.
 - Mixed: the room shows around the slab. Full: dark around it.
-- The numbers, once a second in the window and in the console: RealityKit updates and engine
+- The numbers, once a second in the window and in the console: RealityKit updates per second
+  with the refresh period they measure (100 updates/s is a 10 ms refresh, 90 is 11.1), engine
   frames per second, dropped tickets (RealityKit asked for a frame while the engine still had
-  the previous one), the main thread's time in the replace calls, the ticket's age when the
-  engine took it, the engine's CPU frame, the frame's time to completion on the GPU, the GPU
-  span, the engine's own GPU time, the lead in force and the device's thermal state.
+  the previous one), late frames (a completion over the refresh: the frame lands a refresh
+  late and RealityKit shows the previous one twice), the main thread's time in the replace
+  calls, the ticket's age when the engine took it, then each frame's stages from the pickup
+  with its average and maximum: `cpu` (to the loop's commit of the command buffer), `wait`
+  (from the commit to the GPU starting on it: the driver's submission and the GPU's queue,
+  where the compositor's and RealityKit's own work go first), `gpu` (the span on the GPU) and
+  `completion` (their sum, pickup to GPU end); `worst 16.6 = cpu 3.1 + wait 9.2 + gpu 4.3`
+  is the second's longest frame split the same way, so a late frame reads as a slow CPU
+  frame, a wait on a busy GPU, or a long span; then the engine's own GPU time, the lead in
+  force and the device's thermal state.
