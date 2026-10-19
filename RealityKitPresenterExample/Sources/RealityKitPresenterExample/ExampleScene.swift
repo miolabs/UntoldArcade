@@ -5,7 +5,9 @@
 //  A procedural scene with nothing to load: a slab 1.6 m ahead of where the session began,
 //  three cubes on it, a sphere above, a sun. A pinch on a cube lights it up, so that pinches
 //  reaching the engine through the presenter's input target can be seen. The scene is still, so
-//  that screenshots of one build compare with the next; `--turning` turns the cubes.
+//  that screenshots of one build compare with the next; `--turning` turns the cubes. The swim
+//  probe (`SwimProbe`, `--swim-probe` or the window) adds a cross locked to the room and a dot
+//  locked to the head, for judging the frame's lead.
 //
 
 import Foundation
@@ -22,6 +24,10 @@ final class ExampleScene: @unchecked Sendable {
     /// Whether the cubes turn (the `--turning` launch argument); still by default, for
     /// screenshots that compare.
     let turning = CommandLine.arguments.contains("--turning")
+    /// The cross and the dot for judging the lead; on or off at any time.
+    let swimProbe = SwimProbe()
+    /// The engine, for the probe's head pose; held while the space is open.
+    private var xr: UntoldEngineXR?
 
     var tapCount: Int {
         lock.lock()
@@ -98,6 +104,11 @@ final class ExampleScene: @unchecked Sendable {
         createDirLight(entityId: sun)
         setLight(entityId: sun, .strength(3))
 
+        swimProbe.start()
+        lock.lock()
+        self.xr = xr
+        lock.unlock()
+
         xr.setupCallbacks(
             gameUpdate: { [weak self] deltaTime in self?.update(deltaTime: deltaTime) },
             handleInput: { [weak self] in self?.handleInput() }
@@ -106,10 +117,12 @@ final class ExampleScene: @unchecked Sendable {
     }
 
     func stop() {
+        swimProbe.stop()
         lock.lock()
         cubes = []
         lit = []
         taps = 0
+        xr = nil
         lock.unlock()
     }
 
@@ -120,6 +133,10 @@ final class ExampleScene: @unchecked Sendable {
             setRendering(.antiAliasing(wanted.engineMode))
             appliedAntiAliasing = wanted
         }
+        lock.lock()
+        let xr = xr
+        lock.unlock()
+        if let xr { swimProbe.update(xr: xr) }
         guard turning else { return }
         angle += deltaTime * 0.5
         lock.lock()

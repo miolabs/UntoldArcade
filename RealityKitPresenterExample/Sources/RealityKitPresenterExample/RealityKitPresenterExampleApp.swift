@@ -12,14 +12,16 @@
 //
 //  Launch arguments: `--open-space` opens the space at start, `--hide-window` then closes the
 //  window (simulator screenshots), `--turning` turns the cubes (still by default, so that
-//  screenshots of one build compare with the next). The presenter's settings, for comparisons
-//  from the command line: `--grid 64x60`, `--skirt 0` (texels), `--adaptive-diagonal` or
-//  `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms), `--tear 0.5` (metres), the
-//  presenter's own rasterization rate map with `--foveation equiangular` (or `none`); the
-//  engine's anti-aliasing with `--aa fxaa|smaa|msaa|taa|msaataa`. All but the grid and the
-//  rate map change from the window while the space is open too (the presenter's `settings`),
-//  for comparisons on the headset without a relaunch; the grid and the map are chosen in the
-//  window for the next space opened.
+//  screenshots of one build compare with the next), `--swim-probe` shows the swim probe (a
+//  cross locked to the room, a dot locked to the head; `SwimProbe`). The presenter's settings,
+//  for comparisons from the command line: `--grid 64x60`, `--skirt 0` (texels),
+//  `--adaptive-diagonal` or `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms, the fixed
+//  lead), `--adaptive-lead` or `--fixed-lead`, `--display-latency 16` (ms, the adaptive lead's
+//  constant), `--tear 0.5` (metres), the presenter's own rasterization rate map with
+//  `--foveation equiangular` (or `none`); the engine's anti-aliasing with
+//  `--aa fxaa|smaa|msaa|taa|msaataa`. All but the grid and the rate map change from the window
+//  while the space is open too (the presenter's `settings`), for comparisons on the headset
+//  without a relaunch; the grid and the map are chosen in the window for the next space opened.
 //
 
 import os
@@ -102,6 +104,8 @@ final class ExampleModel {
         if !arguments.contains("--skirt"), let skirt = defaults.object(forKey: "skirtTexels") as? Float { settings.skirtTexels = skirt }
         if !arguments.contains("--tear"), let tear = defaults.object(forKey: "tearThresholdMetres") as? Float { settings.tearThresholdMetres = tear }
         if !arguments.contains("--lead"), let lead = defaults.object(forKey: "leadSeconds") as? Double { settings.leadSeconds = lead }
+        if !arguments.contains("--adaptive-lead"), !arguments.contains("--fixed-lead"), let adaptive = defaults.object(forKey: "adaptiveLead") as? Bool { settings.adaptiveLead = adaptive }
+        if !arguments.contains("--display-latency"), let latency = defaults.object(forKey: "displayLatencySeconds") as? Double { settings.displayLatencySeconds = latency }
         if !arguments.contains("--adaptive-diagonal"), !arguments.contains("--fixed-diagonal"), let adaptive = defaults.object(forKey: "adaptiveDiagonal") as? Bool { settings.adaptiveDiagonal = adaptive }
         if !arguments.contains("--no-edge-band"), let band = defaults.object(forKey: "edgeBlending") as? Bool { settings.edgeBlending = band }
         return settings
@@ -112,6 +116,8 @@ final class ExampleModel {
         defaults.set(settings.skirtTexels, forKey: "skirtTexels")
         defaults.set(settings.tearThresholdMetres, forKey: "tearThresholdMetres")
         defaults.set(settings.leadSeconds, forKey: "leadSeconds")
+        defaults.set(settings.adaptiveLead, forKey: "adaptiveLead")
+        defaults.set(settings.displayLatencySeconds, forKey: "displayLatencySeconds")
         defaults.set(settings.adaptiveDiagonal, forKey: "adaptiveDiagonal")
         defaults.set(settings.edgeBlending, forKey: "edgeBlending")
     }
@@ -145,6 +151,17 @@ final class ExampleModel {
     /// otherwise.
     var rateMap = ExampleModel.rateMapFromArgumentsOrRemembered() {
         didSet { UserDefaults.standard.set(rateMap, forKey: "rateMap") }
+    }
+
+    /// Whether the swim probe is shown: a cross locked to the room 1.5 m ahead of where the
+    /// head was when it came on and a dot locked to the head (`SwimProbe`), for judging the
+    /// lead by turning the head; at any time, remembered across launches, `--swim-probe` at
+    /// a launch.
+    var swimProbe = CommandLine.arguments.contains("--swim-probe") || UserDefaults.standard.bool(forKey: "swimProbe") {
+        didSet {
+            scene.swimProbe.setEnabled(swimProbe)
+            UserDefaults.standard.set(swimProbe, forKey: "swimProbe")
+        }
     }
 
     static func rateMapFromArgumentsOrRemembered() -> Bool {
@@ -192,6 +209,9 @@ final class ExampleModel {
         }
         if let skirt = value(after: "--skirt").flatMap(Float.init) { configuration.skirtTexels = skirt }
         if let lead = value(after: "--lead").flatMap(Double.init) { configuration.leadSeconds = lead / 1000 }
+        if arguments.contains("--fixed-lead") { configuration.adaptiveLead = false }
+        if arguments.contains("--adaptive-lead") { configuration.adaptiveLead = true }
+        if let latency = value(after: "--display-latency").flatMap(Double.init) { configuration.displayLatencySeconds = latency / 1000 }
         if let tear = value(after: "--tear").flatMap(Float.init) { configuration.tearThresholdMetres = tear }
         if arguments.contains("--fixed-diagonal") { configuration.adaptiveDiagonal = false }
         if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
@@ -208,6 +228,7 @@ final class ExampleModel {
         presenter.settings = settings
         scene.start(xr)
         scene.setAntiAliasing(antiAliasing)
+        scene.swimProbe.setEnabled(swimProbe)
         // The engine's passes timed by the GPU, so the numbers line can show the engine's own
         // GPU time beside the ticket's span (which also holds whatever else the shared GPU ran).
         setRendering(.gpuPassTiming(.enabled))
@@ -242,7 +263,11 @@ final class ExampleModel {
             ? "Eye material: the shader graph (each eye sees its own grid). "
             : "Eye material: the FALLBACK (both eyes see both grids). ")
             + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels). " } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels. ")
-            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), lead \(Int((s.leadSeconds * 1000).rounded())) ms, tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)."
+            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), "
+            + (s.adaptiveLead
+                ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
+                : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
+            + "tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")."
     }
 
     /// Once a second from the window.
@@ -251,10 +276,11 @@ final class ExampleModel {
         describeSettings()
         let numbers = presenter.statistics.snapshot()
         statusLine = String(
-            format: "%.0f updates/s · %.0f frames/s · %d dropped (%d in all) · replace %.2f ms (max %.2f) · pickup age %.1f ms · frame %.1f ms · GPU span %.1f ms (max %.1f) · engine GPU %.1f ms · thermal %@ · %d taps",
+            format: "%.0f updates/s · %.0f frames/s · %d dropped (%d in all) · replace %.2f ms (max %.2f) · pickup age %.1f ms · frame %.1f ms · to completion %.1f ms (max %.1f) · GPU span %.1f ms (max %.1f) · engine GPU %.1f ms · lead %.1f ms (max %.1f) · thermal %@ · %d taps",
             numbers.updatesPerSecond, numbers.framesPerSecond, numbers.ticketsDropped, numbers.ticketsDroppedTotal,
             numbers.replaceMsAverage, numbers.replaceMsMax, numbers.pickupAgeMsAverage, numbers.frameMsAverage,
-            numbers.gpuMsAverage, numbers.gpuMsMax, numbers.engineGPUMsAverage, numbers.thermalStateName, scene.tapCount
+            numbers.completionMsAverage, numbers.completionMsMax, numbers.gpuMsAverage, numbers.gpuMsMax, numbers.engineGPUMsAverage,
+            numbers.leadMsAverage, numbers.leadMsMax, numbers.thermalStateName, scene.tapCount
         )
         log.notice("\(self.statusLine, privacy: .public)")
     }
@@ -312,6 +338,12 @@ struct ControlView: View {
                     Stepper(String(format: "Tear %.1f m", model.settings.tearThresholdMetres), value: $model.settings.tearThresholdMetres, in: 0.1 ... 3, step: 0.1)
                     Stepper("Lead \(Int((model.settings.leadSeconds * 1000).rounded())) ms", value: $model.settings.leadSeconds, in: 0 ... 0.06, step: 0.0055)
                 }
+                HStack(spacing: 24) {
+                    Toggle("Adaptive lead", isOn: $model.settings.adaptiveLead)
+                    Stepper("Display latency \(Int((model.settings.displayLatencySeconds * 1000).rounded())) ms", value: $model.settings.displayLatencySeconds, in: 0 ... 0.06, step: 0.001)
+                        .disabled(!model.settings.adaptiveLead)
+                    Toggle("Swim probe", isOn: $model.swimProbe)
+                }
                 Picker("Anti-aliasing", selection: $model.antiAliasing) {
                     ForEach(ExampleAntiAliasing.allCases) { mode in
                         Text(mode.label).tag(mode)
@@ -339,7 +371,7 @@ struct ControlView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force.")
                     .foregroundStyle(.secondary)
             }
 
