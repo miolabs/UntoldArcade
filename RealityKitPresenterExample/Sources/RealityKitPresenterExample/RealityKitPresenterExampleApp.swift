@@ -23,9 +23,9 @@
 //  lead), `--adaptive-lead` or `--fixed-lead`, `--display-latency 16` (ms, the adaptive lead's
 //  constant), `--tear 0.5` (metres), the presenter's own rasterization rate map with
 //  `--foveation equiangular` (or `none`); the engine's anti-aliasing with
-//  `--aa fxaa|smaa|msaa|taa|msaataa`; the pipeline two refreshes deep with `--pipeline-depth 2`
-//  (or `1`: the engine's frame started a refresh earlier, so a frame stretched by up to a
-//  refresh still lands on time, at the price of a refresh more lead). All but the grid, the
+//  `--aa fxaa|smaa|msaa|taa|msaataa`; the pipeline's depth with `--pipeline-depth 2` (the
+//  default: the engine's frame starts a refresh earlier, so a frame stretched by up to a
+//  refresh still lands on time, at the price of a refresh more lead) or `1`. All but the grid, the
 //  rate map and the pipeline's depth change from the window while the space is open too (the
 //  presenter's `settings`), for comparisons on the headset without a relaunch; those three are
 //  chosen in the window for the next space opened (the presenter is made with them).
@@ -185,8 +185,8 @@ final class ExampleModel {
     /// whose GPU span is stretched by up to a refresh (the shared GPU during quick head turns)
     /// still lands on time, and the engine poses each frame a refresh further ahead. The
     /// launch argument `--pipeline-depth 2|1` sets where the toggle starts; remembered across
-    /// launches otherwise. Off by default: the headset judges it by the late count during
-    /// quick turns and by the swim probe's dot.
+    /// launches otherwise. On by default, as the presenter's configuration: on the headset it
+    /// took the late count during quick turns to none and the swim probe's dot held still.
     var twoRefreshPipeline = ExampleModel.twoRefreshPipelineFromArgumentsOrRemembered() {
         didSet { UserDefaults.standard.set(twoRefreshPipeline, forKey: "twoRefreshPipeline") }
     }
@@ -196,7 +196,7 @@ final class ExampleModel {
         if let index = arguments.firstIndex(of: "--pipeline-depth"), index + 1 < arguments.count {
             return (Int(arguments[index + 1]) ?? 1) >= 2
         }
-        return UserDefaults.standard.bool(forKey: "twoRefreshPipeline")
+        return (UserDefaults.standard.object(forKey: "twoRefreshPipeline") as? Bool) ?? true
     }
 
     /// The configuration of the next space opened: the launch arguments', then the window's

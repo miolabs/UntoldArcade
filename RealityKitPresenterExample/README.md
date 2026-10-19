@@ -34,9 +34,9 @@ a silhouette, which the presenter's edge band blends into a filtered edge; FXAA 
 texel per edge at a constant value and SMAA none); `--no-edge-band` turns the band off;
 `--lead 22` sets the fixed lead in milliseconds, `--adaptive-lead` (or `--fixed-lead`) chooses
 the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe;
-`--pipeline-depth 2` runs the pipeline two refreshes deep (the engine's frame starts a refresh
-earlier, so a frame whose GPU span is stretched by up to a refresh still lands on time, at the
-price of one refresh more lead; `1`, the default, is the pipeline as it was). Every setting is
+`--pipeline-depth 1` runs the pipeline one refresh deep, as it was; `2`, the default, two
+refreshes deep (the engine's frame starts a refresh earlier, so a frame whose GPU span is
+stretched by up to a refresh still lands on time, at the price of one refresh more lead). Every setting is
 also in the window, at any time (the grid, the rate map and the pipeline's depth for the next
 space opened), and remembered across launches (a launch argument wins for its setting).
 
@@ -65,7 +65,7 @@ of the grid's quality. Both are the headset's to judge.
   turn; the numbers line shows the lead in force and the time to completion it was built
   from. The same probe dropped into a Compositor Services example (`SwimProbe.swift` needs
   only the engine) compares the two paths at one pose.
-- The two-refresh pipeline (`--pipeline-depth 2`, or its toggle for the next space opened):
+- The two-refresh pipeline (the default; `--pipeline-depth 1`, or its toggle off for the next space opened, is the one-refresh pipeline):
   during quick head turns the late count on the numbers line, which reads `N late (plan 2
   refreshes)` then, should fall to near zero where the one-refresh pipeline counts one to five
   in a hundred (a frame's GPU span stretched from 4 to 14 ms by the shared GPU still lands
