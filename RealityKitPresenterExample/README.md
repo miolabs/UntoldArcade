@@ -44,10 +44,14 @@ stretched by up to a refresh still lands on time, at the price of one refresh mo
 pixels (`1`, the default, is the drawable size); `--blended-core` draws the grids as a blended
 core (each eye's grid through the band's blended graph itself, its depth write kept, no band
 meshes, so no alpha test lies anywhere along a silhouette; `--cut-and-band`, the default, is the
-alpha-tested core with the band over the cells along silhouettes). Every setting is
-also in the window, at any time (the grid, the rate map, the pipeline's depth, the render
-scale and the silhouette for the next space opened), and remembered across launches (a launch
-argument wins for its setting).
+alpha-tested core with the band over the cells along silhouettes); `--ipd 63` sets the
+distance in millimetres between the nominal eyes the engine renders from (50 to 75; 63, the
+default, is the presenter's) and `--view-offset x,y,z` moves both nominal eyes on the device by
+centimetres along each axis (−5 to 5 each; x to the right, y up, z back, so forward is negative
+z; zero, the default, is no offset), the eye test below. Every setting is also in the window,
+at any time (the grid, the rate map, the pipeline's depth, the render scale, the silhouette and
+the eyes for the next space opened), and remembered across launches (a launch argument wins for
+its setting).
 
 Two things the simulator cannot show. The engine renders single-sampled there (its deferred
 fallback samples the G-buffer as a plain texture), so the frame's alpha is binary in every mode
@@ -124,6 +128,27 @@ of the grid's quality. Both are the headset's to judge.
   texels and write depth too (the same halo on the Mac, measured); the other eye's grid is
   collapsed in the vertex stage and writes nothing, so the picture must still be whole in
   each eye.
+- The eyes (`--ipd 55`, `--view-offset 0,0,-3`, or their steppers, for the next space
+  opened): the engine renders each eye, and the kernel lays each grid along that eye's rays at
+  the engine's depth, from a nominal eye, 63 mm to its side of the ARKit device anchor with no
+  offset; RealityKit then renders the grids from the device's real eye transforms, which it
+  never tells the presenter. Where a grid cell's one depth plane is right the difference does
+  not show (a vertex on the surface is on the surface from any eye), but where it is wrong (an
+  edge-on sliver such as a cube's top seen from just above, a curved limb; the rim rule puts a
+  sliver's texels on the nearest depth in its footprint) the real eye sees the texel displaced
+  by the eyes' difference times the depth error over the distance squared: a centimetre of eye
+  against 10 cm of depth error at 1.6 m is about 1.3 display pixels, the size of the kinks on
+  the cube tops at rest, and under head motion the pose prediction's residual adds to it as
+  the waves. The test, each setting judged for the kinks on the cube tops at rest: the IPD at
+  55 and 70 mm against 63, then a few centimetres of offset along one axis at a time. If the
+  eyes are the cause the kinks must change with the IPD and with the offset, growing in one
+  direction and flattening in the other, and the setting that flattens them says where the
+  real eyes are against the nominal ones (a calibration the presenter could carry); if ±5 cm
+  and 50–75 mm, far more than any real eye can be off, change nothing, the eyes are not the
+  cause and what is left is the cells' depth itself or the device's render. The whole scene
+  also shifts with a lateral or vertical offset and its apparent depth with the IPD, as it
+  must: judge the kinks, not the placement. The settings line names the IPD and the offset in
+  force.
 - Close one eye at a time on the headset: the picture must be whole in each eye. A doubled
   picture means the eye material fell back (the window's material line says which).
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the

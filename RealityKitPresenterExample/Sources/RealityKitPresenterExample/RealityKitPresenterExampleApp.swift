@@ -32,11 +32,14 @@
 //  for more texels per degree than the display's pixels; `1`, the default, is the drawable
 //  size); the silhouette with `--blended-core` (the grids drawn blended with their depth
 //  kept and no band, so there is no alpha test along a silhouette) or `--cut-and-band` (the
-//  default: the alpha-tested core with the band over the cells along silhouettes). All but
-//  the grid, the rate map, the pipeline's depth, the render scale and the silhouette change
-//  from the window while the space is open too (the presenter's `settings`), for comparisons
-//  on the headset without a relaunch; those five are chosen in the window for the next space
-//  opened (the presenter is made with them).
+//  default: the alpha-tested core with the band over the cells along silhouettes); the eyes
+//  the engine renders from with `--ipd 63` (millimetres between the nominal eyes) and
+//  `--view-offset x,y,z` (centimetres, both eyes moved on the device: x right, y up, z back),
+//  the eye test for the kinks and waves along edges. All but the grid, the rate map, the
+//  pipeline's depth, the render scale, the silhouette and the eyes change from the window
+//  while the space is open too (the presenter's `settings`), for comparisons on the headset
+//  without a relaunch; those are chosen in the window for the next space opened (the
+//  presenter is made with them).
 //
 
 import os
@@ -153,11 +156,84 @@ final class ExampleModel {
     var nearShell = UserDefaults.standard.bool(forKey: "nearShell") {
         didSet { UserDefaults.standard.set(nearShell, forKey: "nearShell") }
     }
-    /// A deliberate 3 cm upward offset of both eyes' viewpoints for the next space opened: a
-    /// parallax test. A silhouette defect that changes with it comes from a vertex at a wrong
-    /// depth seen from a displaced camera; one that does not is in the texture or its mapping.
-    var viewOffsetTest = UserDefaults.standard.bool(forKey: "viewOffsetTest") {
-        didSet { UserDefaults.standard.set(viewOffsetTest, forKey: "viewOffsetTest") }
+    /// The distance between the nominal eyes the engine renders from, millimetres, for the
+    /// next space opened. RealityKit tells the presenter nothing of the device's real eye
+    /// transforms: the engine renders each eye, and the kernel lays the grid along that eye's
+    /// rays, from a nominal eye this far to its side of the device anchor, and RealityKit then
+    /// shows the grids from the real eyes. A grid cell whose one depth plane is wrong (an
+    /// edge-on sliver, a curved limb; the rim rule puts a sliver's texels on the nearest depth)
+    /// shows the difference as parallax: the kinks on the cubes' top edges at rest and the
+    /// waves under head motion, if the eyes are their cause, must change with this. 63 by
+    /// default, as the presenter's configuration; `--ipd 63` at a launch; remembered across
+    /// launches otherwise.
+    var interpupillaryMillimetres = ExampleModel.interpupillaryFromArgumentsOrRemembered() {
+        didSet { UserDefaults.standard.set(interpupillaryMillimetres, forKey: "interpupillaryMillimetres") }
+    }
+
+    /// An offset of both nominal eyes on the device, centimetres along each axis of the device
+    /// anchor's frame (x to the right, y up, z back: forward is negative z), for the next
+    /// space opened; zero in use. The other half of the eye test: the IPD spreads the eyes,
+    /// this moves them together, so a real eye position off the anchor along an axis is found
+    /// by the offset along it that flattens the kinks, and an offset of a few centimetres that
+    /// changes nothing says the eyes are not the cause. `--view-offset x,y,z` (cm) at a
+    /// launch; remembered across launches otherwise.
+    var viewOffsetCentimetres = ExampleModel.viewOffsetFromArgumentsOrRemembered() {
+        didSet {
+            let defaults = UserDefaults.standard
+            defaults.set(viewOffsetCentimetres.x, forKey: "viewOffsetCentimetresX")
+            defaults.set(viewOffsetCentimetres.y, forKey: "viewOffsetCentimetresY")
+            defaults.set(viewOffsetCentimetres.z, forKey: "viewOffsetCentimetresZ")
+        }
+    }
+
+    /// The IPD's range, millimetres: the headset's own fitting range, about.
+    static let interpupillaryRange = 50 ... 75
+    /// The view offset's range along each axis, centimetres.
+    static let viewOffsetRange = -5 ... 5
+
+    static func interpupillaryFromArgumentsOrRemembered() -> Int {
+        if let ipd = argument(after: "--ipd").flatMap(Double.init) {
+            return clamp(Int(ipd.rounded()), to: interpupillaryRange)
+        }
+        return (UserDefaults.standard.object(forKey: "interpupillaryMillimetres") as? Int) ?? 63
+    }
+
+    static func viewOffsetFromArgumentsOrRemembered() -> SIMD3<Int> {
+        if let offset = argument(after: "--view-offset") {
+            let parts = offset.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            if parts.count == 3 {
+                let cm = parts.map { clamp(Int($0.rounded()), to: viewOffsetRange) }
+                return SIMD3<Int>(cm[0], cm[1], cm[2])
+            }
+        }
+        let defaults = UserDefaults.standard
+        return SIMD3<Int>(
+            (defaults.object(forKey: "viewOffsetCentimetresX") as? Int) ?? 0,
+            (defaults.object(forKey: "viewOffsetCentimetresY") as? Int) ?? 0,
+            (defaults.object(forKey: "viewOffsetCentimetresZ") as? Int) ?? 0
+        )
+    }
+
+    static func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
+        min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    /// The value after a launch argument, if the argument is there and has one.
+    static func argument(after flag: String) -> String? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
+    }
+
+    /// A number with its sign, for the eye settings: "+3", "0", "−2".
+    static func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value)" : value < 0 ? "−\(-value)" : "0"
+    }
+
+    /// The view offset as the row and the settings line name it: "none", or the three
+    /// centimetres with the axes' sense.
+    static func viewOffsetDescription(_ cm: SIMD3<Int>) -> String {
+        cm == .zero ? "none" : "(\(signed(cm.x)), \(signed(cm.y)), \(signed(cm.z))) cm (x right, y up, z back)"
     }
     /// Whether the next space opened draws each eye through the presenter's own equi-angular
     /// rasterization rate map: the same 1920 × 1824 physical pixels per eye spread evenly in
@@ -280,7 +356,8 @@ final class ExampleModel {
             configuration.gridRows = grid.rows
         }
         if nearShell { configuration.farShellMetres = 50 }
-        if viewOffsetTest { configuration.viewOffsetMetres = SIMD3<Float>(0, 0.03, 0) }
+        configuration.interpupillaryDistance = Float(interpupillaryMillimetres) / 1000
+        configuration.viewOffsetMetres = SIMD3<Float>(Float(viewOffsetCentimetres.x), Float(viewOffsetCentimetres.y), Float(viewOffsetCentimetres.z)) / 100
         configuration.foveation = rateMap ? .equiAngular : .none
         configuration.pipelineDepth = twoRefreshPipeline ? 2 : 1
         configuration.renderScale = renderScale
@@ -321,6 +398,11 @@ final class ExampleModel {
         if let scale = value(after: "--render-scale").flatMap(Float.init) { configuration.renderScale = scale }
         if arguments.contains("--blended-core") { configuration.silhouette = .blendedCore }
         if arguments.contains("--cut-and-band") { configuration.silhouette = .cutAndBand }
+        if arguments.contains("--ipd") { configuration.interpupillaryDistance = Float(interpupillaryFromArgumentsOrRemembered()) / 1000 }
+        if arguments.contains("--view-offset") {
+            let cm = viewOffsetFromArgumentsOrRemembered()
+            configuration.viewOffsetMetres = SIMD3<Float>(Float(cm.x), Float(cm.y), Float(cm.z)) / 100
+        }
         return configuration
     }
 
@@ -379,7 +461,7 @@ final class ExampleModel {
             : "Eye material: the FALLBACK (both eyes see both grids). ")
             + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels)" } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels")
             + String(format: " (render scale %.2g, %.1f texels/° at the centre of view). ", presenter.renderScale, presenter.centreTexelsPerDegree)
-            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
+            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, IPD \(Int((c.interpupillaryDistance * 1000).rounded())) mm, view offset \(Self.viewOffsetDescription(SIMD3<Int>(Int((c.viewOffsetMetres.x * 100).rounded()), Int((c.viewOffsetMetres.y * 100).rounded()), Int((c.viewOffsetMetres.z * 100).rounded())))), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
@@ -503,8 +585,16 @@ struct ControlView: View {
                     }
                     .pickerStyle(.segmented)
                     Toggle("Shell 50 m", isOn: $model.nearShell)
-                    Toggle("View +3 cm", isOn: $model.viewOffsetTest)
+                    Stepper("IPD \(model.interpupillaryMillimetres) mm", value: $model.interpupillaryMillimetres, in: ExampleModel.interpupillaryRange, step: 1)
                 }
+                HStack(spacing: 24) {
+                    Stepper("View x \(ExampleModel.signed(model.viewOffsetCentimetres.x)) cm", value: $model.viewOffsetCentimetres.x, in: ExampleModel.viewOffsetRange, step: 1)
+                    Stepper("View y \(ExampleModel.signed(model.viewOffsetCentimetres.y)) cm", value: $model.viewOffsetCentimetres.y, in: ExampleModel.viewOffsetRange, step: 1)
+                    Stepper("View z \(ExampleModel.signed(model.viewOffsetCentimetres.z)) cm", value: $model.viewOffsetCentimetres.z, in: ExampleModel.viewOffsetRange, step: 1)
+                }
+                Text("The eyes the engine renders from: 63 mm apart at the device anchor, which RealityKit then shows from the device's real eyes it never tells the presenter about. The view offset moves both nominal eyes on the device: x to the right, y up, z back (forward is negative z).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
                 Toggle("Two-refresh pipeline (the engine's frame starts a refresh earlier, so a frame stretched by up to a refresh still lands on time; one refresh more lead)", isOn: $model.twoRefreshPipeline)
                 Toggle("Render scale 1.5× (each eye rendered at 2880×2736 instead of 1920×1824: more texels per degree than the display's pixels, so the engine's edge steps are no longer magnified; 2.25× the engine's pixels)", isOn: $model.renderScaleRaised)
@@ -514,7 +604,7 @@ struct ControlView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's. With the blended core (its toggle, or --blended-core, for the next space opened) the grids blend with their depth kept and there is no band and no alpha test along a silhouette: beside the control cube, the engine cubes' edges should hold as still as the control's if the shipped cut's rasterization was the shimmer, and still shimmer if it is the texture's own change from frame to frame; the gpu on the numbers line should read under the shipped core plus band (one pass over the grid instead of two).")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's. With the blended core (its toggle, or --blended-core, for the next space opened) the grids blend with their depth kept and there is no band and no alpha test along a silhouette: beside the control cube, the engine cubes' edges should hold as still as the control's if the shipped cut's rasterization was the shimmer, and still shimmer if it is the texture's own change from frame to frame; the gpu on the numbers line should read under the shipped core plus band (one pass over the grid instead of two). The IPD and the view offset (their steppers, or --ipd and --view-offset, for the next space opened) move the nominal eyes the engine renders from, while RealityKit shows the grids from the device's real eyes: if the kinks on the cube tops at rest and the waves under motion come from that difference, they must change with the IPD at 55 and 70 against 63 and with a few centimetres of offset along an axis, and the setting that flattens them says where the real eyes are; if a few centimetres change nothing, the eyes are not the cause.")
                     .foregroundStyle(.secondary)
             }
 
