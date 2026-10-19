@@ -25,10 +25,13 @@
 //  `--foveation equiangular` (or `none`); the engine's anti-aliasing with
 //  `--aa fxaa|smaa|msaa|taa|msaataa`; the pipeline's depth with `--pipeline-depth 2` (the
 //  default: the engine's frame starts a refresh earlier, so a frame stretched by up to a
-//  refresh still lands on time, at the price of a refresh more lead) or `1`. All but the grid, the
-//  rate map and the pipeline's depth change from the window while the space is open too (the
-//  presenter's `settings`), for comparisons on the headset without a relaunch; those three are
-//  chosen in the window for the next space opened (the presenter is made with them).
+//  refresh still lands on time, at the price of a refresh more lead) or `1`; the render scale
+//  with `--render-scale 1.5` (each eye rendered at 1.5 times the drawable size, 2880 × 2736,
+//  for more texels per degree than the display's pixels; `1`, the default, is the drawable
+//  size). All but the grid, the rate map, the pipeline's depth and the render scale change
+//  from the window while the space is open too (the presenter's `settings`), for comparisons
+//  on the headset without a relaunch; those four are chosen in the window for the next space
+//  opened (the presenter is made with them).
 //
 
 import os
@@ -199,6 +202,33 @@ final class ExampleModel {
         return (UserDefaults.standard.object(forKey: "twoRefreshPipeline") as? Bool) ?? true
     }
 
+    /// The render scale of the next space opened: how many times the drawable size each eye is
+    /// rendered at (the presenter's textures are made at it). 1 is the drawable size, 1920 ×
+    /// 1824, which gives 12.9 texels per degree at the centre of view (17.6 through the rate
+    /// map) against the display's some 34 pixels, so RealityKit's sampler shows each texel 2.6
+    /// display pixels wide and magnifies the engine's one-texel edge steps with it; 1.5 renders
+    /// 2880 × 2736 (19.4 texels per degree, 26.4 through the map) for 2.25 times the engine's
+    /// pixels, which the two-refresh pipeline has the budget for. The window's toggle switches
+    /// between 1 and 1.5; the launch argument `--render-scale 1.5` sets where it starts;
+    /// remembered across launches otherwise.
+    var renderScale = ExampleModel.renderScaleFromArgumentsOrRemembered() {
+        didSet { UserDefaults.standard.set(renderScale, forKey: "renderScale") }
+    }
+
+    /// The render scale toggle: on above 1 (1.5 when turned on).
+    var renderScaleRaised: Bool {
+        get { renderScale > 1 }
+        set { renderScale = newValue ? 1.5 : 1 }
+    }
+
+    static func renderScaleFromArgumentsOrRemembered() -> Float {
+        let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--render-scale"), index + 1 < arguments.count, let scale = Float(arguments[index + 1]) {
+            return scale
+        }
+        return (UserDefaults.standard.object(forKey: "renderScale") as? Float) ?? 1
+    }
+
     /// The configuration of the next space opened: the launch arguments', then the window's
     /// choices for what the presenter fixes when it is made.
     func configurationForNextSpace() -> XRRealityKitPresenterConfiguration {
@@ -211,6 +241,7 @@ final class ExampleModel {
         if viewOffsetTest { configuration.viewOffsetMetres = SIMD3<Float>(0, 0.03, 0) }
         configuration.foveation = rateMap ? .equiAngular : .none
         configuration.pipelineDepth = twoRefreshPipeline ? 2 : 1
+        configuration.renderScale = renderScale
         return configuration
     }
     let scene = ExampleScene()
@@ -244,6 +275,7 @@ final class ExampleModel {
         if arguments.contains("--fixed-diagonal") { configuration.adaptiveDiagonal = false }
         if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
         if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
+        if let scale = value(after: "--render-scale").flatMap(Float.init) { configuration.renderScale = scale }
         return configuration
     }
 
@@ -292,7 +324,8 @@ final class ExampleModel {
         materialLine = (presenter.usesShaderGraphMaterial
             ? "Eye material: the shader graph (each eye sees its own grid). "
             : "Eye material: the FALLBACK (both eyes see both grids). ")
-            + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels). " } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels. ")
+            + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels)" } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels")
+            + String(format: " (render scale %.2g, %.1f texels/° at the centre of view). ", presenter.renderScale, presenter.centreTexelsPerDegree)
             + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, view offset \(Int((c.viewOffsetMetres.y * 100).rounded())) cm, skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, edge band \(presenter.drawsEdgeBand ? "on" : presenter.hasEdgeBand ? "off" : "unavailable"), "
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
@@ -404,12 +437,13 @@ struct ControlView: View {
                 }
                 Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
                 Toggle("Two-refresh pipeline (the engine's frame starts a refresh earlier, so a frame stretched by up to a refresh still lands on time; one refresh more lead)", isOn: $model.twoRefreshPipeline)
+                Toggle("Render scale 1.5× (each eye rendered at 2880×2736 instead of 1920×1824: more texels per degree than the display's pixels, so the engine's edge steps are no longer magnified; 2.25× the engine's pixels)", isOn: $model.renderScaleRaised)
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise.")
                     .foregroundStyle(.secondary)
             }
 

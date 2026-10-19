@@ -36,9 +36,13 @@ texel per edge at a constant value and SMAA none); `--no-edge-band` turns the ba
 the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe;
 `--pipeline-depth 1` runs the pipeline one refresh deep, as it was; `2`, the default, two
 refreshes deep (the engine's frame starts a refresh earlier, so a frame whose GPU span is
-stretched by up to a refresh still lands on time, at the price of one refresh more lead). Every setting is
-also in the window, at any time (the grid, the rate map and the pipeline's depth for the next
-space opened), and remembered across launches (a launch argument wins for its setting).
+stretched by up to a refresh still lands on time, at the price of one refresh more lead);
+`--render-scale 1.5` renders each eye at 1.5 times the drawable size (2880 × 2736 instead of
+1920 × 1824, 2.25 times the engine's pixels), for more texels per degree than the display's
+pixels (`1`, the default, is the drawable size). Every setting is
+also in the window, at any time (the grid, the rate map, the pipeline's depth and the render
+scale for the next space opened), and remembered across launches (a launch argument wins for
+its setting).
 
 Two things the simulator cannot show. The engine renders single-sampled there (its deferred
 fallback samples the G-buffer as a plain texture), so the frame's alpha is binary in every mode
@@ -74,6 +78,17 @@ of the grid's quality. Both are the headset's to judge.
   11.1 at 90), and the dot must still hold still during a turn; a dot that lags with the
   setting on says the fixed lead (or, with the adaptive lead, the display latency) is what to
   move, not the depth.
+- The render scale (`--render-scale 1.5`, or its toggle for the next space opened): the
+  texture gives 12.9 texels per degree at the centre of view at the drawable size (17.6
+  through the rate map) against the display's some 34 pixels per degree, so RealityKit's
+  bilinear sampler shows each texel 2.6 display pixels wide and the engine's own one-texel
+  steps along edges (MSAA's quarter steps, the staircase of a shallow edge) are magnified with
+  it; at 1.5 (19.4 texels per degree, 26.4 through the map) a texel step is under a display
+  pixel at the centre, so the cubes' and the sphere's edges should lose the magnified
+  staircase. The settings line names the texture size and the texels per degree in force. The
+  price is the engine's GPU frame, 2.25 times the pixels: read the GPU and the late count on
+  the numbers line under the two-refresh pipeline (on the Mac the engine's GPU time per frame
+  through the presenter grew by about the pixel ratio).
 - Close one eye at a time on the headset: the picture must be whole in each eye. A doubled
   picture means the eye material fell back (the window's material line says which).
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the
