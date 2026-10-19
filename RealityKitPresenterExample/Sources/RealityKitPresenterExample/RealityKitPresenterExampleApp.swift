@@ -5,7 +5,10 @@
 //  The engine's XR frame presented by RealityKit: the immersive space holds an
 //  `UntoldXRPresenterView` where the other visionOS examples hold a `CompositorLayer`. A
 //  control window opens and closes the space, picks the immersion, and shows the presenter's
-//  numbers once a second.
+//  numbers once a second: the ticket command buffer's GPU span (on the headset's shared GPU,
+//  it also holds the compositor's and RealityKit's own work in between, and it stretches on a
+//  warm device), the engine's own GPU time (the union of its passes' stage spans, timed by the
+//  GPU) and the device's thermal state beside it.
 //
 //  Launch arguments: `--open-space` opens the space at start, `--hide-window` then closes the
 //  window (simulator screenshots), `--turning` turns the cubes (still by default, so that
@@ -205,6 +208,9 @@ final class ExampleModel {
         presenter.settings = settings
         scene.start(xr)
         scene.setAntiAliasing(antiAliasing)
+        // The engine's passes timed by the GPU, so the numbers line can show the engine's own
+        // GPU time beside the ticket's span (which also holds whatever else the shared GPU ran).
+        setRendering(.gpuPassTiming(.enabled))
         spaceOpen = true
         describeSettings()
         log.notice("\(self.materialLine, privacy: .public)")
@@ -245,10 +251,10 @@ final class ExampleModel {
         describeSettings()
         let numbers = presenter.statistics.snapshot()
         statusLine = String(
-            format: "%.0f updates/s · %.0f frames/s · %d dropped (%d in all) · replace %.2f ms (max %.2f) · pickup age %.1f ms · frame %.1f ms · GPU %.1f ms (max %.1f) · %d taps",
+            format: "%.0f updates/s · %.0f frames/s · %d dropped (%d in all) · replace %.2f ms (max %.2f) · pickup age %.1f ms · frame %.1f ms · GPU span %.1f ms (max %.1f) · engine GPU %.1f ms · thermal %@ · %d taps",
             numbers.updatesPerSecond, numbers.framesPerSecond, numbers.ticketsDropped, numbers.ticketsDroppedTotal,
             numbers.replaceMsAverage, numbers.replaceMsMax, numbers.pickupAgeMsAverage, numbers.frameMsAverage,
-            numbers.gpuMsAverage, numbers.gpuMsMax, scene.tapCount
+            numbers.gpuMsAverage, numbers.gpuMsMax, numbers.engineGPUMsAverage, numbers.thermalStateName, scene.tapCount
         )
         log.notice("\(self.statusLine, privacy: .public)")
     }
