@@ -32,6 +32,8 @@ simulator's single view) and on an Apple Vision Pro. Launch arguments `--open-sp
 anti-aliasing (MSAA by default: of the modes, only MSAA leaves coverage in the frame's alpha at
 a silhouette, which the presenter's edge band blends into a filtered edge; FXAA leaves one
 texel per edge at a constant value and SMAA none); `--no-edge-band` turns the band off;
+`--no-tears` leaves the tear mask zero (no cell across a depth jump is discarded; the vertices
+are placed as before, so it isolates the tear decision as a cause of the shimmer along edges);
 `--lead 22` sets the fixed lead in milliseconds, `--adaptive-lead` (or `--fixed-lead`) chooses
 the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe;
 `--control-cube` stands a plain RealityKit cube beside the engine's cubes (the control for the

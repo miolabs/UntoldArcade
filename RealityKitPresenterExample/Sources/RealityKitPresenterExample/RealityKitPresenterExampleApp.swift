@@ -23,7 +23,9 @@
 //  the command line: `--grid 64x60`, `--skirt 0` (texels),
 //  `--adaptive-diagonal` or `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms, the fixed
 //  lead), `--adaptive-lead` or `--fixed-lead`, `--display-latency 16` (ms, the adaptive lead's
-//  constant), `--tear 0.5` (metres), the presenter's own rasterization rate map with
+//  constant), `--tear 0.5` (metres), `--no-tears` (the tear mask left zero: no cell across a
+//  depth jump is discarded, the placement unchanged; the test of the tear decision as the
+//  shimmer's mechanism), the presenter's own rasterization rate map with
 //  `--foveation equiangular` (or `none`); the engine's anti-aliasing with
 //  `--aa fxaa|smaa|msaa|taa|msaataa`; the pipeline's depth with `--pipeline-depth 2` (the
 //  default: the engine's frame starts a refresh earlier, so a frame stretched by up to a
@@ -122,6 +124,7 @@ final class ExampleModel {
         let defaults = UserDefaults.standard
         if !arguments.contains("--skirt"), let skirt = defaults.object(forKey: "skirtTexels") as? Float { settings.skirtTexels = skirt }
         if !arguments.contains("--tear"), let tear = defaults.object(forKey: "tearThresholdMetres") as? Float { settings.tearThresholdMetres = tear }
+        if !arguments.contains("--no-tears"), let tears = defaults.object(forKey: "tears") as? Bool { settings.tears = tears }
         if !arguments.contains("--lead"), let lead = defaults.object(forKey: "leadSeconds") as? Double { settings.leadSeconds = lead }
         if !arguments.contains("--adaptive-lead"), !arguments.contains("--fixed-lead"), let adaptive = defaults.object(forKey: "adaptiveLead") as? Bool { settings.adaptiveLead = adaptive }
         if !arguments.contains("--display-latency"), let latency = defaults.object(forKey: "displayLatencySeconds") as? Double { settings.displayLatencySeconds = latency }
@@ -134,6 +137,7 @@ final class ExampleModel {
         let defaults = UserDefaults.standard
         defaults.set(settings.skirtTexels, forKey: "skirtTexels")
         defaults.set(settings.tearThresholdMetres, forKey: "tearThresholdMetres")
+        defaults.set(settings.tears, forKey: "tears")
         defaults.set(settings.leadSeconds, forKey: "leadSeconds")
         defaults.set(settings.adaptiveLead, forKey: "adaptiveLead")
         defaults.set(settings.displayLatencySeconds, forKey: "displayLatencySeconds")
@@ -392,6 +396,7 @@ final class ExampleModel {
         if arguments.contains("--adaptive-lead") { configuration.adaptiveLead = true }
         if let latency = value(after: "--display-latency").flatMap(Double.init) { configuration.displayLatencySeconds = latency / 1000 }
         if let tear = value(after: "--tear").flatMap(Float.init) { configuration.tearThresholdMetres = tear }
+        if arguments.contains("--no-tears") { configuration.tears = false }
         if arguments.contains("--fixed-diagonal") { configuration.adaptiveDiagonal = false }
         if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
         if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
@@ -465,7 +470,7 @@ final class ExampleModel {
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
-            + "tear \(s.tearThresholdMetres) m, pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")\(controlCubeEntity?.isEnabled == true ? ", control cube on" : "")."
+            + (s.tears ? "tear \(s.tearThresholdMetres) m, " : "NO TEARS (threshold \(s.tearThresholdMetres) m places the vertices only), ") + "pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")\(controlCubeEntity?.isEnabled == true ? ", control cube on" : "")."
     }
 
     /// The silhouette in force, for the settings line: the shipped cut with its band's state,
@@ -557,6 +562,7 @@ struct ControlView: View {
                     Stepper(String(format: "Tear %.1f m", model.settings.tearThresholdMetres), value: $model.settings.tearThresholdMetres, in: 0.1 ... 3, step: 0.1)
                     Stepper("Lead \(Int((model.settings.leadSeconds * 1000).rounded())) ms", value: $model.settings.leadSeconds, in: 0 ... 0.06, step: 0.0055)
                 }
+                Toggle("Tears (the cells stretched across a depth jump discarded; off, the grid stays one surface and only the alpha test cuts the silhouette)", isOn: $model.settings.tears)
                 HStack(spacing: 24) {
                     Toggle("Adaptive lead", isOn: $model.settings.adaptiveLead)
                     Stepper("Display latency \(Int((model.settings.displayLatencySeconds * 1000).rounded())) ms", value: $model.settings.displayLatencySeconds, in: 0 ... 0.06, step: 0.001)
