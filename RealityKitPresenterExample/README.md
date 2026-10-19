@@ -33,9 +33,12 @@ anti-aliasing (MSAA by default: of the modes, only MSAA leaves coverage in the f
 a silhouette, which the presenter's edge band blends into a filtered edge; FXAA leaves one
 texel per edge at a constant value and SMAA none); `--no-edge-band` turns the band off;
 `--lead 22` sets the fixed lead in milliseconds, `--adaptive-lead` (or `--fixed-lead`) chooses
-the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe.
-Every setting is also in the window, at any time, and remembered across launches (a launch
-argument wins for its setting).
+the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe;
+`--pipeline-depth 2` runs the pipeline two refreshes deep (the engine's frame starts a refresh
+earlier, so a frame whose GPU span is stretched by up to a refresh still lands on time, at the
+price of one refresh more lead; `1`, the default, is the pipeline as it was). Every setting is
+also in the window, at any time (the grid, the rate map and the pipeline's depth for the next
+space opened), and remembered across launches (a launch argument wins for its setting).
 
 Two things the simulator cannot show. The engine renders single-sampled there (its deferred
 fallback samples the G-buffer as a plain texture), so the frame's alpha is binary in every mode
@@ -62,6 +65,15 @@ of the grid's quality. Both are the headset's to judge.
   turn; the numbers line shows the lead in force and the time to completion it was built
   from. The same probe dropped into a Compositor Services example (`SwimProbe.swift` needs
   only the engine) compares the two paths at one pose.
+- The two-refresh pipeline (`--pipeline-depth 2`, or its toggle for the next space opened):
+  during quick head turns the late count on the numbers line, which reads `N late (plan 2
+  refreshes)` then, should fall to near zero where the one-refresh pipeline counts one to five
+  in a hundred (a frame's GPU span stretched from 4 to 14 ms by the shared GPU still lands
+  within its two refreshes; one stretched past that is held and skipped as before). The price
+  is one refresh of lead: the lead on the line grows by the refresh period (10 ms at 100 Hz,
+  11.1 at 90), and the dot must still hold still during a turn; a dot that lags with the
+  setting on says the fixed lead (or, with the adaptive lead, the display latency) is what to
+  move, not the depth.
 - Close one eye at a time on the headset: the picture must be whole in each eye. A doubled
   picture means the eye material fell back (the window's material line says which).
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the
@@ -70,8 +82,9 @@ of the grid's quality. Both are the headset's to judge.
 - The numbers, once a second in the window and in the console: RealityKit updates per second
   with the refresh period they measure (100 updates/s is a 10 ms refresh, 90 is 11.1), engine
   frames per second, dropped tickets (RealityKit asked for a frame while the engine still had
-  the previous one), late frames (a completion over the refresh: the frame lands a refresh
-  late and RealityKit shows the previous one twice), the main thread's time in the replace
+  the previous one), late frames (a completion over the refreshes planned: the frame lands a
+  refresh late and RealityKit shows the previous one twice; two refreshes deep the count says
+  `(plan 2 refreshes)`), the main thread's time in the replace
   calls, the ticket's age when the engine took it, then each frame's stages from the pickup
   with its average and maximum: `cpu` (to the loop's commit of the command buffer), `wait`
   (from the commit to the GPU starting on it: the driver's submission and the GPU's queue,

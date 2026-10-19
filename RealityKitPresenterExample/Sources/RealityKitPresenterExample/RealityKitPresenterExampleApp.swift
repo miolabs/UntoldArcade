@@ -23,9 +23,12 @@
 //  lead), `--adaptive-lead` or `--fixed-lead`, `--display-latency 16` (ms, the adaptive lead's
 //  constant), `--tear 0.5` (metres), the presenter's own rasterization rate map with
 //  `--foveation equiangular` (or `none`); the engine's anti-aliasing with
-//  `--aa fxaa|smaa|msaa|taa|msaataa`. All but the grid and the rate map change from the window
-//  while the space is open too (the presenter's `settings`), for comparisons on the headset
-//  without a relaunch; the grid and the map are chosen in the window for the next space opened.
+//  `--aa fxaa|smaa|msaa|taa|msaataa`; the pipeline two refreshes deep with `--pipeline-depth 2`
+//  (or `1`: the engine's frame started a refresh earlier, so a frame stretched by up to a
+//  refresh still lands on time, at the price of a refresh more lead). All but the grid, the
+//  rate map and the pipeline's depth change from the window while the space is open too (the
+//  presenter's `settings`), for comparisons on the headset without a relaunch; those three are
+//  chosen in the window for the next space opened (the presenter is made with them).
 //
 
 import os
@@ -176,6 +179,26 @@ final class ExampleModel {
         return UserDefaults.standard.bool(forKey: "rateMap")
     }
 
+    /// Whether the next space opened runs the pipeline two refreshes deep: the presenter is made
+    /// with a second set of textures and grids and alternates them, a frame posted at a
+    /// RealityKit update shows at the render two updates on instead of the next, so a frame
+    /// whose GPU span is stretched by up to a refresh (the shared GPU during quick head turns)
+    /// still lands on time, and the engine poses each frame a refresh further ahead. The
+    /// launch argument `--pipeline-depth 2|1` sets where the toggle starts; remembered across
+    /// launches otherwise. Off by default: the headset judges it by the late count during
+    /// quick turns and by the swim probe's dot.
+    var twoRefreshPipeline = ExampleModel.twoRefreshPipelineFromArgumentsOrRemembered() {
+        didSet { UserDefaults.standard.set(twoRefreshPipeline, forKey: "twoRefreshPipeline") }
+    }
+
+    static func twoRefreshPipelineFromArgumentsOrRemembered() -> Bool {
+        let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--pipeline-depth"), index + 1 < arguments.count {
+            return (Int(arguments[index + 1]) ?? 1) >= 2
+        }
+        return UserDefaults.standard.bool(forKey: "twoRefreshPipeline")
+    }
+
     /// The configuration of the next space opened: the launch arguments', then the window's
     /// choices for what the presenter fixes when it is made.
     func configurationForNextSpace() -> XRRealityKitPresenterConfiguration {
@@ -187,6 +210,7 @@ final class ExampleModel {
         if nearShell { configuration.farShellMetres = 50 }
         if viewOffsetTest { configuration.viewOffsetMetres = SIMD3<Float>(0, 0.03, 0) }
         configuration.foveation = rateMap ? .equiAngular : .none
+        configuration.pipelineDepth = twoRefreshPipeline ? 2 : 1
         return configuration
     }
     let scene = ExampleScene()
@@ -228,7 +252,9 @@ final class ExampleModel {
         // The window reads the numbers; the presenter's own log line would reset them.
         presenter.reportInterval = 0
         // The window's settings, not the new presenter's defaults: what was chosen stays
-        // chosen across a close and an open.
+        // chosen across a close and an open. The pipeline's depth is the presenter's own: it
+        // was made with the sets for it.
+        settings.pipelineDepth = presenter.configuration.pipelineDepth
         presenter.settings = settings
         scene.start(xr)
         scene.setAntiAliasing(antiAliasing)
@@ -271,7 +297,7 @@ final class ExampleModel {
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
-            + "tear \(s.tearThresholdMetres) m, \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")."
+            + "tear \(s.tearThresholdMetres) m, pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")."
     }
 
     /// Once a second from the window.
@@ -280,13 +306,14 @@ final class ExampleModel {
         describeSettings()
         let numbers = presenter.statistics.snapshot()
         // Each frame's stages (pickup to commit, commit to GPU start, the GPU span) with their
-        // maxima, the frames that overran the refresh, and the worst frame's split; the
-        // replace call's maximum is left out (the main thread's microseconds), the lead's kept
-        // for calibrating the adaptive lead.
+        // maxima, the frames that overran the refreshes planned for them (one, or two with the
+        // pipeline two refreshes deep, which the late count then says), and the worst frame's
+        // split; the replace call's maximum is left out (the main thread's microseconds), the
+        // lead's kept for calibrating the adaptive lead.
         statusLine = String(
-            format: "%.0f updates/s (refresh %.1f ms) · %.0f frames/s · %d dropped (%d in all) · %d late · replace %.2f ms · pickup age %.1f ms · cpu %.1f ms (max %.1f) · wait %.1f ms (max %.1f) · gpu %.1f ms (max %.1f) · completion %.1f ms (max %.1f) · worst %@ · engine GPU %.1f ms · lead %.1f ms (max %.1f) · thermal %@ · %d taps",
+            format: "%.0f updates/s (refresh %.1f ms) · %.0f frames/s · %d dropped (%d in all) · %d late%@ · replace %.2f ms · pickup age %.1f ms · cpu %.1f ms (max %.1f) · wait %.1f ms (max %.1f) · gpu %.1f ms (max %.1f) · completion %.1f ms (max %.1f) · worst %@ · engine GPU %.1f ms · lead %.1f ms (max %.1f) · thermal %@ · %d taps",
             numbers.updatesPerSecond, numbers.refreshMs, numbers.framesPerSecond, numbers.ticketsDropped, numbers.ticketsDroppedTotal,
-            numbers.lateFrames, numbers.replaceMsAverage, numbers.pickupAgeMsAverage,
+            numbers.lateFrames, numbers.plannedRefreshesDescription, numbers.replaceMsAverage, numbers.pickupAgeMsAverage,
             numbers.frameMsAverage, numbers.frameMsMax, numbers.waitMsAverage, numbers.waitMsMax,
             numbers.gpuMsAverage, numbers.gpuMsMax, numbers.completionMsAverage, numbers.completionMsMax,
             numbers.worstFrame.splitDescription, numbers.engineGPUMsAverage,
@@ -376,12 +403,13 @@ struct ControlView: View {
                     Toggle("View +3 cm", isOn: $model.viewOffsetTest)
                 }
                 Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
+                Toggle("Two-refresh pipeline (the engine's frame starts a refresh earlier, so a frame stretched by up to a refresh still lands on time; one refresh more lead)", isOn: $model.twoRefreshPipeline)
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move.")
                     .foregroundStyle(.secondary)
             }
 
