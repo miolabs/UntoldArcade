@@ -83,10 +83,19 @@ Mixed-reality bowling on the shared Jolt Physics plugin — the demo that needs 
 open CoolBowling/Examples/CoolBowlingVisionOS/CoolBowlingVisionOS.xcodeproj
 ```
 
+### ⚽ ImmersiveGol — *visionOS · Jolt Physics*
+
+![ImmersiveGol demo](docs/media/ImmersiveGol/demo.gif)
+
+Mixed-reality penalty shootout: pinch the real ground to calibrate the floor, then face off against an animated shooter who jogs up, strikes the ball at frame 13 of its kick animation, and sends it toward one of your tracked palms — 25% dead-on, the rest scattered just wide of it so a save actually takes a reach. The shooter's jog/idle/kick blending, root-motion correction, and randomized kick marks run on the same Jolt rigid-body ball and floor as CoolBowling.
+
+```bash
+open ImmersiveGol/ImmersiveGol.xcodeproj
+```
+
 ### 🪞 CoolMirror — *visionOS + iPhone · Character Deformation · Motion Capture*
 
-<!-- MEDIA: docs/media/CoolMirror/demo.gif -->
-<!-- ![CoolMirror demo](docs/media/CoolMirror/demo.gif) -->
+![CoolMirror demo](docs/media/CoolMirror/demo.gif)
 
 A virtual mirror: a rigged, high-poly character stands in front of you and moves as you do. An iPhone on a stand tracks your body (ARKit body tracking, sent over the local network), the headset adds what it knows far better, your head and your hands, and the character is held between the two: its head where yours is, its planted feet where they landed, its hands on its body where yours are on yours. Underneath it is the showcase of the engine's character-deformation stack: switch the skinning live (vertex shader, compute linear blend, dual quaternion, Direct Delta Mush), drag morph sliders, let pose drivers fire the biceps as the elbows curl, turn on the volumetric XPBD muscle simulation or the ML deformer trained on it, and hang a Jolt soft-body cape on Batman. **Requires a physical Vision Pro and an iPhone** with a rear camera that supports body tracking.
 
@@ -241,6 +250,8 @@ UntoldArcade/
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
 ├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam, on either backend
 ├── CoolBowling/         # visionOS — bowling on the Jolt Physics plugin
+├── ImmersiveGol/        # visionOS — penalty shootout on the Jolt Physics plugin
+├── CoolMirror/          # visionOS + iPhone — virtual mirror on the character-deformation stack
 ├── CoolFutbol/          # visionOS — mixed-reality tabletop soccer + PSVR2 controls
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
 ├── BedroomTwin/         # visionOS — digital-twin bedroom with channel-based selection
