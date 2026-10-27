@@ -38,8 +38,10 @@
 //  default: the alpha-tested core with the band over the cells along silhouettes); the eyes
 //  the engine renders from with `--ipd 63` (millimetres between the nominal eyes) and
 //  `--view-offset x,y,z` (centimetres, both eyes moved on the device: x right, y up, z back),
-//  the eye test for the kinks and waves along edges. All but the grid, the rate map, the
-//  pipeline's depth, the render scale, the silhouette and the eyes change from the window
+//  the eye test for the kinks and waves along edges; `--mipmapped` (or `--no-mipmaps`) gives
+//  the eye textures a mip chain for the device's gaze-foveated raster to sample at its own
+//  rate. All but the grid, the rate map, the pipeline's depth, the render scale, the
+//  silhouette, the mip chain and the eyes change from the window
 //  while the space is open too (the presenter's `settings`), for comparisons on the headset
 //  without a relaunch; those are chosen in the window for the next space opened (the
 //  presenter is made with them).
@@ -331,6 +333,24 @@ final class ExampleModel {
         return (UserDefaults.standard.object(forKey: "renderScale") as? Float) ?? 1
     }
 
+    /// Whether the next space opened gives the eye textures a mip chain, generated after each
+    /// frame, with the graphs filtering between levels: the test of 2026-10-27, after the
+    /// shimmer along the edges was found to follow the gaze. The device rasterizes RealityKit
+    /// content at a rate that follows the gaze, coarse away from it, and with the base level
+    /// alone it samples our texels above that rate, so the silhouettes alias; the chain lets the
+    /// sampler filter the texture down to the rate. `--mipmapped` sets where it starts;
+    /// remembered across launches otherwise.
+    var mipmapped = ExampleModel.mipmappedFromArgumentsOrRemembered() {
+        didSet { UserDefaults.standard.set(mipmapped, forKey: "mipmapped") }
+    }
+
+    static func mipmappedFromArgumentsOrRemembered() -> Bool {
+        let arguments = CommandLine.arguments
+        if arguments.contains("--mipmapped") { return true }
+        if arguments.contains("--no-mipmaps") { return false }
+        return UserDefaults.standard.bool(forKey: "mipmapped")
+    }
+
     /// Whether the next space opened draws the grids as a blended core: each eye's grid
     /// through the band's blended graph itself, its depth write kept (the grid still occludes
     /// RealityKit's content and the Personas the system composites by depth), and no band
@@ -367,6 +387,7 @@ final class ExampleModel {
         configuration.pipelineDepth = twoRefreshPipeline ? 2 : 1
         configuration.renderScale = renderScale
         configuration.silhouette = blendedCore ? .blendedCore : .cutAndBand
+        configuration.mipmapped = mipmapped
         return configuration
     }
     let scene = ExampleScene()
@@ -403,6 +424,7 @@ final class ExampleModel {
         if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
         if let scale = value(after: "--render-scale").flatMap(Float.init) { configuration.renderScale = scale }
         if arguments.contains("--blended-core") { configuration.silhouette = .blendedCore }
+        if arguments.contains("--mipmapped") { configuration.mipmapped = true }
         if arguments.contains("--cut-and-band") { configuration.silhouette = .cutAndBand }
         if arguments.contains("--ipd") { configuration.interpupillaryDistance = Float(interpupillaryFromArgumentsOrRemembered()) / 1000 }
         if arguments.contains("--view-offset") {
@@ -466,7 +488,7 @@ final class ExampleModel {
             ? "Eye material: the shader graph (each eye sees its own grid). "
             : "Eye material: the FALLBACK (both eyes see both grids). ")
             + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels)" } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels")
-            + String(format: " (render scale %.2g, %.1f texels/° at the centre of view). ", presenter.renderScale, presenter.centreTexelsPerDegree)
+            + String(format: " (render scale %.2g, %.1f texels/° at the centre of view; %@). ", presenter.renderScale, presenter.centreTexelsPerDegree, presenter.mipmapped ? "MIP CHAIN, filtered to the device's rate" : "base level only")
             + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, IPD \(Int((c.interpupillaryDistance * 1000).rounded())) mm, view offset \(Self.viewOffsetDescription(SIMD3<Int>(Int((c.viewOffsetMetres.x * 100).rounded()), Int((c.viewOffsetMetres.y * 100).rounded()), Int((c.viewOffsetMetres.z * 100).rounded())))), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
@@ -618,6 +640,7 @@ struct ControlView: View {
                 // centre) through 2 (3840 × 3648). The undersampling test of 2026-10-27: if the
                 // device's gaze-foveated raster undersamples the eye texture away from the gaze,
                 // 0.5 shimmers less (and blurs) and 2 shimmers more.
+                Toggle("Mip chain on the eye textures (next space: generated after each frame, the graphs filtering between levels, so the device's gaze-foveated raster samples the texture at its own rate instead of aliasing the silhouettes away from the gaze)", isOn: $model.mipmapped)
                 HStack(spacing: 12) {
                     Text("Render scale (next space; 1 is the drawable size, 1920×1824)")
                     Picker("Render scale", selection: $model.renderScale) {

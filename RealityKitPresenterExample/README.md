@@ -34,6 +34,10 @@ a silhouette, which the presenter's edge band blends into a filtered edge; FXAA 
 texel per edge at a constant value and SMAA none); `--no-edge-band` turns the band off;
 `--no-tears` leaves the tear mask zero (no cell across a depth jump is discarded; the vertices
 are placed as before, so it isolates the tear decision as a cause of the shimmer along edges);
+`--mipmapped` (or `--no-mipmaps`, for the next space opened) gives the eye textures a mip chain,
+generated after each frame, with the graphs filtering between levels, so the device's
+gaze-foveated rasterization samples the texture at its own rate instead of aliasing the
+silhouettes away from the gaze (the window's "Mip chain" toggle);
 `--tear 1000`, past the far shell, turns the placement off (every vertex on its own centre
 texel, no rims; the window's "Placement off" toggle), so with `--no-tears` the grid makes no
 per-frame decision at all and the alpha test alone draws the silhouette;
