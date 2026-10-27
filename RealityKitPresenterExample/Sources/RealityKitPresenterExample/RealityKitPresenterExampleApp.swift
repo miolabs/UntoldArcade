@@ -23,9 +23,10 @@
 //  the command line: `--grid 64x60`, `--skirt 0` (texels),
 //  `--adaptive-diagonal` or `--fixed-diagonal`, `--no-edge-band`, `--lead 22` (ms, the fixed
 //  lead), `--adaptive-lead` or `--fixed-lead`, `--display-latency 16` (ms, the adaptive lead's
-//  constant), `--tear 0.5` (metres), `--no-tears` (the tear mask left zero: no cell across a
-//  depth jump is discarded, the placement unchanged; the test of the tear decision as the
-//  shimmer's mechanism), the presenter's own rasterization rate map with
+//  constant), `--tear 0.5` (metres; `--tear 1000`, past the shell, turns the placement off:
+//  every vertex on its own centre texel, no rims), `--no-tears` (the tear mask left zero: no
+//  cell across a depth jump is discarded, the placement unchanged; the test of the tear
+//  decision as the shimmer's mechanism), the presenter's own rasterization rate map with
 //  `--foveation equiangular` (or `none`); the engine's anti-aliasing with
 //  `--aa fxaa|smaa|msaa|taa|msaataa`; the pipeline's depth with `--pipeline-depth 2` (the
 //  default: the engine's frame starts a refresh earlier, so a frame stretched by up to a
@@ -559,10 +560,20 @@ struct ControlView: View {
                 }
                 HStack(spacing: 24) {
                     Stepper("Skirt \(Int(model.settings.skirtTexels)) texels", value: $model.settings.skirtTexels, in: 0 ... 8, step: 1)
-                    Stepper(String(format: "Tear %.1f m", model.settings.tearThresholdMetres), value: $model.settings.tearThresholdMetres, in: 0.1 ... 3, step: 0.1)
+                    Stepper(model.settings.tearThresholdMetres > 3 ? "Tear past the shell" : String(format: "Tear %.1f m", model.settings.tearThresholdMetres), value: $model.settings.tearThresholdMetres, in: 0.1 ... 3, step: 0.1)
                     Stepper("Lead \(Int((model.settings.leadSeconds * 1000).rounded())) ms", value: $model.settings.leadSeconds, in: 0 ... 0.06, step: 0.0055)
                 }
                 Toggle("Tears (the cells stretched across a depth jump discarded; off, the grid stays one surface and only the alpha test cuts the silhouette)", isOn: $model.settings.tears)
+                // The threshold's other job is the placement: a vertex lands on the texel nearest its
+                // centre among those within the threshold of its footprint's nearest depth, and is a
+                // rim (pushed by the skirt) when its own centre texel fails that limit. Past the shell
+                // every texel passes: each vertex on its own centre texel, no rims, no skirt; with the
+                // tears off too, a regular grid with no per-frame decision, the silhouette left to the
+                // alpha test on the stretched cells (`--tear 1000` from the command line).
+                Toggle("Placement off (threshold past the shell: every vertex on its own texel, no rims; with Tears off, no per-frame decision at all)", isOn: Binding(
+                    get: { model.settings.tearThresholdMetres > 3 },
+                    set: { model.settings.tearThresholdMetres = $0 ? 1000 : 0.5 }
+                ))
                 HStack(spacing: 24) {
                     Toggle("Adaptive lead", isOn: $model.settings.adaptiveLead)
                     Stepper("Display latency \(Int((model.settings.displayLatencySeconds * 1000).rounded())) ms", value: $model.settings.displayLatencySeconds, in: 0 ... 0.06, step: 0.001)
