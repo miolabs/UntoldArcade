@@ -324,6 +324,7 @@ final class ExampleModel {
     var controlCube = CommandLine.arguments.contains("--control-cube") || UserDefaults.standard.bool(forKey: "controlCube") {
         didSet {
             controlCubeEntity?.isEnabled = controlCube
+            controlSphereEntity?.isEnabled = controlCube
             UserDefaults.standard.set(controlCube, forKey: "controlCube")
         }
     }
@@ -331,6 +332,8 @@ final class ExampleModel {
     /// The control cube's entity while a space is open: a child of the presenter's root beside
     /// the grid entities, world-locked like them, nothing the presenter manages.
     private var controlCubeEntity: ModelEntity?
+    /// The control sphere beside the engine's, under the same toggle (`ControlCube.makeSphereEntity`).
+    private var controlSphereEntity: ModelEntity?
 
     static func rateMapFromArgumentsOrRemembered() -> Bool {
         let arguments = CommandLine.arguments
@@ -511,6 +514,11 @@ final class ExampleModel {
         control.isEnabled = controlCube
         presenter.root.addChild(control)
         controlCubeEntity = control
+        // And the control sphere above it, beside the engine's sphere, for the limb.
+        let controlSphere = ControlCube.makeSphereEntity()
+        controlSphere.isEnabled = controlCube
+        presenter.root.addChild(controlSphere)
+        controlSphereEntity = controlSphere
         // The engine's passes timed by the GPU, so the numbers line can show the engine's own
         // GPU time beside the ticket's span (which also holds whatever else the shared GPU ran).
         setRendering(.gpuPassTiming(.enabled))
@@ -533,6 +541,8 @@ final class ExampleModel {
         scene.stop()
         controlCubeEntity?.removeFromParent()
         controlCubeEntity = nil
+        controlSphereEntity?.removeFromParent()
+        controlSphereEntity = nil
         presenter = nil
         spaceOpen = false
         statusLine = "The space is closed."
@@ -552,7 +562,7 @@ final class ExampleModel {
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
-            + (s.tears ? "tear \(s.tearThresholdMetres) m, " : "NO TEARS (threshold \(s.tearThresholdMetres) m places the vertices only), ") + "pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")\(controlCubeEntity?.isEnabled == true ? ", control cube on" : "")."
+            + (s.tears ? "tear \(s.tearThresholdMetres) m, " : "NO TEARS (threshold \(s.tearThresholdMetres) m places the vertices only), ") + "pipeline \(presenter.pipelineDepth == 2 ? "two refreshes deep" : "one refresh deep"), \(scene.antiAliasing.label)\(scene.swimProbe.isEnabled ? ", swim probe on" : "")\(controlCubeEntity?.isEnabled == true ? ", control cube and sphere on" : "")."
     }
 
     /// The silhouette in force, for the settings line: the shipped cut with its band's state,
@@ -662,7 +672,7 @@ struct ControlView: View {
                 }
                 HStack(spacing: 24) {
                     Toggle("Swim probe", isOn: $model.swimProbe)
-                    Toggle("Control cube (a plain RealityKit cube beside the engine's, for the captures)", isOn: $model.controlCube)
+                    Toggle("Control cube and sphere (a plain RealityKit cube beside the engine's cubes and a sphere beside the engine's sphere, for the captures and the limb)", isOn: $model.controlCube)
                 }
                 Picker("Anti-aliasing", selection: $model.antiAliasing) {
                     ForEach(ExampleAntiAliasing.allCases) { mode in

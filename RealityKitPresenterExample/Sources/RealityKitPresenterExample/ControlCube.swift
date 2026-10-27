@@ -53,4 +53,29 @@ enum ControlCube {
         entity.position = position
         return entity
     }
+
+    /// The engine sphere's radius (`ExampleScene`: `BasicPrimitives.createSphere(extent: 0.12)`,
+    /// the extent its diameter).
+    static let sphereRadiusMetres: Float = 0.06
+
+    /// Where the control sphere floats: above the control cube at the engine sphere's height
+    /// (the engine's is at x = 0, y = 1.45, above the middle cube), so a capture frames both
+    /// spheres as it frames the cubes.
+    static let spherePosition = SIMD3<Float>(0.7, 1.45, -1.6)
+
+    /// The control for the limb: a plain RealityKit sphere of the engine sphere's radius beside
+    /// it, under the control cube's toggle. With the measured eyes in force the engine cubes
+    /// match the control cube (2026-10-27), while the engine sphere still shows a little of the
+    /// old shimmer along its limb: the same limb on this sphere says the device (its blend of
+    /// passthrough and object, or its render); a clean control beside a shimmering engine
+    /// sphere says the presenter's limb cells, whose one depth plane is furthest from a curved
+    /// surface. The engine's sphere is smoother than its cubes (roughness 0.2), so is this.
+    @MainActor
+    static func makeSphereEntity() -> ModelEntity {
+        let material = SimpleMaterial(color: color, roughness: 0.2, isMetallic: false)
+        let entity = ModelEntity(mesh: .generateSphere(radius: sphereRadiusMetres), materials: [material])
+        entity.name = "Control sphere"
+        entity.position = spherePosition
+        return entity
+    }
 }

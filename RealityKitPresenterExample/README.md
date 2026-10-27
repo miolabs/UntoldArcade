@@ -43,7 +43,8 @@ texel, no rims; the window's "Placement off" toggle), so with `--no-tears` the g
 per-frame decision at all and the alpha test alone draws the silhouette;
 `--lead 22` sets the fixed lead in milliseconds, `--adaptive-lead` (or `--fixed-lead`) chooses
 the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe;
-`--control-cube` stands a plain RealityKit cube beside the engine's cubes (the control for the
+`--control-cube` stands a plain RealityKit cube beside the engine's cubes, and a plain
+RealityKit sphere beside the engine's sphere, for the limb (the control for the
 edge measurements on the headset's captures, below);
 `--pipeline-depth 1` runs the pipeline one refresh deep, as it was; `2`, the default, two
 refreshes deep (the engine's frame starts a refresh earlier, so a frame whose GPU span is
