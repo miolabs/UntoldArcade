@@ -57,7 +57,10 @@ alpha-tested core with the band over the cells along silhouettes); `--ipd 63` se
 distance in millimetres between the nominal eyes the engine renders from (50 to 75; 63, the
 default, is the presenter's) and `--view-offset x,y,z` moves both nominal eyes on the device by
 centimetres along each axis (−5 to 5 each; x to the right, y up, z back, so forward is negative
-z; zero, the default, is no offset), the eye test below. Every setting is also in the window,
+z; zero, the default, is no offset), the eye test below; `--measure-eyes` measures the device's
+tracked eyes at start (the calibration space, below) and opens the presenter's space rendering
+from them, and `--measured-eyes` (or `--nominal-eyes`) says whether a measurement kept on this
+device is used. Every setting is also in the window,
 at any time (the grid, the rate map, the pipeline's depth, the render scale, the silhouette and
 the eyes for the next space opened), and remembered across launches (a launch argument wins for
 its setting).
@@ -158,6 +161,32 @@ of the grid's quality. Both are the headset's to judge.
   also shifts with a lateral or vertical offset and its apparent depth with the IPD, as it
   must: judge the kinks, not the placement. The settings line names the IPD and the offset in
   force.
+- The eye calibration ("Measure the eyes" in the eye row, or `--measure-eyes` at a launch):
+  the headset settled the eye test (2026-10-27): the kinks and the shimmer are the parallax of
+  cells drawn at a wrong depth seen from the device's TRACKED eyes, 24.7 mm below the device
+  anchor on that headset, which RealityKit renders from and never tells the presenter about,
+  and with the measured eyes dialled in by hand the engine's cubes looked almost like the
+  control cube. Compositor Services does hand out the tracked eyes (each drawable's view
+  transforms, which the engine's Compositor path renders from), so the app measures them
+  itself: the button closes the presenter's space if it is open, opens the `EyeCalibration`
+  immersive space (a bare `CompositorLayer`, ProceduralGeometry's configuration, on which the
+  engine's `XREyeMeasurement` runs the compositor's minimal frame loop for 60 frames, every
+  drawable presented cleared, so the room shows through for a moment), averages the two
+  transforms (the translations' mean, the last frame's rotation, with each axis's spread),
+  closes that space, keeps the pair for this device (UserDefaults, keyed by the device, so
+  another headset or another fit measures again) and opens the presenter's space with
+  `configuration.eyeTransforms` set: the engine renders each eye from its measured transform
+  in place of the nominal pair. The "Measured eyes" toggle puts a kept measurement in force
+  or leaves the IPD and view steppers in charge (the manual way; with a measurement in force
+  they show its distance and midpoint greyed). The settings line says `eyes measured L (x, y,
+  z) R (x, y, z) mm` (millimetres from the anchor; x right, y up, z back) or the nominal `IPD
+  63 mm, view offset …` as before. What to read, beside the control cube: after a
+  `--measure-eyes` launch, the settings line with the measured eyes, then the middle cube's
+  far edge at rest and while glancing against the control's, and against the manual pair set
+  to the same numbers (the toggle off, IPD 63, view offset the midpoint); the residual with
+  the measured eyes is what a fixed pair cannot carry (the eye tracker's loose z, the depth
+  error at a sliver, the gaze's own half millimetre). In the simulator the layer gives one
+  view, which is no pair: the measurement is said and not kept.
 - Close one eye at a time on the headset: the picture must be whole in each eye. A doubled
   picture means the eye material fell back (the window's material line says which).
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00F14736A176ED6001D306C5 /* UntoldEngineXR in Frameworks */ = {isa = PBXBuildFile; productRef = 8ADDC08B052DA3A7843EBC09 /* UntoldEngineXR */; };
+		1D9C0B958099FCE2AF5A669A /* EyeCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF9C2BD039D17D205691DFC6 /* EyeCalibration.swift */; };
 		343AEA8A7765CB91413AD8DB /* SwimProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1B37DAB6C1CEB741B38764 /* SwimProbe.swift */; };
 		631E717AF031ACF3FE676C85 /* ExampleScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75FE4B3994BB810BE798569 /* ExampleScene.swift */; };
 		746C93EFA3EF13B397E96EB4 /* UntoldEngineXRRealityKit in Frameworks */ = {isa = PBXBuildFile; productRef = 649A49056892574529B80646 /* UntoldEngineXRRealityKit */; };
@@ -23,6 +24,7 @@
 		B0BBA340844FB06491C01CEF /* ControlCube.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlCube.swift; sourceTree = "<group>"; };
 		C50D6B7CBCB80A809D116139 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 		CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealityKitPresenterExampleApp.swift; sourceTree = "<group>"; };
+		DF9C2BD039D17D205691DFC6 /* EyeCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EyeCalibration.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,6 +46,7 @@
 			children = (
 				B0BBA340844FB06491C01CEF /* ControlCube.swift */,
 				A75FE4B3994BB810BE798569 /* ExampleScene.swift */,
+				DF9C2BD039D17D205691DFC6 /* EyeCalibration.swift */,
 				CEEB8CA415295EE6435D2984 /* RealityKitPresenterExampleApp.swift */,
 				2E1B37DAB6C1CEB741B38764 /* SwimProbe.swift */,
 			);
@@ -150,6 +153,7 @@
 			files = (
 				8BA18D2C98A9277E0A4C1100 /* ControlCube.swift in Sources */,
 				631E717AF031ACF3FE676C85 /* ExampleScene.swift in Sources */,
+				1D9C0B958099FCE2AF5A669A /* EyeCalibration.swift in Sources */,
 				B10674B978AEDB6016EEE9F4 /* RealityKitPresenterExampleApp.swift in Sources */,
 				343AEA8A7765CB91413AD8DB /* SwimProbe.swift in Sources */,
 			);

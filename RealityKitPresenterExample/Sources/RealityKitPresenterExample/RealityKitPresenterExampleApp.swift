@@ -38,7 +38,11 @@
 //  default: the alpha-tested core with the band over the cells along silhouettes); the eyes
 //  the engine renders from with `--ipd 63` (millimetres between the nominal eyes) and
 //  `--view-offset x,y,z` (centimetres, decimals allowed; both eyes moved on the device: x right, y up, z back),
-//  the eye test for the kinks and waves along edges; `--mipmapped` (or `--no-mipmaps`) gives
+//  the eye test for the kinks and waves along edges; `--measure-eyes` measures the device's
+//  TRACKED eyes at start (the `EyeCalibration` space, a bare compositor layer for 60 frames;
+//  `EyeCalibration.swift`), keeps them for this device and opens the presenter's space
+//  rendering from them, `--measured-eyes` (or `--nominal-eyes`) says whether a kept
+//  measurement is used; `--mipmapped` (or `--no-mipmaps`) gives
 //  the eye textures a mip chain for the device's gaze-foveated raster to sample at its own
 //  rate. All but the grid, the rate map, the pipeline's depth, the render scale, the
 //  silhouette, the mip chain and the eyes change from the window
@@ -47,6 +51,7 @@
 //  presenter is made with them).
 //
 
+import CompositorServices
 import os
 import RealityKit
 import SwiftUI
@@ -77,6 +82,17 @@ struct RealityKitPresenterExampleApp: App {
             )
         }
         .immersionStyle(selection: $model.immersionSelection, in: .mixed, .full)
+
+        // The eye calibration: a bare compositor layer the engine's `XREyeMeasurement` runs on
+        // for a moment, drawing nothing (the room shows through), to read the device's tracked
+        // eyes; the window opens it, waits for the measurement, closes it and opens the
+        // presenter's space with the eyes (`EyeCalibration.swift`).
+        ImmersiveSpace(id: "eyeCalibration") {
+            CompositorLayer(configuration: EyeCalibrationLayerConfiguration()) { layerRenderer in
+                model.startEyeMeasurement(on: layerRenderer)
+            }
+        }
+        .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
 }
 
@@ -198,6 +214,35 @@ final class ExampleModel {
 
     /// The view offset steppers' step, millimetres: 1 or 10.
     var viewOffsetStep = 10
+
+    /// The device's tracked eyes as measured on it (`EyeCalibration.swift`: the calibration
+    /// space's compositor layer, 60 frames of its view transforms averaged), kept across
+    /// launches for this device only; nil until measured. In force for the next space opened
+    /// while `useMeasuredEyes` is on: the presenter renders each eye from its measured
+    /// transform (`configuration.eyeTransforms`) instead of the nominal pair the IPD and view
+    /// offset steppers describe, which then show the measured numbers greyed.
+    var measuredEyes = MeasuredEyes.remembered()
+
+    /// Whether a kept measurement is used for the next space opened (on by default once there
+    /// is one; off, the steppers' nominal pair renders, the manual way). `--measured-eyes` or
+    /// `--nominal-eyes` at a launch; remembered across launches otherwise.
+    var useMeasuredEyes = ExampleModel.useMeasuredEyesFromArgumentsOrRemembered() {
+        didSet { UserDefaults.standard.set(useMeasuredEyes, forKey: "useMeasuredEyes") }
+    }
+
+    static func useMeasuredEyesFromArgumentsOrRemembered() -> Bool {
+        let arguments = CommandLine.arguments
+        if arguments.contains("--measured-eyes") || arguments.contains("--measure-eyes") { return true }
+        if arguments.contains("--nominal-eyes") { return false }
+        return (UserDefaults.standard.object(forKey: "useMeasuredEyes") as? Bool) ?? true
+    }
+
+    /// The measurement under way, if one, or the last one's result until it is kept.
+    var eyeMeasurement: EyeMeasurementState = .idle
+    /// What the last measurement did, under the eye row (`eyeMeasurementNote`, which logs it).
+    var eyeMeasurementNoteStorage = ""
+    /// The window's flow waiting for the measurement in the calibration space to finish.
+    var eyeMeasurementWaiter: CheckedContinuation<XREyeMeasurement.Result?, Never>?
 
     /// The IPD's range, millimetres: the headset's own fitting range, about.
     static let interpupillaryRange = 50 ... 75
@@ -392,6 +437,11 @@ final class ExampleModel {
         if nearShell { configuration.farShellMetres = 50 }
         configuration.interpupillaryDistance = Float(interpupillaryMillimetres) / 1000
         configuration.viewOffsetMetres = SIMD3<Float>(Float(viewOffsetMillimetres.x), Float(viewOffsetMillimetres.y), Float(viewOffsetMillimetres.z)) / 1000
+        // The measured eyes override the nominal pair when in force (the configuration then
+        // reports their distance and midpoint as the IPD and the view offset).
+        if useMeasuredEyes, let measured = measuredEyes {
+            configuration.eyeTransforms = measured.eyeTransforms
+        }
         configuration.foveation = rateMap ? .equiAngular : .none
         configuration.pipelineDepth = twoRefreshPipeline ? 2 : 1
         configuration.renderScale = renderScale
@@ -403,7 +453,7 @@ final class ExampleModel {
     private(set) var presenter: XRRealityKitPresenter?
     /// The numbers go to the unified log too (subsystem `com.untoldengine.realitykitpresenterexample`,
     /// category `numbers`), so a simulator or headset run can be read back afterwards.
-    private let log = os.Logger(subsystem: "com.untoldengine.realitykitpresenterexample", category: "numbers")
+    let log = os.Logger(subsystem: "com.untoldengine.realitykitpresenterexample", category: "numbers")
     private var refreshTask: Task<Void, Never>?
 
     /// The presenter's configuration with the launch arguments' overrides applied.
@@ -498,7 +548,7 @@ final class ExampleModel {
             : "Eye material: the FALLBACK (both eyes see both grids). ")
             + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels)" } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels")
             + String(format: " (render scale %.2g, %.1f texels/° at the centre of view; %@). ", presenter.renderScale, presenter.centreTexelsPerDegree, presenter.mipmapped ? "MIP CHAIN, filtered to the device's rate" : "base level only")
-            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, IPD \(Int((c.interpupillaryDistance * 1000).rounded())) mm, view offset \(Self.viewOffsetDescription(SIMD3<Int>(Int((c.viewOffsetMetres.x * 1000).rounded()), Int((c.viewOffsetMetres.y * 1000).rounded()), Int((c.viewOffsetMetres.z * 1000).rounded())))), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
+            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, \(Self.eyesDescription(c)), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
@@ -633,12 +683,16 @@ struct ControlView: View {
                     }
                     .pickerStyle(.segmented)
                     Toggle("Shell 50 m", isOn: $model.nearShell)
-                    Stepper("IPD \(model.interpupillaryMillimetres) mm", value: $model.interpupillaryMillimetres, in: ExampleModel.interpupillaryRange, step: 1)
+                    // The steppers are the manual way; with a measurement in force they show
+                    // its numbers (the distance between the measured eyes, their midpoint)
+                    // greyed, and the measured transforms themselves are what renders.
+                    Stepper("IPD \(measuredEyesShown?.interpupillaryMillimetres ?? model.interpupillaryMillimetres) mm", value: $model.interpupillaryMillimetres, in: ExampleModel.interpupillaryRange, step: 1)
+                        .disabled(measuredEyesShown != nil)
                 }
                 HStack(spacing: 24) {
-                    Stepper("View x \(ExampleModel.signed(model.viewOffsetMillimetres.x)) mm", value: $model.viewOffsetMillimetres.x, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
-                    Stepper("View y \(ExampleModel.signed(model.viewOffsetMillimetres.y)) mm", value: $model.viewOffsetMillimetres.y, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
-                    Stepper("View z \(ExampleModel.signed(model.viewOffsetMillimetres.z)) mm", value: $model.viewOffsetMillimetres.z, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
+                    Stepper("View x \(ExampleModel.signed(measuredEyesShown?.midpointMillimetres.x ?? model.viewOffsetMillimetres.x)) mm", value: $model.viewOffsetMillimetres.x, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
+                    Stepper("View y \(ExampleModel.signed(measuredEyesShown?.midpointMillimetres.y ?? model.viewOffsetMillimetres.y)) mm", value: $model.viewOffsetMillimetres.y, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
+                    Stepper("View z \(ExampleModel.signed(measuredEyesShown?.midpointMillimetres.z ?? model.viewOffsetMillimetres.z)) mm", value: $model.viewOffsetMillimetres.z, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
                     Picker("Step", selection: $model.viewOffsetStep) {
                         Text("10 mm").tag(10)
                         Text("1 mm").tag(1)
@@ -646,7 +700,23 @@ struct ControlView: View {
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 180)
                 }
-                Text("The eyes the engine renders from: 63 mm apart at the device anchor, which RealityKit then shows from the device's TRACKED eyes it never tells the presenter about: some centimetres off the anchor by the fit, moving by millimetres with the gaze. The headset showed the difference as the kinks and the shimmer along the cubes' edges (parallax of cells at a wrong depth), 5 cm down lessening them and 5 cm up worsening them. Set the IPD and the view offset to the eyes line of ProceduralGeometry's stats window (each eye's mean from the anchor in millimetres: the IPD is the distance between the two, the offset their midpoint; x right, y up, z back).")
+                .disabled(measuredEyesShown != nil)
+                HStack(spacing: 24) {
+                    Button {
+                        Task { await measureEyes() }
+                    } label: {
+                        Label(model.eyeMeasurement == .running ? "Measuring the eyes…" : "Measure the eyes", systemImage: "eye")
+                    }
+                    .disabled(model.eyeMeasurement == .running)
+                    Toggle(model.measuredEyes.map { "Measured eyes (\($0.positionsDescription), \($0.frames) frames)" } ?? "Measured eyes (none kept for this device: measure them)", isOn: $model.useMeasuredEyes)
+                        .disabled(model.measuredEyes == nil)
+                }
+                if !model.eyeMeasurementNote.isEmpty {
+                    Text(model.eyeMeasurementNote)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Text("The eyes the engine renders from: a nominal pair, the IPD apart at the device anchor plus the view offset, while RealityKit shows the grids from the device's TRACKED eyes it never tells the presenter about: 25 mm below the anchor on the headset of 2026-10-27, moving by half a millimetre with the gaze. The difference is the kinks and the shimmer along the cubes' edges (parallax of cells at a wrong depth). Measure the eyes: the calibration space opens for a moment (a bare compositor layer, nothing drawn), reads the device's eye transforms for 60 frames, closes, and the presenter's space opens rendering from the measured pair, kept for this device; the toggle puts a kept measurement in force or leaves the steppers' pair in charge (the manual way: the IPD is the distance between the two measured eyes, the offset their midpoint; x right, y up, z back).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
@@ -673,7 +743,7 @@ struct ControlView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's. With the blended core (its toggle, or --blended-core, for the next space opened) the grids blend with their depth kept and there is no band and no alpha test along a silhouette: beside the control cube, the engine cubes' edges should hold as still as the control's if the shipped cut's rasterization was the shimmer, and still shimmer if it is the texture's own change from frame to frame; the gpu on the numbers line should read under the shipped core plus band (one pass over the grid instead of two). The IPD and the view offset (their steppers, or --ipd and --view-offset, for the next space opened) move the nominal eyes the engine renders from, while RealityKit shows the grids from the device's real eyes: if the kinks on the cube tops at rest and the waves under motion come from that difference, they must change with the IPD at 55 and 70 against 63 and with a few centimetres of offset along an axis, and the setting that flattens them says where the real eyes are; if a few centimetres change nothing, the eyes are not the cause.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's. With the blended core (its toggle, or --blended-core, for the next space opened) the grids blend with their depth kept and there is no band and no alpha test along a silhouette: beside the control cube, the engine cubes' edges should hold as still as the control's if the shipped cut's rasterization was the shimmer, and still shimmer if it is the texture's own change from frame to frame; the gpu on the numbers line should read under the shipped core plus band (one pass over the grid instead of two). The IPD and the view offset (their steppers, or --ipd and --view-offset, for the next space opened) move the nominal eyes the engine renders from, while RealityKit shows the grids from the device's real eyes: the headset settled it, the kinks on the cube tops at rest and the waves with the gaze are that difference. Measure the eyes (the button, or --measure-eyes at a launch): the calibration space reads the device's tracked eyes and the presenter's space opens rendering from them; the settings line says eyes measured L (…) R (…) mm. Beside the control cube, the middle cube's far edge should hold as straight and still as the control's at rest and while glancing; against the manual pair (the toggle off, the steppers at the same numbers) the two should look alike, and any residual is the eye tracker's loose z, the depth error at a sliver, or the gaze's own half millimetre.")
                     .foregroundStyle(.secondary)
             }
 
@@ -694,13 +764,47 @@ struct ControlView: View {
         .padding(28)
         .task {
             let arguments = CommandLine.arguments
-            if arguments.contains("--open-space") {
+            if arguments.contains("--measure-eyes") {
+                // The measurement first, which ends with the presenter's space open.
+                await measureEyes()
+            } else if arguments.contains("--open-space") {
                 await openImmersiveSpace(id: "presenter")
-                if arguments.contains("--hide-window") {
-                    dismissWindow(id: "control")
-                }
+            } else {
+                return
+            }
+            if arguments.contains("--hide-window") {
+                dismissWindow(id: "control")
             }
         }
+    }
+
+    /// The measurement the eye row shows greyed in its steppers: the kept one while it is in
+    /// force.
+    private var measuredEyesShown: MeasuredEyes? {
+        model.measuredEyesInForce ? model.measuredEyes : nil
+    }
+
+    /// The calibration: the presenter's space closed if it is open (one immersive space at a
+    /// time), the calibration space opened, the measurement awaited (the engine's helper on the
+    /// space's compositor layer, 60 frames), the space closed, the pair kept for this device
+    /// and put in force, and the presenter's space opened rendering from it.
+    private func measureEyes() async {
+        guard model.eyeMeasurement != .running else { return }
+        if model.spaceOpen {
+            await dismissImmersiveSpace()
+        }
+        model.eyeMeasurement = .running
+        model.eyeMeasurementNote = "Measuring the eyes in the calibration space…"
+        let opened = await openImmersiveSpace(id: "eyeCalibration")
+        guard case .opened = opened else {
+            model.eyeMeasurement = .idle
+            model.eyeMeasurementNote = "The calibration space did not open (\(String(describing: opened))); nothing measured."
+            return
+        }
+        let result = await model.awaitEyeMeasurement()
+        await dismissImmersiveSpace()
+        model.keepMeasuredEyes(result)
+        await openImmersiveSpace(id: "presenter")
     }
 }
 
