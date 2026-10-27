@@ -50,6 +50,28 @@ final class ExampleScene: @unchecked Sendable {
     private var wantedSphereRoughness: Float = 0.2
     private var appliedSphereRoughness: Float = 0.2
 
+    /// The lighting switches for the specks' test: the room's light estimate (the XR path's
+    /// environment lighting, its contribution 1 or 0 through `setXRLightingContribution`) and
+    /// the sun's strength (3 as the scene makes it, or 0.5, so the sphere's bottom is lit by
+    /// the room as RealityKit's sphere is). Applied on the engine's thread like the roughness.
+    private var sun: EntityID?
+    private var wantedRoomLighting = true
+    private var appliedRoomLighting = true
+    private var wantedSunStrength: Float = 3
+    private var appliedSunStrength: Float = 3
+
+    func setRoomLighting(_ on: Bool) {
+        lock.lock()
+        wantedRoomLighting = on
+        lock.unlock()
+    }
+
+    func setSunStrength(_ strength: Float) {
+        lock.lock()
+        wantedSunStrength = strength
+        lock.unlock()
+    }
+
     /// The sphere's roughness wanted (in force from the next frame).
     var sphereRoughness: Float {
         lock.lock()
@@ -127,6 +149,11 @@ final class ExampleScene: @unchecked Sendable {
         setEntityName(entityId: sun, name: "Sun")
         createDirLight(entityId: sun)
         setLight(entityId: sun, .strength(3))
+        lock.lock()
+        self.sun = sun
+        appliedSunStrength = 3
+        appliedRoomLighting = true
+        lock.unlock()
 
         swimProbe.start()
         lock.lock()
@@ -147,6 +174,7 @@ final class ExampleScene: @unchecked Sendable {
         lit = []
         taps = 0
         sphere = nil
+        sun = nil
         xr = nil
         lock.unlock()
     }
@@ -168,6 +196,27 @@ final class ExampleScene: @unchecked Sendable {
             updateMaterialRoughness(entityId: sphereEntity, roughness: roughness)
             lock.lock()
             appliedSphereRoughness = roughness
+            lock.unlock()
+        }
+        // The lighting switches wanted, applied here too.
+        lock.lock()
+        let room = wantedRoomLighting
+        let roomApplied = appliedRoomLighting
+        let strength = wantedSunStrength
+        let strengthApplied = appliedSunStrength
+        let sunEntity = sun
+        let engine = xr
+        lock.unlock()
+        if room != roomApplied, let engine {
+            engine.setXRLightingContribution(room ? 1 : 0)
+            lock.lock()
+            appliedRoomLighting = room
+            lock.unlock()
+        }
+        if let sunEntity, strength != strengthApplied {
+            setLight(entityId: sunEntity, .strength(strength))
+            lock.lock()
+            appliedSunStrength = strength
             lock.unlock()
         }
         lock.lock()

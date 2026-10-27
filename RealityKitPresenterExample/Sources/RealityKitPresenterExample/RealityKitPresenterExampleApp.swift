@@ -135,6 +135,21 @@ final class ExampleModel {
         didSet { scene.setSphereRoughness(sphereRoughness) }
     }
 
+    /// The room's light estimate on the engine's scene (the XR path's environment lighting),
+    /// live; off, the scene is lit by its own sun and sky alone, as on the Mac. The specks along
+    /// the sphere's lower edge survived every presenter setting and the roughness: if they go
+    /// with the estimate off, they are its reflection at the limb.
+    var roomLighting = true {
+        didSet { scene.setRoomLighting(roomLighting) }
+    }
+
+    /// The sun's strength, live: 3 as the scene makes it, or 0.5 so the sphere's shadowed bottom
+    /// is lit by the room as RealityKit's sphere is, which takes away the contrast the rim's
+    /// reflection stands out against.
+    var sunStrength: Float = 3 {
+        didSet { scene.setSunStrength(sunStrength) }
+    }
+
     var antiAliasing = ExampleModel.rememberedAntiAliasing() {
         didSet {
             if spaceOpen, antiAliasing != oldValue { scene.setAntiAliasing(antiAliasing) }
@@ -680,6 +695,16 @@ struct ControlView: View {
                 HStack(spacing: 24) {
                     Toggle("Swim probe", isOn: $model.swimProbe)
                     Toggle("Control cube and sphere (a plain RealityKit cube beside the engine's cubes and a sphere beside the engine's sphere, for the captures and the limb)", isOn: $model.controlCube)
+                }
+                HStack(spacing: 24) {
+                    Toggle("Room light estimate (live; off, the engine's scene is lit by its sun and sky alone)", isOn: $model.roomLighting)
+                    Picker("Sun", selection: $model.sunStrength) {
+                        Text("Sun 3").tag(Float(3))
+                        Text("Sun 0.5").tag(Float(0.5))
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 180)
                 }
                 HStack(spacing: 12) {
                     Text("Sphere roughness (live; the specks along its lower edge soften if they are the room's lights reflected at the glossy limb)")
