@@ -1,0 +1,289 @@
+//
+//  ExampleScene.swift
+//  RealityKitPresenterExample
+//
+//  A procedural scene with nothing to load: a slab 1.6 m ahead of where the session began,
+//  three cubes on it, a sphere above, a sun. A pinch on a cube lights it up, so that pinches
+//  reaching the engine through the presenter's input target can be seen. The scene is still, so
+//  that screenshots of one build compare with the next; `--turning` turns the cubes. The swim
+//  probe (`SwimProbe`, `--swim-probe` or the window) adds a cross locked to the room and a dot
+//  locked to the head, for judging the frame's lead.
+//
+
+import Foundation
+import simd
+import UntoldEngine
+import UntoldEngineXR
+
+final class ExampleScene: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cubes: [EntityID] = []
+    private var lit: Set<EntityID> = []
+    private var angle: Float = 0
+    private var taps = 0
+    /// Whether the cubes turn (the `--turning` launch argument); still by default, for
+    /// screenshots that compare.
+    let turning = CommandLine.arguments.contains("--turning")
+    /// The cross and the dot for judging the lead; on or off at any time.
+    let swimProbe = SwimProbe()
+    /// The engine, for the probe's head pose; held while the space is open.
+    private var xr: UntoldEngineXR?
+
+    var tapCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return taps
+    }
+
+    /// The engine's anti-aliasing wanted: set from the window (or at start), applied on the
+    /// engine's thread at the top of the next update, before the eyes are rendered, so that a
+    /// frame is built and presented under one mode (the renderer reads the mode several times
+    /// per frame; set from another thread mid-frame, one eye could mix two modes for a frame).
+    private var wantedAntiAliasing = ExampleAntiAliasing.msaa
+    /// The mode the engine's thread last applied (its own).
+    private var appliedAntiAliasing: ExampleAntiAliasing?
+    /// The sphere, for its roughness from the window: the specks along its lower edge on the
+    /// headset (2026-10-27) survive every presenter setting and the band off, so they are the
+    /// engine's own shading of the rim on the device, the room's light estimate reflected at
+    /// grazing angles by a glossy limb (roughness 0.2); a rougher sphere softens reflections.
+    private var sphere: EntityID?
+    private var wantedSphereRoughness: Float = 0.2
+    private var appliedSphereRoughness: Float = 0.2
+
+    /// The lighting switches: the room's light estimate (the XR runtime's lighting MODE,
+    /// `.realWorldEstimate` against `.staticIBL`: the engine's mode starts as the static
+    /// picture and nothing selects the estimate unless a game does, so until 2026-10-27 the
+    /// example's sphere was never lit by the room while RealityKit's control sphere was) and
+    /// the sun's strength (0 for parity with the control sphere, which RealityKit lights by
+    /// the room alone; 0.5 as a key light; 3 as the scene was first made). Applied on the
+    /// engine's thread like the roughness.
+    private var sun: EntityID?
+    private var wantedRoomLighting = true
+    private var appliedRoomLighting = false
+    private var wantedSunStrength: Float = 0
+    private var appliedSunStrength: Float = 3
+
+    func setRoomLighting(_ on: Bool) {
+        lock.lock()
+        wantedRoomLighting = on
+        lock.unlock()
+    }
+
+    func setSunStrength(_ strength: Float) {
+        lock.lock()
+        wantedSunStrength = strength
+        lock.unlock()
+    }
+
+    /// The sphere's roughness wanted (in force from the next frame).
+    var sphereRoughness: Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return wantedSphereRoughness
+    }
+
+    func setSphereRoughness(_ roughness: Float) {
+        lock.lock()
+        wantedSphereRoughness = roughness
+        lock.unlock()
+    }
+
+    /// The engine's anti-aliasing wanted (in force from the next frame).
+    var antiAliasing: ExampleAntiAliasing {
+        lock.lock()
+        defer { lock.unlock() }
+        return wantedAntiAliasing
+    }
+
+    /// Asks for the engine's anti-aliasing; from the window while the space is open, or at start.
+    func setAntiAliasing(_ mode: ExampleAntiAliasing) {
+        lock.lock()
+        wantedAntiAliasing = mode
+        lock.unlock()
+    }
+
+    /// Builds the scene and installs the callbacks: once, from the presenter view's `onReady`.
+    @MainActor
+    func start(_ xr: UntoldEngineXR) {
+        gameMode = true
+        InputSystem.shared.registerXREvents()
+        InputSystem.shared.setXRSpatialPickingBackendPreference(.octreeGPUPreferred)
+        // The engine's anti-aliasing for the presenter's frames (`--aa fxaa|smaa|msaa|taa|msaataa`),
+        // MSAA by default: of the modes, only MSAA leaves coverage in the alpha at a silhouette
+        // (quarter steps), which the presenter's edge band blends into a filtered edge; FXAA
+        // leaves one texel at a constant value and SMAA none.
+        setAntiAliasing(ExampleAntiAliasing.fromArguments())
+
+        // The ARKit origin is on the floor where the session began; the slab stands at table
+        // height 1.6 m ahead (-Z), the cubes on it, the sphere above.
+        let slab = createEntity()
+        setEntityName(entityId: slab, name: "Slab")
+        setEntityMeshDirect(entityId: slab, meshes: BasicPrimitives.createCube(extent: 1), assetName: "Slab")
+        scaleTo(entityId: slab, scale: simd_float3(1.2, 0.05, 0.6))
+        translateTo(entityId: slab, position: simd_float3(0, 0.9, -1.6))
+        updateMaterialRoughness(entityId: slab, roughness: 0.8)
+
+        var cubes: [EntityID] = []
+        for (index, x) in [Float(-0.35), 0, 0.35].enumerated() {
+            let cube = createEntity()
+            setEntityName(entityId: cube, name: "Cube\(index)")
+            setEntityMeshDirect(entityId: cube, meshes: BasicPrimitives.createCube(extent: 0.2), assetName: "Cube\(index)")
+            translateTo(entityId: cube, position: simd_float3(x, 1.025, -1.6))
+            rotateTo(entityId: cube, angle: Float(index) * 20 - 20, axis: simd_float3(0, 1, 0))
+            updateMaterialRoughness(entityId: cube, roughness: 0.4)
+            updateMaterialMetallic(entityId: cube, metallic: Float(index) * 0.4)
+            cubes.append(cube)
+        }
+        lock.lock()
+        self.cubes = cubes
+        lock.unlock()
+
+        let sphere = createEntity()
+        setEntityName(entityId: sphere, name: "Sphere")
+        setEntityMeshDirect(entityId: sphere, meshes: BasicPrimitives.createSphere(extent: 0.12), assetName: "Sphere")
+        translateTo(entityId: sphere, position: simd_float3(0, 1.45, -1.6))
+        updateMaterialRoughness(entityId: sphere, roughness: 0.2)
+        lock.lock()
+        self.sphere = sphere
+        appliedSphereRoughness = 0.2
+        lock.unlock()
+
+        let sun = createEntity()
+        setEntityName(entityId: sun, name: "Sun")
+        createDirLight(entityId: sun)
+        setLight(entityId: sun, .strength(3))
+        lock.lock()
+        self.sun = sun
+        appliedSunStrength = 3
+        appliedRoomLighting = false
+        lock.unlock()
+
+        swimProbe.start()
+        lock.lock()
+        self.xr = xr
+        lock.unlock()
+
+        xr.setupCallbacks(
+            gameUpdate: { [weak self] deltaTime in self?.update(deltaTime: deltaTime) },
+            handleInput: { [weak self] in self?.handleInput() }
+        )
+        setSceneReady(true)
+    }
+
+    func stop() {
+        swimProbe.stop()
+        lock.lock()
+        cubes = []
+        lit = []
+        taps = 0
+        sphere = nil
+        sun = nil
+        xr = nil
+        lock.unlock()
+    }
+
+    private func update(deltaTime: Float) {
+        // On the engine's thread, before this frame's eyes: the anti-aliasing wanted.
+        let wanted = antiAliasing
+        if wanted != appliedAntiAliasing {
+            setRendering(.antiAliasing(wanted.engineMode))
+            appliedAntiAliasing = wanted
+        }
+        // And the sphere's roughness wanted, applied on this thread too.
+        lock.lock()
+        let roughness = wantedSphereRoughness
+        let sphereEntity = sphere
+        let roughnessApplied = appliedSphereRoughness
+        lock.unlock()
+        if let sphereEntity, roughness != roughnessApplied {
+            updateMaterialRoughness(entityId: sphereEntity, roughness: roughness)
+            lock.lock()
+            appliedSphereRoughness = roughness
+            lock.unlock()
+        }
+        // The lighting switches wanted, applied here too.
+        lock.lock()
+        let room = wantedRoomLighting
+        let roomApplied = appliedRoomLighting
+        let strength = wantedSunStrength
+        let strengthApplied = appliedSunStrength
+        let sunEntity = sun
+        let engine = xr
+        lock.unlock()
+        if room != roomApplied, let engine {
+            engine.setXRLightingMode(room ? .realWorldEstimate : .staticIBL)
+            engine.setXRLightingContribution(1)
+            lock.lock()
+            appliedRoomLighting = room
+            lock.unlock()
+        }
+        if let sunEntity, strength != strengthApplied {
+            setLight(entityId: sunEntity, .strength(strength))
+            lock.lock()
+            appliedSunStrength = strength
+            lock.unlock()
+        }
+        lock.lock()
+        let xr = xr
+        lock.unlock()
+        if let xr { swimProbe.update(xr: xr) }
+        guard turning else { return }
+        angle += deltaTime * 0.5
+        lock.lock()
+        let cubes = cubes
+        lock.unlock()
+        for (index, cube) in cubes.enumerated() {
+            rotateTo(entityId: cube, angle: angle * (180 / .pi) * (index % 2 == 0 ? 1 : -1), axis: simd_float3(0, 1, 0))
+        }
+    }
+
+    private func handleInput() {
+        let state = InputSystem.shared.xrSpatialInputState
+        guard state.spatialTapActive, let picked = state.pickedEntityId else { return }
+        lock.lock()
+        guard cubes.contains(picked) else {
+            lock.unlock()
+            return
+        }
+        taps += 1
+        let on = !lit.contains(picked)
+        if on { lit.insert(picked) } else { lit.remove(picked) }
+        lock.unlock()
+        updateMaterialEmmisive(entityId: picked, emmissive: on ? simd_float3(2.0, 0.9, 0.2) : .zero)
+    }
+}
+
+/// The engine's anti-aliasing modes the example offers (`--aa`, and the window's picker).
+enum ExampleAntiAliasing: String, CaseIterable, Identifiable {
+    case fxaa, smaa, msaa, taa, msaataa
+
+    var id: String { rawValue }
+
+    /// The mode the launch arguments ask for (`--aa`), MSAA by default.
+    static func fromArguments() -> ExampleAntiAliasing {
+        guard let index = CommandLine.arguments.firstIndex(of: "--aa"), index + 1 < CommandLine.arguments.count,
+              let chosen = ExampleAntiAliasing(rawValue: CommandLine.arguments[index + 1].lowercased())
+        else { return .msaa }
+        return chosen
+    }
+
+    var label: String {
+        switch self {
+        case .fxaa: return "FXAA"
+        case .smaa: return "SMAA"
+        case .msaa: return "MSAA"
+        case .taa: return "TAA"
+        case .msaataa: return "MSAA+TAA"
+        }
+    }
+
+    var engineMode: AntiAliasingMode {
+        switch self {
+        case .fxaa: return .fxaa
+        case .smaa: return .smaa
+        case .msaa: return .msaa
+        case .taa: return .taa
+        case .msaataa: return .msaaTaa
+        }
+    }
+}

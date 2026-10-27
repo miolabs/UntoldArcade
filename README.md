@@ -142,6 +142,17 @@ The engine's comparison bench: a catalog of objects (a dartboard and four darts 
 open UntoldViewer/UntoldViewer.xcodeproj
 ```
 
+### 🪞 RealityKitPresenterExample — *visionOS · Engine frame shown by RealityKit*
+
+The engine renders every frame as it always does; a `RealityView` immersive space shows each eye on a grid displaced by the engine's own depth, instead of a `CompositorLayer`. The system then owns the space, and can add what a compositor layer never gets: Spatial Personas in a SharePlay session, native entities, SwiftUI attachments. The try-out of the engine's `UntoldEngineXRRealityKit` target (untoldengine/UntoldEngine#1371): a slab, three turning cubes and a sphere with nothing to load, a pinch lights a cube up, the presenter's numbers in the window.
+
+- `UntoldXRPresenterView` in the `ImmersiveSpace` where the other examples put a `CompositorLayer`; the game's scene and callbacks installed from its `onReady`
+- Mixed or full immersion; the frame's lead, the texture size and the grid density are the presenter's configuration (`RealityKitPresenterExample/README.md`)
+
+```bash
+open RealityKitPresenterExample/RealityKitPresenterExample.xcodeproj
+```
+
 ### 🏛️ ArchvizViewer — *visionOS*
 
 ![ArchvizViewer demo](docs/media/ArchvizViewer/demo.gif)
@@ -246,6 +257,7 @@ Each demo project depends on the Untold Engine via Swift Package Manager (SPM). 
 UntoldArcade/
 ├── CoolSaber/           # Rendering Extension — PSVR2 lightsaber duels + SharePlay
 ├── UntoldViewer/        # Engine vs RealityKit comparison bench (visionOS)
+├── RealityKitPresenterExample/  # visionOS — the engine's frame shown by RealityKit (Spatial Personas)
 ├── CoolWater/           # Rendering Extension — real-time animated water
 ├── CoolCloth/           # Rendering Extension — GPU cloth simulation (XPBD)
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
