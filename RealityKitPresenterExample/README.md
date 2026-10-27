@@ -41,6 +41,12 @@ silhouettes away from the gaze (the window's "Mip chain" toggle);
 `--tear 1000`, past the far shell, turns the placement off (every vertex on its own centre
 texel, no rims; the window's "Placement off" toggle), so with `--no-tears` the grid makes no
 per-frame decision at all and the alpha test alone draws the silhouette;
+`--silhouette-cells alpha` (or `skirt`, the default; the window's "Silhouette cells on the
+alpha crossing" toggle, live) places each rim vertex on the texture's alpha crossing at the
+surface's own depth and drops every cell stretched from there to the far shell, so the mesh
+boundary along a silhouette against the room is the texture's edge itself (the skirt, as
+shipped, pushes the rim vertex past the edge texel and leaves the stretched cells to the tear
+mask);
 `--lead 22` sets the fixed lead in milliseconds, `--adaptive-lead` (or `--fixed-lead`) chooses
 the measured lead and `--display-latency 16` its constant; `--swim-probe` shows the swim probe;
 `--control-cube` stands a plain RealityKit cube beside the engine's cubes, and a plain
@@ -188,6 +194,23 @@ of the grid's quality. Both are the headset's to judge.
   the measured eyes is what a fixed pair cannot carry (the eye tracker's loose z, the depth
   error at a sliver, the gaze's own half millimetre). In the simulator the layer gives one
   view, which is no pair: the measurement is said and not kept.
+- The silhouette cells (`--silhouette-cells alpha`, or the toggle, live): the headset's last
+  open thread (2026-10-27, the measured eyes in force): the engine sphere's limb beside the
+  control sphere's read as a polygon of cells whose segments breathed with the gaze, since
+  each cell straddling the limb carried the sphere's edge texels on a plane from the rim
+  vertex (on the edge texel, pushed outward by the skirt) to the far shell. With the alpha
+  crossing the kernel reads the eye's colour beside its depth and puts each rim vertex on the
+  one-half crossing of the filtered alpha along the line from its edge texel toward its own
+  centre, to a sixteenth of a texel, at the surface's depth, and writes every triangle from
+  a crossing vertex to the shell degenerate: the mesh boundary is the silhouette, a chord per
+  cell, which the device's multisampling resolves as it resolves the control sphere's. What
+  to read, beside the control sphere with the measured eyes: the engine sphere's limb at
+  rest and while glancing, the crossing against the skirt (a new space is not needed; the
+  settings line says `silhouette cells on the ALPHA CROSSING`). On the Mac
+  (XRPresenterEdgeWobbleTests) the crossing's outline lies half a display pixel inside the
+  skirt's (the chords' sagitta at the grid's 7.5-texel cells) and holds under an eye
+  displaced 3 mm as RealityKit's own sphere holds its; a rim vertex at an internal depth
+  jump (an opaque surface behind, no alpha crossing) keeps the skirt and its tears.
 - Close one eye at a time on the headset: the picture must be whole in each eye. A doubled
   picture means the eye material fell back (the window's material line says which).
 - A pinch on a cube lights it orange and the tap count rises: the space's pinches reach the

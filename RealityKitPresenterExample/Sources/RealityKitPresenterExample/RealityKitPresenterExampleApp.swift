@@ -26,7 +26,10 @@
 //  constant), `--tear 0.5` (metres; `--tear 1000`, past the shell, turns the placement off:
 //  every vertex on its own centre texel, no rims), `--no-tears` (the tear mask left zero: no
 //  cell across a depth jump is discarded, the placement unchanged; the test of the tear
-//  decision as the shimmer's mechanism), the presenter's own rasterization rate map with
+//  decision as the shimmer's mechanism), `--silhouette-cells alpha` (or `skirt`, the default:
+//  each rim vertex on the texture's alpha crossing at the surface's own depth with no cell
+//  stretched to the shell, against the shipped skirt past the edge texel; the stage 3 depth
+//  item for the limb's segments that breathed with the gaze), the presenter's own rasterization rate map with
 //  `--foveation equiangular` (or `none`); the engine's anti-aliasing with
 //  `--aa fxaa|smaa|msaa|taa|msaataa`; the pipeline's depth with `--pipeline-depth 2` (the
 //  default: the engine's frame starts a refresh earlier, so a frame stretched by up to a
@@ -166,6 +169,7 @@ final class ExampleModel {
         if !arguments.contains("--skirt"), let skirt = defaults.object(forKey: "skirtTexels") as? Float { settings.skirtTexels = skirt }
         if !arguments.contains("--tear"), let tear = defaults.object(forKey: "tearThresholdMetres") as? Float { settings.tearThresholdMetres = tear }
         if !arguments.contains("--no-tears"), let tears = defaults.object(forKey: "tears") as? Bool { settings.tears = tears }
+        if !arguments.contains("--silhouette-cells"), let cells = defaults.string(forKey: "silhouetteCells").flatMap(XRPresenterSilhouetteCells.init(rawValue:)) { settings.silhouetteCells = cells }
         if !arguments.contains("--lead"), let lead = defaults.object(forKey: "leadSeconds") as? Double { settings.leadSeconds = lead }
         if !arguments.contains("--adaptive-lead"), !arguments.contains("--fixed-lead"), let adaptive = defaults.object(forKey: "adaptiveLead") as? Bool { settings.adaptiveLead = adaptive }
         if !arguments.contains("--display-latency"), let latency = defaults.object(forKey: "displayLatencySeconds") as? Double { settings.displayLatencySeconds = latency }
@@ -179,6 +183,7 @@ final class ExampleModel {
         defaults.set(settings.skirtTexels, forKey: "skirtTexels")
         defaults.set(settings.tearThresholdMetres, forKey: "tearThresholdMetres")
         defaults.set(settings.tears, forKey: "tears")
+        defaults.set(settings.silhouetteCells.rawValue, forKey: "silhouetteCells")
         defaults.set(settings.leadSeconds, forKey: "leadSeconds")
         defaults.set(settings.adaptiveLead, forKey: "adaptiveLead")
         defaults.set(settings.displayLatencySeconds, forKey: "displayLatencySeconds")
@@ -503,6 +508,7 @@ final class ExampleModel {
         if let latency = value(after: "--display-latency").flatMap(Double.init) { configuration.displayLatencySeconds = latency / 1000 }
         if let tear = value(after: "--tear").flatMap(Float.init) { configuration.tearThresholdMetres = tear }
         if arguments.contains("--no-tears") { configuration.tears = false }
+        if let cells = value(after: "--silhouette-cells") { configuration.silhouetteCells = Self.silhouetteCells(named: cells) ?? configuration.silhouetteCells }
         if arguments.contains("--fixed-diagonal") { configuration.adaptiveDiagonal = false }
         if arguments.contains("--adaptive-diagonal") { configuration.adaptiveDiagonal = true }
         if arguments.contains("--no-edge-band") { configuration.edgeBlending = false }
@@ -516,6 +522,15 @@ final class ExampleModel {
             configuration.viewOffsetMetres = SIMD3<Float>(Float(mm.x), Float(mm.y), Float(mm.z)) / 1000
         }
         return configuration
+    }
+
+    /// `--silhouette-cells alpha|skirt`: the crossing by its name or the case's, the skirt by its.
+    static func silhouetteCells(named name: String) -> XRPresenterSilhouetteCells? {
+        switch name.lowercased() {
+        case "alpha", "crossing", "alpha-crossing", "alphacrossing": return .alphaCrossing
+        case "skirt": return .skirt
+        default: return nil
+        }
     }
 
     func spaceOpened(xr: UntoldEngineXR, presenter: XRRealityKitPresenter) {
@@ -580,7 +595,7 @@ final class ExampleModel {
             : "Eye material: the FALLBACK (both eyes see both grids). ")
             + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels)" } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels")
             + String(format: " (render scale %.2g, %.1f texels/° at the centre of view; %@). ", presenter.renderScale, presenter.centreTexelsPerDegree, presenter.mipmapped ? "MIP CHAIN, filtered to the device's rate" : "base level only")
-            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, \(Self.eyesDescription(c)), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
+            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, \(Self.eyesDescription(c)), \(s.silhouetteCells == .alphaCrossing ? "silhouette cells on the ALPHA CROSSING (skirt \(s.skirtTexels) texels where no crossing)" : "silhouette cells skirt \(s.skirtTexels) texels"), \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
@@ -677,6 +692,16 @@ struct ControlView: View {
                     Stepper("Lead \(Int((model.settings.leadSeconds * 1000).rounded())) ms", value: $model.settings.leadSeconds, in: 0 ... 0.06, step: 0.0055)
                 }
                 Toggle("Tears (the cells stretched across a depth jump discarded; off, the grid stays one surface and only the alpha test cuts the silhouette)", isOn: $model.settings.tears)
+                // The silhouette cells, live: the shipped skirt (a rim vertex on its edge texel
+                // pushed outward, the cells from there to the shell stretched across the jump),
+                // or each rim vertex on the texture's alpha crossing at the surface's own depth
+                // with no triangle from there to the shell, so the mesh boundary is the
+                // silhouette itself and the device's multisampling resolves it as it resolves
+                // the control sphere's.
+                Toggle("Silhouette cells on the alpha crossing (live: each rim vertex on the texture's edge at the surface's own depth, no cell stretched to the shell; off is the shipped skirt past the edge texel)", isOn: Binding(
+                    get: { model.settings.silhouetteCells == .alphaCrossing },
+                    set: { model.settings.silhouetteCells = $0 ? .alphaCrossing : .skirt }
+                ))
                 // The threshold's other job is the placement: a vertex lands on the texel nearest its
                 // centre among those within the threshold of its footprint's nearest depth, and is a
                 // rim (pushed by the skirt) when its own centre texel fails that limit. Past the shell
@@ -796,7 +821,7 @@ struct ControlView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("What to look for")
                     .font(.headline)
-                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's. With the blended core (its toggle, or --blended-core, for the next space opened) the grids blend with their depth kept and there is no band and no alpha test along a silhouette: beside the control cube, the engine cubes' edges should hold as still as the control's if the shipped cut's rasterization was the shimmer, and still shimmer if it is the texture's own change from frame to frame; the gpu on the numbers line should read under the shipped core plus band (one pass over the grid instead of two). The IPD and the view offset (their steppers, or --ipd and --view-offset, for the next space opened) move the nominal eyes the engine renders from, while RealityKit shows the grids from the device's real eyes: the headset settled it, the kinks on the cube tops at rest and the waves with the gaze are that difference. Measure the eyes (the button, or --measure-eyes at a launch): the calibration space reads the device's tracked eyes and the presenter's space opens rendering from them; the settings line says eyes measured L (…) R (…) mm. Beside the control cube, the middle cube's far edge should hold as straight and still as the control's at rest and while glancing; against the manual pair (the toggle off, the steppers at the same numbers) the two should look alike, and any residual is the eye tracker's loose z, the depth error at a sliver, or the gaze's own half millimetre.")
+                Text("Three cubes on a slab 1.6 m ahead, with a sphere above them (still, so screenshots compare; launch with --turning for motion). They must stay put while you move your head. Pinch a cube to light it up; the tap count rises. In Mixed the room shows around the slab; in Full it is dark. The swim probe puts a yellow cross in the room 1.5 m ahead of where you look when it comes on, and a cyan dot on your head the same distance ahead: turn your head. The cross must stay in the room, the dot in view; a dot that lags the turn and catches up when you stop says the lead is short, one that runs ahead says it is long. With the adaptive lead on, the display latency is the number to move until the dot holds still; the numbers line shows the lead in force. With the two-refresh pipeline, the late count during quick turns should fall to near zero (the plan is two refreshes, and the line says so) and the dot must still hold still with the lead one refresh longer; if it lags, the fixed lead or the display latency is what to move. With the render scale at 1.5×, the cubes' and the sphere's edges should lose the magnified staircase (the settings line says the texels per degree in force); watch the GPU and the late count on the numbers line, which the extra pixels raise. The control cube (its toggle, or --control-cube) is a plain RealityKit cube to the right of the engine's three, the same size and a like pale blue, drawn by the device's own render with no presenter between: capture both in one frame and measure its top edge with the engine cubes' by the same script. The same wobble on the control is the device's render or the capture; a straight control beside a wavy engine cube is the presenter's. With the blended core (its toggle, or --blended-core, for the next space opened) the grids blend with their depth kept and there is no band and no alpha test along a silhouette: beside the control cube, the engine cubes' edges should hold as still as the control's if the shipped cut's rasterization was the shimmer, and still shimmer if it is the texture's own change from frame to frame; the gpu on the numbers line should read under the shipped core plus band (one pass over the grid instead of two). The IPD and the view offset (their steppers, or --ipd and --view-offset, for the next space opened) move the nominal eyes the engine renders from, while RealityKit shows the grids from the device's real eyes: the headset settled it, the kinks on the cube tops at rest and the waves with the gaze are that difference. Measure the eyes (the button, or --measure-eyes at a launch): the calibration space reads the device's tracked eyes and the presenter's space opens rendering from them; the settings line says eyes measured L (…) R (…) mm. Beside the control cube, the middle cube's far edge should hold as straight and still as the control's at rest and while glancing; against the manual pair (the toggle off, the steppers at the same numbers) the two should look alike, and any residual is the eye tracker's loose z, the depth error at a sliver, or the gaze's own half millimetre. The silhouette cells (their toggle, or --silhouette-cells alpha, live): with the measured eyes in force, the engine sphere's limb beside the control sphere's, at rest and while glancing, with the alpha crossing against the shipped skirt; the skirt's limb read as a polygon of cells whose segments breathed with the gaze, and the crossing puts each rim vertex on the texture's edge at the surface's own depth with no cell stretched to the shell, so its limb should hold as the control's does, a chord per cell (about a quarter of a texel inside the circle at the grid's 7.5-texel cells).")
                     .foregroundStyle(.secondary)
             }
 
