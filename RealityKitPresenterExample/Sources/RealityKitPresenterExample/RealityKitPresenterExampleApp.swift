@@ -614,7 +614,21 @@ struct ControlView: View {
                     .foregroundStyle(.secondary)
                 Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
                 Toggle("Two-refresh pipeline (the engine's frame starts a refresh earlier, so a frame stretched by up to a refresh still lands on time; one refresh more lead)", isOn: $model.twoRefreshPipeline)
-                Toggle("Render scale 1.5× (each eye rendered at 2880×2736 instead of 1920×1824: more texels per degree than the display's pixels, so the engine's edge steps are no longer magnified; 2.25× the engine's pixels)", isOn: $model.renderScaleRaised)
+                // The render scale as a picker: 0.5 (960 × 912, 6.5 texels per degree at the
+                // centre) through 2 (3840 × 3648). The undersampling test of 2026-10-27: if the
+                // device's gaze-foveated raster undersamples the eye texture away from the gaze,
+                // 0.5 shimmers less (and blurs) and 2 shimmers more.
+                HStack(spacing: 12) {
+                    Text("Render scale (next space; 1 is the drawable size, 1920×1824)")
+                    Picker("Render scale", selection: $model.renderScale) {
+                        Text("0.5×").tag(Float(0.5))
+                        Text("1×").tag(Float(1))
+                        Text("1.5×").tag(Float(1.5))
+                        Text("2×").tag(Float(2))
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
                 Toggle("Blended core (the grids drawn blended with their depth kept and no band: no alpha test anywhere along a silhouette; off is the shipped cut with the band)", isOn: $model.blendedCore)
             }
 
