@@ -38,6 +38,11 @@ are placed as before, so it isolates the tear decision as a cause of the shimmer
 generated after each frame, with the graphs filtering between levels, so the device's
 gaze-foveated rasterization samples the texture at its own rate instead of aliasing the
 silhouettes away from the gaze (the window's "Mip chain" toggle);
+the window's lighting switches (live) set the engine's lighting on the device: "Room light
+estimate" selects ARKit's probe of the room as the engine's indirect light, which RealityKit
+gives its own content without being asked (off, the bundled picture and the sun alone, as the
+example was lit until 2026-10-27 and as on the Mac), and the sun's strength is 0 by default for
+parity with the control sphere, 0.5 as a key light, 3 as the scene was first made;
 `--tear 1000`, past the far shell, turns the placement off (every vertex on its own centre
 texel, no rims; the window's "Placement off" toggle), so with `--no-tears` the grid makes no
 per-frame decision at all and the alpha test alone draws the silhouette;

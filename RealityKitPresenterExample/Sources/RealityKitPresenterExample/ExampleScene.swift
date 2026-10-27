@@ -50,14 +50,17 @@ final class ExampleScene: @unchecked Sendable {
     private var wantedSphereRoughness: Float = 0.2
     private var appliedSphereRoughness: Float = 0.2
 
-    /// The lighting switches for the specks' test: the room's light estimate (the XR path's
-    /// environment lighting, its contribution 1 or 0 through `setXRLightingContribution`) and
-    /// the sun's strength (3 as the scene makes it, or 0.5, so the sphere's bottom is lit by
-    /// the room as RealityKit's sphere is). Applied on the engine's thread like the roughness.
+    /// The lighting switches: the room's light estimate (the XR runtime's lighting MODE,
+    /// `.realWorldEstimate` against `.staticIBL`: the engine's mode starts as the static
+    /// picture and nothing selects the estimate unless a game does, so until 2026-10-27 the
+    /// example's sphere was never lit by the room while RealityKit's control sphere was) and
+    /// the sun's strength (0 for parity with the control sphere, which RealityKit lights by
+    /// the room alone; 0.5 as a key light; 3 as the scene was first made). Applied on the
+    /// engine's thread like the roughness.
     private var sun: EntityID?
     private var wantedRoomLighting = true
-    private var appliedRoomLighting = true
-    private var wantedSunStrength: Float = 3
+    private var appliedRoomLighting = false
+    private var wantedSunStrength: Float = 0
     private var appliedSunStrength: Float = 3
 
     func setRoomLighting(_ on: Bool) {
@@ -152,7 +155,7 @@ final class ExampleScene: @unchecked Sendable {
         lock.lock()
         self.sun = sun
         appliedSunStrength = 3
-        appliedRoomLighting = true
+        appliedRoomLighting = false
         lock.unlock()
 
         swimProbe.start()
@@ -208,7 +211,8 @@ final class ExampleScene: @unchecked Sendable {
         let engine = xr
         lock.unlock()
         if room != roomApplied, let engine {
-            engine.setXRLightingContribution(room ? 1 : 0)
+            engine.setXRLightingMode(room ? .realWorldEstimate : .staticIBL)
+            engine.setXRLightingContribution(1)
             lock.lock()
             appliedRoomLighting = room
             lock.unlock()

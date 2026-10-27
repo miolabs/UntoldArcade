@@ -139,18 +139,18 @@ final class ExampleModel {
         didSet { scene.setSphereRoughness(sphereRoughness) }
     }
 
-    /// The room's light estimate on the engine's scene (the XR path's environment lighting),
-    /// live; off, the scene is lit by its own sun and sky alone, as on the Mac. The specks along
-    /// the sphere's lower edge survived every presenter setting and the roughness: if they go
-    /// with the estimate off, they are its reflection at the limb.
+    /// The room's light estimate on the engine's scene, live: the XR runtime's lighting mode,
+    /// ARKit's probe of the room as the indirect light (`.realWorldEstimate`), which RealityKit
+    /// gives its own content without being asked; off, the bundled picture and the sun alone
+    /// (`.staticIBL`), as the example was lit until 2026-10-27 and as on the Mac.
     var roomLighting = true {
         didSet { scene.setRoomLighting(roomLighting) }
     }
 
-    /// The sun's strength, live: 3 as the scene makes it, or 0.5 so the sphere's shadowed bottom
-    /// is lit by the room as RealityKit's sphere is, which takes away the contrast the rim's
-    /// reflection stands out against.
-    var sunStrength: Float = 3 {
+    /// The sun's strength, live: 0 for parity with the control sphere, which RealityKit lights
+    /// by the room alone; 0.5 as a key light; 3 as the scene was first made (a sunlit white top
+    /// and a shadowed bottom the room's reflection stood out against).
+    var sunStrength: Float = 0 {
         didSet { scene.setSunStrength(sunStrength) }
     }
 
@@ -723,14 +723,15 @@ struct ControlView: View {
                     Toggle("Control cube and sphere (a plain RealityKit cube beside the engine's cubes and a sphere beside the engine's sphere, for the captures and the limb)", isOn: $model.controlCube)
                 }
                 HStack(spacing: 24) {
-                    Toggle("Room light estimate (live; off, the engine's scene is lit by its sun and sky alone)", isOn: $model.roomLighting)
+                    Toggle("Room light estimate (live: ARKit's probe of the room lights the engine's scene, as RealityKit lights its own; off, the bundled picture and the sun alone, as on the Mac)", isOn: $model.roomLighting)
                     Picker("Sun", selection: $model.sunStrength) {
-                        Text("Sun 3").tag(Float(3))
+                        Text("Sun 0").tag(Float(0))
                         Text("Sun 0.5").tag(Float(0.5))
+                        Text("Sun 3").tag(Float(3))
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(maxWidth: 180)
+                    .frame(maxWidth: 240)
                 }
                 HStack(spacing: 12) {
                     Text("Sphere roughness (live; the specks along its lower edge soften if they are the room's lights reflected at the glossy limb)")
