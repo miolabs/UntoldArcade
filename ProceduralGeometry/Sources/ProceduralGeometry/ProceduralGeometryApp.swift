@@ -200,6 +200,16 @@ struct EngineStatsWindowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
 
+            // The eyes the frames were drawn from, in the device anchor's frame: each eye's
+            // mean position in millimetres (x right, y up, z back) with half its range since
+            // the stats were reset, and the distance between the two. On the headset these are
+            // the user's tracked eyes, which the RealityKit presenter never sees: its example's
+            // IPD and view offset are to be set to these numbers.
+            Text(store.eyesText)
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+
             ScrollView {
                 Text(store.advancedMode ? store.expandedText : store.compactText)
                     .font(.system(size: 12, design: .monospaced))

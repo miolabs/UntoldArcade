@@ -255,6 +255,9 @@ final class EngineStatsWindowStore: ObservableObject {
     /// The frames' stages of the last second (`formatEngineFrameStages`), for the window's
     /// own line.
     @Published private(set) var stagesText: String = ""
+    /// Where the frames' eyes have been from the device anchor (`formatEngineEyes`): the
+    /// tracked eyes the RealityKit presenter's nominal eyes are to be set to.
+    @Published private(set) var eyesText: String = ""
 
     private var timer: Timer?
 
@@ -277,5 +280,6 @@ final class EngineStatsWindowStore: ObservableObject {
         compactText = formatEngineStatsCompact(snapshot)
         expandedText = formatEngineStatsOverlay(snapshot)
         stagesText = formatEngineFrameStages(snapshot)
+        eyesText = formatEngineEyes(snapshot)
     }
 }
