@@ -42,6 +42,26 @@ final class ExampleScene: @unchecked Sendable {
     private var wantedAntiAliasing = ExampleAntiAliasing.msaa
     /// The mode the engine's thread last applied (its own).
     private var appliedAntiAliasing: ExampleAntiAliasing?
+    /// The sphere, for its roughness from the window: the specks along its lower edge on the
+    /// headset (2026-10-27) survive every presenter setting and the band off, so they are the
+    /// engine's own shading of the rim on the device, the room's light estimate reflected at
+    /// grazing angles by a glossy limb (roughness 0.2); a rougher sphere softens reflections.
+    private var sphere: EntityID?
+    private var wantedSphereRoughness: Float = 0.2
+    private var appliedSphereRoughness: Float = 0.2
+
+    /// The sphere's roughness wanted (in force from the next frame).
+    var sphereRoughness: Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return wantedSphereRoughness
+    }
+
+    func setSphereRoughness(_ roughness: Float) {
+        lock.lock()
+        wantedSphereRoughness = roughness
+        lock.unlock()
+    }
 
     /// The engine's anti-aliasing wanted (in force from the next frame).
     var antiAliasing: ExampleAntiAliasing {
@@ -98,6 +118,10 @@ final class ExampleScene: @unchecked Sendable {
         setEntityMeshDirect(entityId: sphere, meshes: BasicPrimitives.createSphere(extent: 0.12), assetName: "Sphere")
         translateTo(entityId: sphere, position: simd_float3(0, 1.45, -1.6))
         updateMaterialRoughness(entityId: sphere, roughness: 0.2)
+        lock.lock()
+        self.sphere = sphere
+        appliedSphereRoughness = 0.2
+        lock.unlock()
 
         let sun = createEntity()
         setEntityName(entityId: sun, name: "Sun")
@@ -122,6 +146,7 @@ final class ExampleScene: @unchecked Sendable {
         cubes = []
         lit = []
         taps = 0
+        sphere = nil
         xr = nil
         lock.unlock()
     }
@@ -132,6 +157,18 @@ final class ExampleScene: @unchecked Sendable {
         if wanted != appliedAntiAliasing {
             setRendering(.antiAliasing(wanted.engineMode))
             appliedAntiAliasing = wanted
+        }
+        // And the sphere's roughness wanted, applied on this thread too.
+        lock.lock()
+        let roughness = wantedSphereRoughness
+        let sphereEntity = sphere
+        let roughnessApplied = appliedSphereRoughness
+        lock.unlock()
+        if let sphereEntity, roughness != roughnessApplied {
+            updateMaterialRoughness(entityId: sphereEntity, roughness: roughness)
+            lock.lock()
+            appliedSphereRoughness = roughness
+            lock.unlock()
         }
         lock.lock()
         let xr = xr

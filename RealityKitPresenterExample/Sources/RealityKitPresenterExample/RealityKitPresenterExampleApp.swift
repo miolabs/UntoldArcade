@@ -128,6 +128,13 @@ final class ExampleModel {
     }
     /// The engine's anti-aliasing as the window shows it, at any time; asked of the scene when
     /// it changes, which applies it on the engine's thread before the next frame; remembered.
+    /// The engine sphere's roughness, live: 0.2 as the scene makes it, or rougher, the test of
+    /// the specks along its lower edge on the headset as reflections of the room's lights at a
+    /// glossy limb. Not remembered: 0.2 at each launch.
+    var sphereRoughness: Float = 0.2 {
+        didSet { scene.setSphereRoughness(sphereRoughness) }
+    }
+
     var antiAliasing = ExampleModel.rememberedAntiAliasing() {
         didSet {
             if spaceOpen, antiAliasing != oldValue { scene.setAntiAliasing(antiAliasing) }
@@ -673,6 +680,17 @@ struct ControlView: View {
                 HStack(spacing: 24) {
                     Toggle("Swim probe", isOn: $model.swimProbe)
                     Toggle("Control cube and sphere (a plain RealityKit cube beside the engine's cubes and a sphere beside the engine's sphere, for the captures and the limb)", isOn: $model.controlCube)
+                }
+                HStack(spacing: 12) {
+                    Text("Sphere roughness (live; the specks along its lower edge soften if they are the room's lights reflected at the glossy limb)")
+                    Picker("Sphere roughness", selection: $model.sphereRoughness) {
+                        Text("0.2").tag(Float(0.2))
+                        Text("0.6").tag(Float(0.6))
+                        Text("0.9").tag(Float(0.9))
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
                 }
                 Picker("Anti-aliasing", selection: $model.antiAliasing) {
                     ForEach(ExampleAntiAliasing.allCases) { mode in
