@@ -36,9 +36,10 @@
 //  refresh still lands on time, at the price of a refresh more lead) or `1`; the render scale
 //  with `--render-scale 1.5` (each eye rendered at 1.5 times the drawable size, 2880 × 2736,
 //  for more texels per degree than the display's pixels; `1`, the default, is the drawable
-//  size); the silhouette with `--blended-core` (the grids drawn blended with their depth
-//  kept and no band, so there is no alpha test along a silhouette) or `--cut-and-band` (the
-//  default: the alpha-tested core with the band over the cells along silhouettes); the eyes
+//  size); the silhouette with `--blended-core` (the default since 2026-10-27: the grids drawn
+//  blended with their depth kept and no band, so there is no alpha test along a silhouette
+//  and no band choosing cells on a curved one) or `--cut-and-band` (the chain as first shipped,
+//  the alpha-tested core with the band over the cells along silhouettes); the eyes
 //  the engine renders from with `--ipd 63` (millimetres between the nominal eyes) and
 //  `--view-offset x,y,z` (centimetres, decimals allowed; both eyes moved on the device: x right, y up, z back),
 //  the eye test for the kinks and waves along edges; `--measure-eyes` measures the device's
@@ -453,7 +454,7 @@ final class ExampleModel {
         let arguments = CommandLine.arguments
         if arguments.contains("--blended-core") { return true }
         if arguments.contains("--cut-and-band") { return false }
-        return UserDefaults.standard.bool(forKey: "blendedCore")
+        return (UserDefaults.standard.object(forKey: "blendedCore") as? Bool) ?? true
     }
 
     /// The configuration of the next space opened: the launch arguments', then the window's
@@ -815,7 +816,7 @@ struct ControlView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
-                Toggle("Blended core (the grids drawn blended with their depth kept and no band: no alpha test anywhere along a silhouette; off is the shipped cut with the band)", isOn: $model.blendedCore)
+                Toggle("Blended core (the default: the grids drawn blended with their depth kept and no band, no alpha test anywhere along a silhouette and no band choosing cells on a curved one; off is the cut-and-band chain as first shipped, for the next space opened)", isOn: $model.blendedCore)
             }
 
             VStack(alignment: .leading, spacing: 6) {
