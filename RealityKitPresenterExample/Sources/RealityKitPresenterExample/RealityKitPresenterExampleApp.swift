@@ -37,7 +37,7 @@
 //  kept and no band, so there is no alpha test along a silhouette) or `--cut-and-band` (the
 //  default: the alpha-tested core with the band over the cells along silhouettes); the eyes
 //  the engine renders from with `--ipd 63` (millimetres between the nominal eyes) and
-//  `--view-offset x,y,z` (centimetres, both eyes moved on the device: x right, y up, z back),
+//  `--view-offset x,y,z` (centimetres, decimals allowed; both eyes moved on the device: x right, y up, z back),
 //  the eye test for the kinks and waves along edges; `--mipmapped` (or `--no-mipmaps`) gives
 //  the eye textures a mip chain for the device's gaze-foveated raster to sample at its own
 //  rate. All but the grid, the rate map, the pipeline's depth, the render scale, the
@@ -177,26 +177,32 @@ final class ExampleModel {
         didSet { UserDefaults.standard.set(interpupillaryMillimetres, forKey: "interpupillaryMillimetres") }
     }
 
-    /// An offset of both nominal eyes on the device, centimetres along each axis of the device
+    /// An offset of both nominal eyes on the device, millimetres along each axis of the device
     /// anchor's frame (x to the right, y up, z back: forward is negative z), for the next
-    /// space opened; zero in use. The other half of the eye test: the IPD spreads the eyes,
-    /// this moves them together, so a real eye position off the anchor along an axis is found
-    /// by the offset along it that flattens the kinks, and an offset of a few centimetres that
-    /// changes nothing says the eyes are not the cause. `--view-offset x,y,z` (cm) at a
-    /// launch; remembered across launches otherwise.
-    var viewOffsetCentimetres = ExampleModel.viewOffsetFromArgumentsOrRemembered() {
+    /// space opened; zero in use. The headset settled it (2026-10-27): the kinks and the
+    /// shimmer along the engine cubes' edges are the parallax of cells at a wrong depth seen
+    /// from the device's TRACKED eyes, which sit off the anchor and move with the gaze, while
+    /// the engine renders from nominal eyes at the anchor; 5 cm down lessened them, 5 cm up
+    /// made them worse. The numbers to set here are the eyes line of ProceduralGeometry's
+    /// stats window (the Compositor path's per-view transforms, which RealityKit never gives
+    /// the presenter). `--view-offset x,y,z` (centimetres, decimals allowed) at a launch;
+    /// remembered across launches otherwise.
+    var viewOffsetMillimetres = ExampleModel.viewOffsetFromArgumentsOrRemembered() {
         didSet {
             let defaults = UserDefaults.standard
-            defaults.set(viewOffsetCentimetres.x, forKey: "viewOffsetCentimetresX")
-            defaults.set(viewOffsetCentimetres.y, forKey: "viewOffsetCentimetresY")
-            defaults.set(viewOffsetCentimetres.z, forKey: "viewOffsetCentimetresZ")
+            defaults.set(viewOffsetMillimetres.x, forKey: "viewOffsetMillimetresX")
+            defaults.set(viewOffsetMillimetres.y, forKey: "viewOffsetMillimetresY")
+            defaults.set(viewOffsetMillimetres.z, forKey: "viewOffsetMillimetresZ")
         }
     }
 
+    /// The view offset steppers' step, millimetres: 1 or 10.
+    var viewOffsetStep = 10
+
     /// The IPD's range, millimetres: the headset's own fitting range, about.
     static let interpupillaryRange = 50 ... 75
-    /// The view offset's range along each axis, centimetres.
-    static let viewOffsetRange = -5 ... 5
+    /// The view offset's range along each axis, millimetres.
+    static let viewOffsetRange = -80 ... 80
 
     static func interpupillaryFromArgumentsOrRemembered() -> Int {
         if let ipd = argument(after: "--ipd").flatMap(Double.init) {
@@ -209,16 +215,19 @@ final class ExampleModel {
         if let offset = argument(after: "--view-offset") {
             let parts = offset.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
             if parts.count == 3 {
-                let cm = parts.map { clamp(Int($0.rounded()), to: viewOffsetRange) }
-                return SIMD3<Int>(cm[0], cm[1], cm[2])
+                let mm = parts.map { clamp(Int(($0 * 10).rounded()), to: viewOffsetRange) }
+                return SIMD3<Int>(mm[0], mm[1], mm[2])
             }
         }
         let defaults = UserDefaults.standard
-        return SIMD3<Int>(
-            (defaults.object(forKey: "viewOffsetCentimetresX") as? Int) ?? 0,
-            (defaults.object(forKey: "viewOffsetCentimetresY") as? Int) ?? 0,
-            (defaults.object(forKey: "viewOffsetCentimetresZ") as? Int) ?? 0
-        )
+        // Remembered in millimetres; a value remembered in centimetres by an earlier build is
+        // taken over once.
+        func remembered(_ axis: String) -> Int {
+            if let mm = defaults.object(forKey: "viewOffsetMillimetres" + axis) as? Int { return mm }
+            if let cm = defaults.object(forKey: "viewOffsetCentimetres" + axis) as? Int { return clamp(cm * 10, to: viewOffsetRange) }
+            return 0
+        }
+        return SIMD3<Int>(remembered("X"), remembered("Y"), remembered("Z"))
     }
 
     static func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
@@ -238,9 +247,9 @@ final class ExampleModel {
     }
 
     /// The view offset as the row and the settings line name it: "none", or the three
-    /// centimetres with the axes' sense.
-    static func viewOffsetDescription(_ cm: SIMD3<Int>) -> String {
-        cm == .zero ? "none" : "(\(signed(cm.x)), \(signed(cm.y)), \(signed(cm.z))) cm (x right, y up, z back)"
+    /// millimetres with the axes' sense.
+    static func viewOffsetDescription(_ mm: SIMD3<Int>) -> String {
+        mm == .zero ? "none" : "(\(signed(mm.x)), \(signed(mm.y)), \(signed(mm.z))) mm (x right, y up, z back)"
     }
     /// Whether the next space opened draws each eye through the presenter's own equi-angular
     /// rasterization rate map: the same 1920 × 1824 physical pixels per eye spread evenly in
@@ -382,7 +391,7 @@ final class ExampleModel {
         }
         if nearShell { configuration.farShellMetres = 50 }
         configuration.interpupillaryDistance = Float(interpupillaryMillimetres) / 1000
-        configuration.viewOffsetMetres = SIMD3<Float>(Float(viewOffsetCentimetres.x), Float(viewOffsetCentimetres.y), Float(viewOffsetCentimetres.z)) / 100
+        configuration.viewOffsetMetres = SIMD3<Float>(Float(viewOffsetMillimetres.x), Float(viewOffsetMillimetres.y), Float(viewOffsetMillimetres.z)) / 1000
         configuration.foveation = rateMap ? .equiAngular : .none
         configuration.pipelineDepth = twoRefreshPipeline ? 2 : 1
         configuration.renderScale = renderScale
@@ -428,8 +437,8 @@ final class ExampleModel {
         if arguments.contains("--cut-and-band") { configuration.silhouette = .cutAndBand }
         if arguments.contains("--ipd") { configuration.interpupillaryDistance = Float(interpupillaryFromArgumentsOrRemembered()) / 1000 }
         if arguments.contains("--view-offset") {
-            let cm = viewOffsetFromArgumentsOrRemembered()
-            configuration.viewOffsetMetres = SIMD3<Float>(Float(cm.x), Float(cm.y), Float(cm.z)) / 100
+            let mm = viewOffsetFromArgumentsOrRemembered()
+            configuration.viewOffsetMetres = SIMD3<Float>(Float(mm.x), Float(mm.y), Float(mm.z)) / 1000
         }
         return configuration
     }
@@ -489,7 +498,7 @@ final class ExampleModel {
             : "Eye material: the FALLBACK (both eyes see both grids). ")
             + (presenter.foveation.map { "Rate map: screen \($0.screenSize.x)×\($0.screenSize.y) over \(presenter.textureSize.x)×\(presenter.textureSize.y) texels, cells of \($0.cellTexels)" } ?? "No rate map: \(presenter.textureSize.x)×\(presenter.textureSize.y) uniform texels")
             + String(format: " (render scale %.2g, %.1f texels/° at the centre of view; %@). ", presenter.renderScale, presenter.centreTexelsPerDegree, presenter.mipmapped ? "MIP CHAIN, filtered to the device's rate" : "base level only")
-            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, IPD \(Int((c.interpupillaryDistance * 1000).rounded())) mm, view offset \(Self.viewOffsetDescription(SIMD3<Int>(Int((c.viewOffsetMetres.x * 100).rounded()), Int((c.viewOffsetMetres.y * 100).rounded()), Int((c.viewOffsetMetres.z * 100).rounded())))), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
+            + "Grid \(presenter.grid.columns)×\(presenter.grid.rows), shell \(Int(c.farShellMetres)) m, IPD \(Int((c.interpupillaryDistance * 1000).rounded())) mm, view offset \(Self.viewOffsetDescription(SIMD3<Int>(Int((c.viewOffsetMetres.x * 1000).rounded()), Int((c.viewOffsetMetres.y * 1000).rounded()), Int((c.viewOffsetMetres.z * 1000).rounded())))), skirt \(s.skirtTexels) texels, \(s.adaptiveDiagonal ? "adaptive" : "fixed") diagonal, silhouette \(silhouetteDescription(presenter)), "
             + (s.adaptiveLead
                 ? "adaptive lead (display latency \(Int((s.displayLatencySeconds * 1000).rounded())) ms; fixed \(Int((s.leadSeconds * 1000).rounded())) ms until a frame completes), "
                 : "fixed lead \(Int((s.leadSeconds * 1000).rounded())) ms, ")
@@ -627,11 +636,17 @@ struct ControlView: View {
                     Stepper("IPD \(model.interpupillaryMillimetres) mm", value: $model.interpupillaryMillimetres, in: ExampleModel.interpupillaryRange, step: 1)
                 }
                 HStack(spacing: 24) {
-                    Stepper("View x \(ExampleModel.signed(model.viewOffsetCentimetres.x)) cm", value: $model.viewOffsetCentimetres.x, in: ExampleModel.viewOffsetRange, step: 1)
-                    Stepper("View y \(ExampleModel.signed(model.viewOffsetCentimetres.y)) cm", value: $model.viewOffsetCentimetres.y, in: ExampleModel.viewOffsetRange, step: 1)
-                    Stepper("View z \(ExampleModel.signed(model.viewOffsetCentimetres.z)) cm", value: $model.viewOffsetCentimetres.z, in: ExampleModel.viewOffsetRange, step: 1)
+                    Stepper("View x \(ExampleModel.signed(model.viewOffsetMillimetres.x)) mm", value: $model.viewOffsetMillimetres.x, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
+                    Stepper("View y \(ExampleModel.signed(model.viewOffsetMillimetres.y)) mm", value: $model.viewOffsetMillimetres.y, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
+                    Stepper("View z \(ExampleModel.signed(model.viewOffsetMillimetres.z)) mm", value: $model.viewOffsetMillimetres.z, in: ExampleModel.viewOffsetRange, step: model.viewOffsetStep)
+                    Picker("Step", selection: $model.viewOffsetStep) {
+                        Text("10 mm").tag(10)
+                        Text("1 mm").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 180)
                 }
-                Text("The eyes the engine renders from: 63 mm apart at the device anchor, which RealityKit then shows from the device's real eyes it never tells the presenter about. The view offset moves both nominal eyes on the device: x to the right, y up, z back (forward is negative z).")
+                Text("The eyes the engine renders from: 63 mm apart at the device anchor, which RealityKit then shows from the device's TRACKED eyes it never tells the presenter about: some centimetres off the anchor by the fit, moving by millimetres with the gaze. The headset showed the difference as the kinks and the shimmer along the cubes' edges (parallax of cells at a wrong depth), 5 cm down lessening them and 5 cm up worsening them. Set the IPD and the view offset to the eyes line of ProceduralGeometry's stats window (each eye's mean from the anchor in millimetres: the IPD is the distance between the two, the offset their midpoint; x right, y up, z back).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Toggle("Equi-angular rate map (the same pixels, denser at the centre of view; the grid becomes the map's)", isOn: $model.rateMap)
