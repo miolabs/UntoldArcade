@@ -23,19 +23,37 @@ let package = Package(
         .library(name: "CoolZombieKit", targets: ["CoolZombieKit"]),
     ],
     dependencies: [
+        // The miolabs fork's develop: the physics-pose seam, reach IK, the
+        // per-frame simulation step the headset needs. Package.resolved pins
+        // the commit.
         .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "develop"),
+        // The Jolt physics plugin: the room as static boxes on their own
+        // layer, the zombie as a character controller and a powered
+        // ragdoll. Those live on the fork's feature/ragdoll until upstream
+        // takes them. To work on the plugin and the demo together:
+        // `swift package edit UntoldJoltPhysics --path ../../UntoldJoltPhysics-ragdoll`.
+        .package(url: "https://github.com/miolabs/UntoldJoltPhysics.git", branch: "feature/ragdoll"),
     ],
     targets: [
         .target(
             name: "CoolZombieKit",
             dependencies: [
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
+                .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
             resources: [
                 .copy("Resources/Models"),
                 .copy("Resources/Animations"),
                 .copy("Resources/HDR"),
+                .copy("Resources/Rooms"),
             ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .testTarget(
+            name: "CoolZombieKitTests",
+            dependencies: ["CoolZombieKit"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]
