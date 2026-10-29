@@ -18,7 +18,7 @@ Requires the Untold Engine Blender add-on (untold_exporter) installed.
 
 100STYLE: Mason, Starke, Komura 2022 — CC BY 4.0 (https://www.ianxmason.com/100style/).
 """
-import bpy, os, sys, math, csv
+import bpy, csv, math, os, sys
 from mathutils import Matrix, Vector, Quaternion
 
 BLEND = os.environ.get("BLEND", os.path.expanduser("~/Projects/Untold/zombie.blend"))  # the ZombieAA rig + mesh
@@ -30,7 +30,8 @@ CLIPS = [c.split(":") for c in os.environ.get("CLIPS", "ID:s100_idle").split(","
 
 # source joint -> (target bone, source child used for the bone direction, target child)
 MAP = {
-    "Hips": ("pelvis", "Chest", "spine_01"),
+    # The pelvis direction aims at the second spine joint (see retarget_kimodo.py).
+    "Hips": ("pelvis", "Chest", "spine_02"),
     "Chest": ("spine_01", "Chest2", "spine_02"),
     "Chest2": ("spine_02", "Chest3", "spine_03"),
     "Chest4": ("spine_03", "Neck", "neck_01"),
@@ -69,6 +70,61 @@ def frame_cuts(kind):
                 a, b = row[f"{kind}_START"], row[f"{kind}_STOP"]
                 return int(a), int(b)
     raise SystemExit("no Frame_Cuts row")
+
+
+# Arms: the elbow stays in its anatomical plane. The Xsens zombie idle holds
+# both elbows 1.6 cm INSIDE the shoulder-to-wrist line (a locked, slightly
+# hyperextended hang), and a faithful transfer shows a broken elbow at arm's
+# length on a headset (2026-10-27). An elbow more than 60 degrees away from its
+# natural pole -- back and outward for a hanging arm, down and outward for a
+# raised one -- is turned about the shoulder-to-hand axis onto the pole: the
+# upper arm rotates about that axis, the forearm is re-aimed from the new elbow
+# to the same hand, and the hand keeps its position and orientation. A bend
+# that already lies within 60 degrees of the pole is left to the clip.
+def plane_the_elbows(M, yaw, sides=(("l", 1.0), ("r", -1.0)), min_offset=0.002, max_angle=math.radians(60)):
+    fwd = Vector((math.sin(yaw), -math.cos(yaw), 0.0))
+    up = Vector((0.0, 0.0, 1.0))
+    left = up.cross(fwd).normalized()
+    changed = 0
+    for side, sign in sides:
+        upper, lower, hand = f"upperarm_{side}", f"lowerarm_{side}", f"hand_{side}"
+        if upper not in M or lower not in M or hand not in M:
+            continue
+        S, E, H = M[upper].translation.copy(), M[lower].translation.copy(), M[hand].translation.copy()
+        axis = H - S
+        if axis.length < 1e-4:
+            continue
+        axis.normalize()
+        offset = (E - S) - axis * (E - S).dot(axis)
+        if offset.length < min_offset:
+            continue
+        pole = -fwd - 0.5 * up + 0.5 * sign * left
+        pole = pole - axis * pole.dot(axis)
+        if pole.length < 1e-4:
+            continue
+        pole.normalize()
+        o = offset.normalized()
+        angle = math.atan2(o.cross(pole).dot(axis), o.dot(pole))
+        if abs(angle) <= max_angle:
+            continue
+        # Where the elbow goes: around the shoulder-to-hand axis onto the pole.
+        new_elbow = S + Matrix.Rotation(angle, 3, axis) @ (E - S)
+        # How the bones get there: each by the smallest rotation that takes its
+        # old direction to its new one, a swing of a few degrees with no roll. A
+        # turn of the upper arm about the shoulder-to-hand axis moved the elbow
+        # the same way but, on a nearly straight arm, that axis is the bone's
+        # own: the upper arm spun about itself and the sleeve wrapped like a
+        # candy paper at the shoulder and the elbow (headset, 2026-10-27).
+        swing = (E - S).normalized().rotation_difference((new_elbow - S).normalized()).to_matrix().to_4x4()
+        upper_rot = swing @ M[upper].to_3x3().to_4x4()
+        upper_rot.translation = S
+        M[upper] = upper_rot
+        realign = (H - E).normalized().rotation_difference((H - new_elbow).normalized()).to_matrix().to_4x4()
+        lower_rot = realign @ M[lower].to_3x3().to_4x4()
+        lower_rot.translation = new_elbow
+        M[lower] = lower_rot
+        changed += 1
+    return changed
 
 
 def world_rest_dir(arm, bone_name, child_name):
@@ -203,10 +259,12 @@ for kind, name in CLIPS:
 
     # Pass 3: root/pelvis split and keyframes.
     out_frame = 1
+    replaned = 0
     for i, M in enumerate(solved):
         for tname in ORDER:
             M[tname].translation = M[tname].translation + Vector((0, 0, ground_shift))
         yaw = headings[i]
+        replaned += plane_the_elbows(M, yaw)
         root_rest = rest_local["root"]
         rp = root_xy[i]
         M["root"] = Matrix.Translation((rp.x, rp.y, 0.0)) @ Matrix.Rotation(yaw, 4, "Z") @ root_rest
@@ -226,6 +284,7 @@ for kind, name in CLIPS:
     bpy.context.scene.frame_start = 1; bpy.context.scene.frame_end = out_frame - 1
     bpy.context.scene.render.fps = FPS
     print(f"RETARGET {kind} -> {name}: source frames {start}-{stop} @60 -> {out_frame-1} frames @{FPS}, leg ratio {ratio:.3f}")
+    print(f"  elbows re-planed on {replaned} arm-frames")
 
     # Diagnostics: foot heights and travel.
     zs = []
