@@ -20,8 +20,9 @@ swift run CoolZombie
 macOS 14+. The package pins the engine to the miolabs fork's `develop`
 branch, and `Package.resolved` (the visionOS project keeps its own copy)
 records the exact commit (upstream 0.24.1 merged into the fork, the
-reach IK bend fix the elbows need and the per-frame simulation stepping
-the headset needs, as of 27 October 2026). Moving on is
+reach IK bend fix the elbows need, the per-frame simulation stepping
+the headset needs and the XR background GPU gate, as of 29 October
+2026). Moving on is
 `swift package update UntoldEngine` plus the same revision in the Xcode
 project's resolved file.
 
@@ -78,7 +79,8 @@ database rebuilds from whatever is loaded. The layout is:
 ```
 Sources/CoolZombieKit/Resources/
   Models/Zombie/Zombie.untold                 the zombie: skeleton + one skinned mesh
-  Models/Zombie/Textures/Zombie_BaseColor.png 4K atlas: face, body, clothes tiles
+  Models/Zombie/Zombie.cloth.json             the cloth sidecar: shirt and trousers proxies
+  Models/Zombie/Textures/Zombie_BaseColor.png 4K atlas: face, body, shoes, shirt + trousers tiles
   Models/Zombie/Textures/Zombie_Roughness.png
   Models/Zombie/Textures/Zombie_Normal.png
   Animations/<clip>/<clip>.untold             one folder per clip
@@ -87,46 +89,130 @@ Sources/CoolZombieKit/Resources/
 Texture paths inside a `.untold` resolve relative to the model file, so the
 `Textures/` folder must sit next to it.
 
-The model is the studio's own zombie (`Zombie_intact_blood_dirt.blend`,
-the artist's review scene). `Tools/blender/prep_zombie.py` turns that file
-into the game rig and cooks it: it keeps the final set (armature, skinned
-body, the fused skinned clothing, eyes), scales it to 1.75 m, renames the
-bones to the UE4-mannequin convention the clip pipeline and the ragdoll
-expect (`root/pelvis/spine_01..03/neck_01/head`, `clavicle_l/upperarm_l/
-lowerarm_l/hand_l`, `thigh_l/calf_l/foot_l/ball_l`, fingers) with the sides
-taken from the bones' positions, merges the two neck bones, re-skins the
-clothes with the body's weights (interpolated from the nearest skin face,
-and with every hand and finger weight removed, so shirt and skin bend as
-one and the rolled cuffs stay on the forearms instead of turning with the
-wrist), drops from body and clothes every weight of a bone more than
-25 cm away (the automatic weights left a little of the pelvis on the
+The model is the studio's own zombie (`Zombie_new_cloth.blend`, the
+artist's review file: nine scenes of garment variants, lights, cameras,
+render shells and cloth proxies). Two scenes matter. `Scene` holds the rig
+the demo has always used: the armature (53 bones), the skinned body
+(28,622 vertices, face and body materials) and the eyes, plus the old fused
+shirt-and-trousers mesh the prep no longer takes. `Intact Blood and Dirt
+Review` holds the new clothes, skinned to a copy of the armature with one
+extra bone (`Hips.001`, same head and direction as `Hips`): the shirt
+(`ZOMBIE_CLOTH.002`, 29,402 vertices) is a closed two-layer shell about a
+millimetre thick, outer and inner fabric joined by a rim at every opening,
+with seven buttons and fourteen bits of thread as separate islands; the
+trousers (`ZOMBIE_CLOTH.001`, 7,216 vertices) are two panels, front and
+back, whose side seams were never sewn, plus five closed belt loops; and
+`ZOMBIE_CLOTH.004` is the shoes and the belt loops of the old outfit, rigid
+skin. Each garment has its own 2048 (shirt) or 4096 (trousers) texture set.
+
+`Tools/blender/prep_zombie.py` turns that file into the game rig and cooks
+it. It checks the garments' armature against the rig (same rest pose, or it
+aborts) and folds `Hips.001` into `Hips`, keeps the set above only, scales
+it to 1.75 m, renames the bones to the UE4-mannequin convention the clip
+pipeline and the ragdoll expect (`root/pelvis/spine_01..03/neck_01/head`,
+`clavicle_l/upperarm_l/lowerarm_l/hand_l`, `thigh_l/calf_l/foot_l/ball_l`,
+fingers) with the sides taken from the bones' positions, merges the two
+neck bones, re-skins the shoes with the body's weights (interpolated from
+the nearest skin face, every hand and finger weight removed), and cleans
+the garments' own weights instead of replacing them — the panel masks the
+artist's cloth setup left as vertex groups (`skin`, `body`, `hair`,
+`Group`, `GROW`) go, hand weights go, every weight of a bone more than
+25 cm away goes (the automatic weights left a little of the pelvis on the
 wrists, which hang beside the hips in the bind pose, and with the arm
-raised that little was a 15 cm fin on the cuff), bakes the shape keys that
-give the face its zombie look, packs the
-face, body and clothes texture sets into one 4K atlas, removes the skin
-the clothes cover (a ray from each body face along its normal that meets
-the clothes within 4 cm; a one-face ring stays under every edge of the
-clothes, so a sleeve that lifts shows skin, not a hole — about a sixth of
-the body's faces go, and with them what poked through the shirt) and joins
-the three objects into one mesh of 44k vertices and 74k triangles with
-one opaque material (the alpha-masked hair cards and the cornea shell are
-dropped). One mesh, one material is not a choice of taste: the engine
-binds the animation per skinned mesh node, and the exporter splits a
-multi-material object into one node per material, so a split body would be
-animated once per part. `Tests/CoolZombieKitTests/ZombieModelTests.swift`
-holds the cooked model to this. The script writes the rig `.blend` the
-retarget tools take as `BLEND` and exports through the Untold add-on:
+raised that little was a 15 cm fin on the cuff), four influences at most,
+renormalised. The simulation pins its particles to these weights, so the
+sidecar carries the same numbers the skin draws.
+
+Then the garments become **simulation proxies**, which is also what the
+game draws until the render shell is bound to them. The trousers' two
+panels are sewn (a merge by distance of 0.5 mm over the boundary vertices
+only: 266 seam vertices, leaving one piece with three openings, the waist
+and two hems), every vertex inside the body or within 2 mm of it is pushed
+out along the body's normal to 2 mm (276 vertices, 60 of them inside the
+hips), and the piece is decimated to 2,999 vertices and 5,912 triangles
+(median edge 18.9 mm). The shirt is cut to the outer layer of its shell: a
+face is outer when its normal points away from the nearest body point,
+voted per smooth region rather than per face because under the arm a
+sleeve faces the torso and a rolled cuff faces every way; the rims, the
+buttons and the bits of thread go. The shirt is buttoned: its two front
+panels overlap by 14 mm at the placket, the left one in front, with the
+seven buttons in the overlap, but the panels are separate surfaces, so the
+outer layer has a slit from the hem to the collar, and a proxy with that
+slit would gape in the simulation and show the culled chest. The script
+sews it: the hidden panel is trimmed of the faces along its edge until it
+no longer reaches over the panel in front (74 faces), and its edge is
+welded onto the front panel's edge bottom to top (80 vertices moved
+1.4 to 17.5 mm, median 6.5), up to z 1.417 m where the two edges
+part into the collar's notch, which stays open; the front panel's placket
+hangs below the hem as a tab and stays part of the hem. That leaves one
+surface with four boundary loops — the collar, the hem and the two cuffs,
+the openings a buttoned shirt has — decimated to 3,995 vertices and 7,854
+triangles (median edge 17.4 mm). The decimation is the script's own
+shortest-edge-first collapse: a vertex on a boundary or a UV seam only
+slides along it, no face may get worse than it was, no edge ends up shorter
+than 8.5 mm or longer than 39 mm, no angle below 8°, and the UVs ride
+along, so the garments keep their textures (the placket seam is a UV seam
+between the two panels' islands). After it the influences are capped at
+four again (a vertex made by splitting a long edge inherits the groups of
+both ends) and every vertex, edge midpoint and face centre of both proxies
+is pushed to 2 mm off the body: a 40 mm chord over a thigh sags into the
+skin even when its ends stand off it (1072 edge and face middles lifted on
+the trousers before the decimation, more after). The full shirt shell with
+its buttons stays in the rig `.blend` as `Shirt_Render`, hidden and not
+exported, for the render-binding phase. The five belt loops of the new
+trousers stay undecimated and join the shoes as rigid skin.
+
+The textures go into one 4K atlas of 2048 tiles, as before: face, body and
+the old clothes (worn by the shoes) a tile each; the fourth tile holds the
+shirt and the trousers as two 1024 quarter tiles (the shirt's 2048 maps
+halved, the trousers' 4096 maps quartered — base colour, roughness and
+normal; the artist's metallic, height and emissive maps are not used), and
+two quarters stay free. The script bakes the shape keys that give the face
+its zombie look, removes the skin the clothes cover (a ray from each body
+face along its normal that meets the shirt proxy, the trousers proxy or the
+shoes within 4 cm; a one-face ring stays under every edge, the hands and
+wrists are never culled — 4,156 of the body's faces go) and joins body,
+eyes, shoes, belt loops and the two proxies into one mesh of 41.7k exported
+vertices and 72k triangles with one opaque material (the alpha-masked hair
+cards and the cornea shell are dropped). One mesh, one material is not a
+choice of taste: the engine binds the animation per skinned mesh node, and
+the exporter splits a multi-material object into one node per material, so
+a split body would be animated once per part.
+`Tests/CoolZombieKitTests/ZombieModelTests.swift` holds the cooked model to
+this.
+
+Beside the model the script writes `Zombie.cloth.json`, the cloth sidecar,
+in engine space (the exporter's axes: engine x, y, z is Blender x, z, −y):
+per garment the particles (the proxy vertices; the game binds them to the
+exported mesh by position, since the exporter splits a vertex on UV seams),
+the triangles wound consistently and, on the whole, counter-clockwise seen
+from outside — the rolled cuffs and the inside of the collar wrap back
+towards the arm and the neck, so the particles whose normal points at the
+body are listed (152 of the shirt's, 3 of the trousers') for the
+game to put their back-stop on the body side — the joints they hang on as
+the engine names them (`/root/pelvis/spine_01`), up to four influences per
+particle summing to one, how far each particle may stray from its skinned
+position (0 pins it: the shirt's collar loop and its one-ring, 100
+particles, the trousers' waist and its two-ring, 167; 5 mm down the
+shirt's buttoned front, where the buttons hold the panels to the chest;
+1 cm at the cuffs, 2 cm at the trousers' hems, 3 cm everywhere else), a 3 mm
+back-stop, the dominant joint, and the bind-pose joint matrices.
+`ZombieClothAsset.swift` decodes it; `ZombieClothAssetTests.swift` holds it
+to the export (every particle on an exported vertex within 0.2 mm, one piece
+per garment with its openings traced as closed boundary cycles — four for
+the shirt, three for the trousers — edges between 8 and 40 mm, consistent
+winding, no hand in the weights, the bind matrices equal to the model's).
+
+The script writes the rig `.blend` the retarget tools take as `BLEND` and
+exports through the Untold add-on:
 
 ```bash
-SRC=~/Downloads/Zombie_intact_blood_dirt.blend OUT_BLEND=~/Projects/Untold/zombie_bd.blend \
-/Applications/Blender.app/Contents/MacOS/Blender -b --python Tools/blender/prep_zombie.py
+SRC=~/Downloads/Zombie_new_cloth/Zombie_new_cloth.blend OUT_BLEND=~/Projects/Untold/zombie_bd.blend \
+/Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python Tools/blender/prep_zombie.py
 ```
 
-The artist's separate shirt and trousers (render meshes and their cloth
-simulation proxies, which carry bone weights and per-panel groups) are left
-out for now: they are for the cloth simulation, where the ragdoll's
-capsules become the colliders. Until then the fused clothing mesh is what
-the zombie wears.
+The exporter stages an `HDR/` side folder beside every export; it is not
+part of the asset and the script deletes it.
 
 ## License
 
