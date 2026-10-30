@@ -56,7 +56,7 @@ final class ZombieXRHolder: @unchecked Sendable {
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(phase: String, distance: Float, tracked: Bool, floor: Float, floorMeasured: Bool, clipSet: String, position: simd_float3, meshFloor: Float?, planeFloor: Float?, floorSource: String) {
+    func setDiagnostics(phase: String, distance: Float, tracked: Bool, floor: Float, floorMeasured: Bool, clipSet: String, position: simd_float3, meshFloor: Float?, planeFloor: Float?, floorSource: String, cloth: String) {
         lock.withLock {
             phaseStorage = phase
             distanceStorage = distance
@@ -68,8 +68,16 @@ final class ZombieXRHolder: @unchecked Sendable {
             meshFloorStorage = meshFloor
             planeFloorStorage = planeFloor
             floorSourceStorage = floorSource
+            clothStorage = cloth
         }
     }
+
+    /// The shirt simulation's short line (`ZombieCloth.summary`), empty
+    /// while it is not running: the headset's measurement of the skin feed,
+    /// the read-back and the step, with the state and the counters. The
+    /// game writes it every frame, so it is the cheap form, not the report.
+    var cloth: String { lock.withLock { clothStorage } }
+    private var clothStorage = ""
 
     /// Which estimate the floor in use came from ("mesh", "plane" or "assumed").
     var floorSource: String { lock.withLock { floorSourceStorage } }
@@ -241,6 +249,9 @@ func diagnosticsLine(_ holder: ZombieXRHolder) -> String {
     parts.append("room: \(holder.room)")
     if !holder.roomSaved.isEmpty {
         parts.append("saved \(holder.roomSaved)")
+    }
+    if !holder.cloth.isEmpty {
+        parts.append(holder.cloth)
     }
     return parts.joined(separator: " · ")
 }

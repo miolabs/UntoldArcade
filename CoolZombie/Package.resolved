@@ -1,5 +1,5 @@
 {
-  "originHash" : "0b0ceb81f9c5a99496e43dfe2709311c5320f30ca34847712ea45503836999d5",
+  "originHash" : "d23bebcf259fcad79849242eb94721d1ba4a18fbce391a4afa7c9a58d502b6bc",
   "pins" : [
     {
       "identity" : "joltphysics",
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/miolabs/UntoldJoltPhysics.git",
       "state" : {
-        "branch" : "feature/ragdoll",
-        "revision" : "8b084f5449968fc5308e31448fccf1c686999473"
+        "branch" : "feature/zombie_cloth",
+        "revision" : "9bce1bc0c61e02f07d4bde21a9f29edb9e062c41"
       }
     }
   ],

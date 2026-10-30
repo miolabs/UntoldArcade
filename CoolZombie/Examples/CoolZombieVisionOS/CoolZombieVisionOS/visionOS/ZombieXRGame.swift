@@ -69,6 +69,21 @@ final class ZombieXRGame: @unchecked Sendable {
         {
             autoThrowInterval = interval
         }
+        // The shirt's simulation, as in the sandbox: `-cloth off|skin|ragdoll`
+        // and `-clothIterations <n>`.
+        if let index = arguments.firstIndex(of: "-cloth"), index + 1 < arguments.count {
+            switch arguments[index + 1] {
+            case "off": configuration.cloth.enabled = false
+            case "skin": configuration.cloth.collisionModel = .skinOnly
+            case "ragdoll": configuration.cloth.collisionModel = .ragdollAndSkin
+            default: print("CoolZombie: unknown -cloth \(arguments[index + 1]); off, skin or ragdoll")
+            }
+        }
+        if let index = arguments.firstIndex(of: "-clothIterations"), index + 1 < arguments.count,
+           let iterations = UInt32(arguments[index + 1]), iterations > 0
+        {
+            configuration.cloth.iterationsPerStep = iterations
+        }
         roomSource = "detected"
         if let roomName {
             do {
@@ -318,7 +333,8 @@ final class ZombieXRGame: @unchecked Sendable {
             phase: phase, distance: game.distanceToPlayer, tracked: head != nil,
             floor: game.floorHeight, floorMeasured: session.floorHeight() != nil,
             clipSet: game.clipSet.rawValue, position: game.position, meshFloor: meshFloor,
-            planeFloor: session.floorHeight(), floorSource: session.floorHeight() == nil ? "assumed" : floorSource
+            planeFloor: session.floorHeight(), floorSource: session.floorHeight() == nil ? "assumed" : floorSource,
+            cloth: game.clothSummary ?? ""
         )
         // A body that should stand still and moved anyway: measured from where
         // it stood when it stopped, so a slow drift counts as much as a step,

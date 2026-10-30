@@ -132,10 +132,18 @@
         private var throwInterval: Float = 0
         private var throwClock: Float = 0
         private var throwCount = 0
+        /// `-resetEvery <seconds>`: back to the spawn point every so often,
+        /// for scripted runs — a fallen zombie stands up, a standing one
+        /// jumps, and whatever rides the body (the ragdoll, the shirt) is
+        /// re-seated.
+        private var resetInterval: Float = 0
+        private var resetClock: Float = 0
         private var layoutKeyWasDown = false
         private var targetAngle: Float = 0
         private var debugLog = false
         private var debugClock: Float = 0
+        private var clothClock: Float = 0
+        private var clothWrites = 0
     private var autoInspection: ZombieChaseGame.InspectionMode?
     private var autoInspected = false
     private var trackClock: Float = 0
@@ -159,6 +167,24 @@
                 } catch {
                     print("CoolZombie: could not load the room \(arguments[index + 1]) — \(error)")
                 }
+            }
+            // The shirt's simulation: `-cloth off|skin|ragdoll` (off leaves
+            // it body-skinned; skin hangs it on the skin alone, no
+            // collisions; ragdoll, the default, lets the parts, the balls
+            // and the floor meet it) and `-clothIterations <n>` for the
+            // solver.
+            if let index = arguments.firstIndex(of: "-cloth"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "off": configuration.cloth.enabled = false
+                case "skin": configuration.cloth.collisionModel = .skinOnly
+                case "ragdoll": configuration.cloth.collisionModel = .ragdollAndSkin
+                default: print("CoolZombie: unknown -cloth \(arguments[index + 1]); off, skin or ragdoll")
+                }
+            }
+            if let index = arguments.firstIndex(of: "-clothIterations"), index + 1 < arguments.count,
+               let iterations = UInt32(arguments[index + 1]), iterations > 0
+            {
+                configuration.cloth.iterationsPerStep = iterations
             }
             roomObstacles = room
             let walls = room.filter { ZombieRoom.isWall($0) }
@@ -206,6 +232,11 @@
                let interval = Float(arguments[index + 1]), interval > 0
             {
                 throwInterval = interval
+            }
+            if let index = arguments.firstIndex(of: "-resetEvery"), index + 1 < arguments.count,
+               let interval = Float(arguments[index + 1]), interval > 0
+            {
+                resetInterval = interval
             }
             if arguments.contains("-play") {
                 gameMode = true
@@ -438,6 +469,14 @@
                     game.throwBall(from: origin, toward: game.chestPosition, speed: throwCount % 2 == 1 ? 4 : 8)
                 }
             }
+            if resetInterval > 0, game.isReady {
+                resetClock += deltaTime
+                if resetClock >= resetInterval {
+                    resetClock = 0
+                    print("CoolZombie: scripted reset (\(String(describing: game.phase)))")
+                    reset()
+                }
+            }
             game.update(deltaTime: deltaTime, playerPosition: getPosition(entityId: target))
 
             // The tracking readouts ask the skeleton, which the entity lacks
@@ -446,6 +485,18 @@
             if debugLog, game.isReady {
                 debugClock += deltaTime
                 trackClock += deltaTime
+                clothClock += deltaTime
+                if clothClock >= 1, let cloth = game.cloth, cloth.isAttached {
+                    clothClock = 0
+                    print("CoolZombie: \(cloth.report)")
+                    // The wiring's own check: awake and in range, the shirt
+                    // is written every frame, so a count that stood still
+                    // for a second means the game stopped calling the cloth.
+                    if !cloth.isAsleep, !cloth.isBeyondRange, cloth.overrideWriteCount == clothWrites {
+                        print("CoolZombie: cloth WARNING: no override written in the last second while awake and in range")
+                    }
+                    clothWrites = cloth.overrideWriteCount
+                }
                 if trackClock >= 0.5, game.phase != .downed, let error = game.trackingError {
                     trackClock = 0
                     let arm = game.trackingErrors.filter { ["spine_03", "clavicle_l", "upperarm_l", "lowerarm_l", "hand_l"].contains($0.part) }

@@ -68,7 +68,10 @@ clips loaded):
   start, `-debugLog` prints the phase, positions and distance every two
   seconds, so `swift run CoolZombie -layout wall -play -debugLog` shows in
   its console whether the zombie goes around the wall, and adding
-  `-target behindWall` whether it ends up with its hands on it.
+  `-target behindWall` whether it ends up with its hands on it;
+  `-cloth off|skin|ragdoll` and `-clothIterations <n>` pick the shirt's
+  simulation (see Physics), `-resetEvery <seconds>` resets the zombie
+  every so often (a fallen one stands up).
 
 ## Assets
 
@@ -463,13 +466,91 @@ it out while the motor pulls it back, every frame — and that the fallen
 body lands on: the layer matrix follows the knock-down and the stand-up.
 The floor slab stays on the common layer, so the feet keep it either way.
 
+### Cloth: the shirt as a skinned soft body
+
+The artist's shirt is in the exported mesh, skinned to the body like the
+rest, and the cloth sidecar (`Zombie.cloth.json`, above) carries the same
+shirt as a particle proxy. `ZombieCloth` turns the proxy into a Jolt soft
+body skinned to the skeleton and worn over the ragdoll: at the reveal every
+particle is bound to the exported vertices at its position (within a fifth
+of a millimetre; the exporter splits a vertex on UV seams, so one particle
+drives several), the body is built at the bind pose and hard skinned onto
+the frame's pose before anything steps, and from then on Jolt keeps each
+particle within its slack of where the skin puts it (3 cm on the whole,
+5 mm down the buttoned front, 1 cm at the cuffs, pinned at the collar) and
+outside a back-stop 3 mm behind the skin — the body underneath — while the
+triangles' stretch, shear and bend constraints make it cloth. The frame
+runs: the animation composes the pose; the physics step begins and the
+cloth's `willStep` hook feeds that pose's joints to the skin (the pose the
+body is drawn with); Jolt steps; the game update puts the ragdoll's pose on
+the mesh and, last, the cloth reads the particles back, turns them into
+mesh space and writes them over the deformation pass's output for the
+vertices they drive (`setEntityDeformationOverride`), applied after the
+skinning and before the draws. The body moves to compute skinning for that
+(`setEntityDeformation(.lbs)`): the price of the override. A particle
+found off the sidecar, a joint the skeleton lacks or counts that disagree
+leave the garment body-skinned, logged once — nothing is driven wrong.
+
+Whenever the body is put somewhere rather than moved — the ragdoll
+re-seated on a pelvis jump or a stand-up (`ZombiePhysics.didReseat`), a
+reset, the bind-pose inspection entered or left — the cloth hard skins
+every particle onto its skinned position at rest, and the slack opens from
+nothing over a quarter of a second; in the bind pose it stays shut until
+the parts have reached the pose. A still body (no joint moved a
+millimetre in a frame, no particle faster than 2 cm/s, for half a second)
+puts the cloth to sleep: no feed, no override, the last override stays,
+until a joint moves or something moves the particles — asleep, only their
+positions are read each frame, so a ball through the hem of a sleeping
+shirt wakes it instead of denting Jolt's shirt under a frozen one. A
+frame's joint motion is measured against the last frame, not the last
+sub-step (a long frame runs as several on one displayed pose). Beyond 4 m
+from the player the slack is shut and the override cleared, so the shirt
+is the body's own skinning again while Jolt keeps the particles on the
+skin for the return (within 3.5 m: half a metre of hysteresis, so a
+player at the line does not flip it); a far body that stands still sleeps
+on its joints alone and stops feeding too. A particle that is not a
+number or 2 m from the pelvis hard skins the body (counted in the report).
+Jolt keeps solving the body through all of this (the plugin has no call
+to put a soft body to sleep): what the sleep and the range save is the
+feed, the read-back and the override, not the step.
+The cloth is on a collision layer of its own: the ragdoll's parts push it
+(one way, the cloth never pushes them), the balls dent it, the floor stops
+it, the controller walks through it (the pair is closed both ways), and the
+room's boxes meet it only while the body is down, like the ragdoll.
+`-cloth off|skin|ragdoll` picks the model on both hosts — off leaves the
+shirt body-skinned, `skin` hangs it on its skin alone on a layer nothing
+meets (the A/B), `ragdoll` (the default) collides as above — and
+`-clothIterations <n>` sets the solver's iterations (3). With `-debugLog`
+the sandbox prints the cloth's report every second (particles, pins, the
+slack multiplier, awake or asleep, the skin feed and read-back
+microseconds, the step interval, the farthest particle from its target)
+and warns when the override count stood still for a second while the
+cloth was awake and in range; the headset shows the short form (state,
+timings, counters) in the control window's footnote. A body that does not
+take the deformation component at the attach is refused like a stale
+sidecar, since the override's write is silent. Measured
+on the model as it is, the rig's torso capsules — sized for the old
+model — reach through the back of this shirt (the spine_03 capsule, radius
+0.14 at z −0.19, ends at z −0.33; the shirt's back is at −0.25) and push
+the back's particles 5 cm past their slack and keep them jittering against
+the skin (`ZombieClothTests` prints the figure per region; `-cloth skin`
+shows the shirt without it). And the shirt's skin weights jump from the
+upper arm to the spine across single edges at the armhole, so the
+arms-forward idle stretches those edges up to twenty times their rest
+length in the skinning; the cloth holds its rest lengths there and sits up
+to 14 cm from its skinned target under each arm — the report's `target<=`
+figure, with where it sits — until the seam's weights are graded or its
+slack widened in the sidecar.
+
 The package depends on the miolabs fork of the plugin at its
-`feature/ragdoll` branch (the character controller, the ragdoll, the
-environment boxes' layers) until upstream takes it; then the dependency
-goes back to the plugin's own URL. To work on the plugin and the demo
-together, `swift package edit UntoldJoltPhysics --path
-../../UntoldJoltPhysics-ragdoll` points the build at a local checkout, and
-`swift package unedit UntoldJoltPhysics` returns to the branch.
+`feature/zombie_cloth` branch (the character controller, the ragdoll, the
+environment boxes' layers, and the soft bodies skinned to a skeleton with
+their one-way contact against ragdoll parts and the normals read-back)
+until upstream takes it; then the dependency goes back to the plugin's own
+URL. To work on the plugin and the demo together, `swift package edit
+UntoldJoltPhysics --path ../../UntoldJoltPhysics-cloth` points the build
+at a local checkout, and `swift package unedit UntoldJoltPhysics` returns
+to the branch.
 
 ## visionOS (Apple Vision Pro)
 

@@ -58,6 +58,15 @@ public final class ZombiePhysics: @unchecked Sendable {
         /// controller and the balls always meet them. The floor slab stays on
         /// layer 0, so the feet keep the floor either way.
         public var roomLayer: UInt32 = 4
+        /// The cloth (`ZombieCloth`): the shirt meets the floor, the balls
+        /// and the ragdoll's parts, never the character controller (it
+        /// walks through the shirt it wears), and the room only when the
+        /// body is down, like the ragdoll.
+        public var clothLayer: UInt32 = 5
+        /// A layer nothing meets, in either direction: the cloth's when it
+        /// is to collide with nothing at all and hang on its skin alone
+        /// (`ZombieCloth.Configuration.CollisionModel.skinOnly`).
+        public var inertLayer: UInt32 = 6
         /// Joint friction of a knocked-down ragdoll, in newton metres. A
         /// limp body has next to none: with more, the chain freezes in
         /// whatever shape it lands in instead of collapsing.
@@ -127,6 +136,13 @@ public final class ZombiePhysics: @unchecked Sendable {
     /// While the zombie is down the controller stays away (the parts are
     /// the zombie now); a stand-up brings it back.
     public private(set) var characterSuspended = false
+    /// Called whenever the parts are put on the animation's pose at once
+    /// rather than driven there — a jump of the pelvis in `track` (a floor
+    /// snap, a respawn), a stand-up — so whatever else rides the body (the
+    /// cloth) can re-seat itself on the same frame. One closure: a party
+    /// chaining onto it keeps the one it found and calls it first, and
+    /// puts it back when it leaves. Frame thread.
+    public var didReseat: (() -> Void)?
 
     init(backend: JoltPhysicsBackend, configuration: Configuration) {
         self.backend = backend
@@ -177,7 +193,8 @@ public final class ZombiePhysics: @unchecked Sendable {
         var config = PhysicsCoordinator.shared.worldConfiguration()
         config.collisionLayerMatrix = Self.layerMatrix(
             characterLayer: configuration.characterLayer, ragdollLayer: configuration.ragdollLayer,
-            ballLayer: configuration.ballLayer, roomLayer: configuration.roomLayer, ragdollMeetsRoom: isDown
+            ballLayer: configuration.ballLayer, roomLayer: configuration.roomLayer,
+            clothLayer: configuration.clothLayer, inertLayer: configuration.inertLayer, ragdollMeetsRoom: isDown
         )
         // The coordinator keeps the configuration and hands it to the
         // registry's backend; a backend built without the registry (the
@@ -188,21 +205,30 @@ public final class ZombiePhysics: @unchecked Sendable {
         }
     }
 
-    /// The character never meets the ragdoll (the same body twice) nor the
-    /// balls (the parts take those); the ragdoll meets the room only when
-    /// `ragdollMeetsRoom` (the body is down); everything else meets
-    /// everything. The bridge opens a pair when either side's mask says so,
-    /// so a closed pair is cleared on both sides.
-    static func layerMatrix(characterLayer: UInt32, ragdollLayer: UInt32, ballLayer: UInt32, roomLayer: UInt32, ragdollMeetsRoom: Bool) -> [UInt32] {
+    /// The character never meets the ragdoll (the same body twice), the
+    /// balls (the parts take those) nor the cloth (the controller walks
+    /// through the shirt the body wears); the ragdoll and the cloth meet
+    /// the room only when `ragdollMeetsRoom` (the body is down); the inert
+    /// layer meets nothing; everything else meets everything. The bridge
+    /// opens a pair when either side's mask says so, so a closed pair is
+    /// cleared on both sides.
+    static func layerMatrix(characterLayer: UInt32, ragdollLayer: UInt32, ballLayer: UInt32, roomLayer: UInt32,
+                            clothLayer: UInt32, inertLayer: UInt32, ragdollMeetsRoom: Bool) -> [UInt32]
+    {
         var masks = Array(repeating: UInt32.max, count: 32)
-        masks[Int(characterLayer)] &= ~(UInt32(1) << ragdollLayer)
-        masks[Int(ragdollLayer)] &= ~(UInt32(1) << characterLayer)
-        masks[Int(characterLayer)] &= ~(UInt32(1) << ballLayer)
-        masks[Int(ballLayer)] &= ~(UInt32(1) << characterLayer)
-        if !ragdollMeetsRoom {
-            masks[Int(ragdollLayer)] &= ~(UInt32(1) << roomLayer)
-            masks[Int(roomLayer)] &= ~(UInt32(1) << ragdollLayer)
+        func close(_ a: UInt32, _ b: UInt32) {
+            masks[Int(a)] &= ~(UInt32(1) << b)
+            masks[Int(b)] &= ~(UInt32(1) << a)
         }
+        close(characterLayer, ragdollLayer)
+        close(characterLayer, ballLayer)
+        close(characterLayer, clothLayer)
+        if !ragdollMeetsRoom {
+            close(ragdollLayer, roomLayer)
+            close(clothLayer, roomLayer)
+        }
+        masks[Int(inertLayer)] = 0
+        for layer in masks.indices { masks[layer] &= ~(UInt32(1) << inertLayer) }
         return masks
     }
 
@@ -403,6 +429,7 @@ public final class ZombiePhysics: @unchecked Sendable {
                 // included, is put on the new pose, and this frame's targets
                 // are the pose itself: there is no motion to carry forward.
                 ragdoll.setPose(pose, resetVelocities: true)
+                didReseat?()
             } else {
                 for part in pose.indices where moved(part) < 0.3 {
                     target[part] = pose[part] * (previous[part].inverse * pose[part])
@@ -646,6 +673,7 @@ public final class ZombiePhysics: @unchecked Sendable {
             previousPose = pose
         }
         characterSuspended = false
+        didReseat?()
     }
 
     /// Lets the fallen body sleep once it has lain still for a while, so a
