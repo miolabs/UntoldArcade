@@ -238,6 +238,12 @@ public final class ZombieChaseGame: @unchecked Sendable {
     /// every frame around the game's own update. Frame thread, like the
     /// cloth itself: the host reads its state and counters there.
     public private(set) var cloth: ZombieCloth?
+    /// The sidecar, loaded once for every cloth built from it; nil until a
+    /// configuration with the cloth on asks for it.
+    private var clothAsset: ZombieClothAsset?
+    /// A new cloth configuration from the host (`setCloth`), applied on the
+    /// game thread.
+    private var clothRequest: ZombieCloth.Configuration?
     /// The body stays hidden from the mesh load until the first frame has
     /// posed it and placed the ragdoll on it.
     private var revealPending = false
@@ -272,13 +278,21 @@ public final class ZombieChaseGame: @unchecked Sendable {
         appliedFloorLevel = configuration.floorY
         spawnStorage = simd_float3(0, configuration.floorY, -configuration.spawnDistance)
         navigator = ZombieChaseGame.makeNavigator(configuration.obstacles, around: .zero, reach: configuration.spawnDistance)
-        if configuration.cloth.enabled {
-            do {
-                cloth = try ZombieCloth(asset: ZombieClothAsset.loadBundled(), configuration: configuration.cloth)
-            } catch {
-                print("CoolZombie: the cloth sidecar could not be loaded — \(error); the garments stay body-skinned")
-            }
+        if configuration.cloth.enabled, let asset = loadClothAsset() {
+            cloth = ZombieCloth(asset: asset, configuration: configuration.cloth)
         }
+    }
+
+    /// The bundled sidecar, once; nil, and one line, when it cannot be
+    /// read (the garments then stay body-skinned).
+    private func loadClothAsset() -> ZombieClothAsset? {
+        if let clothAsset { return clothAsset }
+        do {
+            clothAsset = try ZombieClothAsset.loadBundled()
+        } catch {
+            print("CoolZombie: the cloth sidecar could not be loaded — \(error); the garments stay body-skinned")
+        }
+        return clothAsset
     }
 
     /// Measured floor height in world space. The world origin's height is
@@ -455,6 +469,21 @@ public final class ZombieChaseGame: @unchecked Sendable {
             along = max(centre.y - origin.y, 0.5) / max(abs(d.y), 1e-3)
         }
         return origin + d * along
+    }
+
+    /// Replaces the shirt's simulation with the host's choice (the control
+    /// window's Cloth and Cloth quality pickers, the sandbox's dropdown):
+    /// the garments come off — the body's own skinning shows again — and,
+    /// unless the cloth is off, go back on with the new configuration,
+    /// rebuilt in Jolt (a change of iterations is a new body). Applied on
+    /// the game thread, at once on a revealed body; a cloth asked for
+    /// before the reveal goes on at it. Off takes the body back to its own
+    /// vertex-shader skinning (`ZombieCloth.detach` removes the deformation
+    /// component the attach added), so it is the launch's `-cloth off`, and
+    /// the footnote's frame line reads the compute path's price against it;
+    /// the next attach moves the body to compute skinning again.
+    public func setCloth(_ configuration: ZombieCloth.Configuration) {
+        lock.withLock { clothRequest = configuration }
     }
 
     /// The cloth's one-line report (`ZombieCloth.report`) while the shirt
@@ -810,6 +839,9 @@ public final class ZombieChaseGame: @unchecked Sendable {
                 // `updateDisplayWeights`'s call from the first frame on.
                 partWeights = Array(repeating: 1, count: physics.rig?.partCount ?? 0)
             }
+        }
+        if let request = lock.withLock({ defer { clothRequest = nil }; return clothRequest }) {
+            applyCloth(request)
         }
         for request in lock.withLock({ defer { throwRequests.removeAll() }; return throwRequests }) {
             let ball = props.throwBall(from: request.origin, velocity: request.velocity)
@@ -1317,12 +1349,30 @@ public final class ZombieChaseGame: @unchecked Sendable {
 
     /// The shirt onto the revealed body: bound to the mesh, built in the
     /// physics world over the placed ragdoll. The re-seats reach it through
-    /// `ZombiePhysics.didReseat`.
+    /// `ZombiePhysics.didReseat`. A shirt put on during the bind-pose
+    /// inspection waits for the parts like one that was there when it
+    /// began.
     private func attachCloth() {
         guard let cloth, !cloth.isAttached, let physics, let jointInfo else { return }
         if cloth.attach(entityId: zombie, physics: physics, jointInfo: jointInfo) {
+            if lock.withLock({ phaseStorage }) == .bindPose { cloth.setInspectionBindPose(true) }
             print("CoolZombie: \(cloth.report)")
         }
+    }
+
+    /// The host's new cloth configuration (`setCloth`): the old garments
+    /// off, the new ones on, now if the body is revealed. Game thread.
+    private func applyCloth(_ configuration: ZombieCloth.Configuration) {
+        cloth?.detach()
+        cloth = nil
+        guard configuration.enabled else {
+            print("CoolZombie: cloth off; the garments are body-skinned")
+            return
+        }
+        // The loader says why when it cannot.
+        guard let asset = loadClothAsset() else { return }
+        cloth = ZombieCloth(asset: asset, configuration: configuration)
+        if !revealPending { attachCloth() }
     }
 
     /// Stops a reaction or a stagger short: the parts go back to tracking.

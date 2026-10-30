@@ -86,6 +86,36 @@
             }
         }
 
+        /// The shirt's simulation, switched live like the headset's picker:
+        /// off (body-skinned), on its skin alone, or colliding with the
+        /// parts, the balls and the floor. The iterations stay the launch
+        /// argument's (`-clothIterations`).
+        enum ClothChoice: String, CaseIterable, Identifiable {
+            case off, skinOnly, ragdollAndSkin
+
+            var id: String { rawValue }
+
+            var title: String {
+                switch self {
+                case .off: return "Off"
+                case .skinOnly: return "Skin only"
+                case .ragdollAndSkin: return "Ragdoll and skin"
+                }
+            }
+
+            init(_ configuration: ZombieCloth.Configuration) {
+                self = !configuration.enabled ? .off : (configuration.collisionModel == .skinOnly ? .skinOnly : .ragdollAndSkin)
+            }
+
+            /// `configuration` with this choice applied.
+            func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
+                var result = configuration
+                result.enabled = self != .off
+                if self != .off { result.collisionModel = self == .skinOnly ? .skinOnly : .ragdollAndSkin }
+                return result
+            }
+        }
+
         /// How high the cube sits: near the floor, or at chest height as a
         /// stand-in for a person — the arms reach for it either way.
         enum TargetHeight: String, CaseIterable, Identifiable {
@@ -123,6 +153,9 @@
         private(set) var layout: Layout = .open
         private(set) var targetMode: TargetMode = .orbit
         private(set) var targetHeight: TargetHeight = .low
+        /// The cloth configuration in force (the dropdown's choice on top
+        /// of the launch arguments).
+        private(set) var clothConfiguration: ZombieCloth.Configuration
         private var targetKeyWasDown = false
         private var provoked = false
         private var clipKeyWasDown = false
@@ -168,24 +201,10 @@
                     print("CoolZombie: could not load the room \(arguments[index + 1]) — \(error)")
                 }
             }
-            // The shirt's simulation: `-cloth off|skin|ragdoll` (off leaves
-            // it body-skinned; skin hangs it on the skin alone, no
-            // collisions; ragdoll, the default, lets the parts, the balls
-            // and the floor meet it) and `-clothIterations <n>` for the
-            // solver.
-            if let index = arguments.firstIndex(of: "-cloth"), index + 1 < arguments.count {
-                switch arguments[index + 1] {
-                case "off": configuration.cloth.enabled = false
-                case "skin": configuration.cloth.collisionModel = .skinOnly
-                case "ragdoll": configuration.cloth.collisionModel = .ragdollAndSkin
-                default: print("CoolZombie: unknown -cloth \(arguments[index + 1]); off, skin or ragdoll")
-                }
-            }
-            if let index = arguments.firstIndex(of: "-clothIterations"), index + 1 < arguments.count,
-               let iterations = UInt32(arguments[index + 1]), iterations > 0
-            {
-                configuration.cloth.iterationsPerStep = iterations
-            }
+            // The shirt's simulation: `-cloth off|skin|ragdoll` and
+            // `-clothIterations <n>`, as on the headset.
+            configuration.cloth.apply(launchArguments: arguments)
+            clothConfiguration = configuration.cloth
             roomObstacles = room
             let walls = room.filter { ZombieRoom.isWall($0) }
             if !walls.isEmpty {
@@ -196,8 +215,22 @@
             game = ZombieChaseGame(configuration: configuration)
             // The physics world (the layouts' boxes, the zombie's character
             // controller) has to be installed before the first simulated
-            // frame; the registry keeps the first backend for good.
-            if let physics = ZombiePhysics.install() {
+            // frame; the registry keeps the first backend for good. The
+            // world's step is the Mac's (three sub-steps at 60 Hz, Jolt's
+            // own thread count) unless `-collisionSteps <n>` stands in for
+            // the headset's two or `-workerThreads <n>` is measured.
+            var physicsConfiguration = ZombiePhysics.Configuration()
+            if let index = arguments.firstIndex(of: "-collisionSteps"), index + 1 < arguments.count,
+               let steps = Int32(arguments[index + 1]), steps > 0
+            {
+                physicsConfiguration.collisionSteps = steps
+            }
+            if let index = arguments.firstIndex(of: "-workerThreads"), index + 1 < arguments.count,
+               let threads = Int32(arguments[index + 1]), threads >= 0
+            {
+                physicsConfiguration.workerThreads = threads
+            }
+            if let physics = ZombiePhysics.install(configuration: physicsConfiguration) {
                 game.attachPhysics(physics)
             }
             configureEngine()
@@ -333,6 +366,15 @@
 
         func setTargetHeight(_ height: TargetHeight) {
             targetHeight = height
+        }
+
+        var clothChoice: ClothChoice { ClothChoice(clothConfiguration) }
+
+        /// The dropdown's cloth choice: the game swaps the shirt's
+        /// simulation on its thread.
+        func setClothChoice(_ choice: ClothChoice) {
+            clothConfiguration = choice.apply(to: clothConfiguration)
+            game.setCloth(clothConfiguration)
         }
 
         private func cycleTargetMode() {

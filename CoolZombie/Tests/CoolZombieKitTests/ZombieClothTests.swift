@@ -47,6 +47,7 @@ final class ZombieClothTests: XCTestCase {
         var overrideWrites = 0
         var clears = 0
         var begins = 0
+        var ends = 0
         /// Whether the body takes the deformation component (the entity
         /// path can fail to).
         var acceptsOverride = true
@@ -75,6 +76,7 @@ final class ZombieClothTests: XCTestCase {
         }
 
         func clearOverride() { clears += 1 }
+        func endOverride() { ends += 1 }
     }
 
     /// The model's skeleton as the engine reports it: joint paths, parents
@@ -128,14 +130,15 @@ final class ZombieClothTests: XCTestCase {
 
         init(dt: Float, asset: ZombieClothAsset, joints: SkeletonJointInfo, configuration: ZombieCloth.Configuration = ZombieCloth.Configuration(),
              world: simd_float4x4 = ZombieClothTests.standing, ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil,
-             acceptsOverride: Bool = true, pose: [simd_float4x4]? = nil)
+             acceptsOverride: Bool = true, pose: [simd_float4x4]? = nil, collisionSteps: Int32 = 3)
         {
             self.dt = dt
             self.joints = joints
             shirt = asset.garment(named: "shirt")!
             var settings = JoltWorldSettings()
             settings.workerThreads = 0
-            settings.collisionSteps = 3
+            // The Mac's three sub-steps unless a test asks for the headset's two.
+            settings.collisionSteps = collisionSteps
             settings.maxKinematicStep = 1.0
             settings.maxKinematicSpeed = 6.0
             settings.minContactSpeed = 0.35
@@ -209,10 +212,12 @@ final class ZombieClothTests: XCTestCase {
     }
 
     private func makeHarness(configuration: ZombieCloth.Configuration = ZombieCloth.Configuration(), world: simd_float4x4 = ZombieClothTests.standing,
-                             ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil, pose: [simd_float4x4]? = nil) throws -> Harness
+                             ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil, pose: [simd_float4x4]? = nil,
+                             collisionSteps: Int32 = 3) throws -> Harness
     {
         guard let asset = Self.asset, let joints = Self.skeleton else { throw XCTSkip("Models/Zombie is not bundled") }
-        let harness = Harness(dt: dt, asset: asset, joints: joints, configuration: configuration, world: world, ragdoll: ragdoll, obstacles: obstacles, mesh: mesh, pose: pose)
+        let harness = Harness(dt: dt, asset: asset, joints: joints, configuration: configuration, world: world, ragdoll: ragdoll, obstacles: obstacles, mesh: mesh, pose: pose,
+                              collisionSteps: collisionSteps)
         XCTAssertTrue(harness.attached, "the shirt attached")
         return harness
     }
@@ -304,6 +309,27 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertEqual(refused.cloth.report, "cloth: none")
     }
 
+    /// Detached, the body is as it was before the cloth: the soft body out
+    /// of the world, the hooks off, the override cleared and the body back
+    /// on its own skinning — the compute path was the override's price, and
+    /// the pickers' Off reads that price against the frame.
+    func testDetachReturnsTheBodyToItsOwnSkinning() throws {
+        let h = try makeHarness(configuration: skinOnly)
+        h.frames(5)
+        let writes = h.body.overrideWrites, feeds = h.cloth.skinFeedCount
+        XCTAssertEqual(h.body.begins, 1)
+        XCTAssertEqual(h.body.ends, 0)
+        h.cloth.detach()
+        XCTAssertFalse(h.cloth.isAttached)
+        XCTAssertEqual(h.cloth.report, "cloth: none")
+        XCTAssertEqual(h.body.clears, 1, "the override is cleared")
+        XCTAssertEqual(h.body.ends, 1, "and the body is back on its own skinning")
+        XCTAssertEqual(h.physics.backend.bodyCount, 1 + 20, "the soft body is out of the world")
+        h.frames(5)
+        XCTAssertEqual(h.body.overrideWrites, writes, "nothing is written after the detach")
+        XCTAssertEqual(h.cloth.skinFeedCount, feeds, "and the step no longer feeds the skin")
+    }
+
     // MARK: - Following the skin
 
     /// On the default model: the fitted capsules under the shirt leave it on
@@ -390,6 +416,57 @@ final class ZombieClothTests: XCTestCase {
             XCTAssertEqual(h.cloth.runawayCount, 0)
             print("cloth sway 3 s, \(label): worst excess \(worstFree) m, pins \(worstPins) m, parts lag up to \(worstLag) m (\(laggingPart)); \(h.cloth.report)")
         }
+    }
+
+    /// The headset steps its Jolt world twice per 10 ms frame
+    /// (`ZombiePhysics.Configuration.collisionSteps` 2 in the visionOS
+    /// host; this harness, like the Mac, runs three), and the Mac's
+    /// two-sub-step measurements split a 16.7 ms frame into 8.3 ms
+    /// sub-steps — past the motors' 8 ms bound — so they say what the step
+    /// costs and nothing about the fit. The device's own cadence, 5 ms
+    /// sub-steps at 100 Hz, on the default model: the idle shirt and the
+    /// pins within the slack, the parts at rest within the idle test's
+    /// bounds, and the sway within the ragdoll model's 2 cm.
+    func testTheDeviceTwoSubStepsKeepTheShirtWithinItsSlack() throws {
+        let idle = try makeHarness(collisionSteps: 2)
+        idle.frames(200)
+        let excess = idle.excess()
+        XCTAssertTrue(excess.finite)
+        XCTAssertLessThan(excess.free, 0.005, "two sub-steps: a particle strayed \(excess.free) m past its slack at rest")
+        XCTAssertLessThan(excess.pins, 1e-3, "two sub-steps: a pin is \(excess.pins) m off the skin")
+        XCTAssertEqual(idle.cloth.skinMultiplier, 1)
+        let errors = idle.physics.trackingErrors(jointModelTransforms: idle.body.pose, entityWorld: idle.body.world)
+        let bounds: [(prefix: String, bound: Float)] = [("pelvis", 0.001), ("spine", 0.01), ("neck", 0.02), ("head", 0.03), ("clavicle", 0.02), ("upperarm", 0.02),
+                                                         ("lowerarm", 0.02), ("hand", 0.04), ("thigh", 0.005), ("calf", 0.005), ("foot", 0.005)]
+        for error in errors.sorted(by: { $0.part < $1.part }) {
+            let bound = try XCTUnwrap(bounds.first { error.part.hasPrefix($0.prefix) }?.bound, error.part)
+            XCTAssertLessThan(error.distance, bound, "two sub-steps: \(error.part) rests \(error.distance) m off its joint")
+        }
+        print("cloth idle 2 s, two sub-steps: worst excess \(excess.free) m, pins \(excess.pins) m; rest errors "
+            + errors.sorted { $0.distance > $1.distance }.prefix(4).map { String(format: "%@ %.3f", $0.part, $0.distance) }.joined(separator: ", ")
+            + "; \(idle.cloth.report)")
+
+        let sway = try makeHarness(collisionSteps: 2)
+        var worstFree: Float = -1, worstPins: Float = 0, worstLag: Float = 0
+        var laggingPart = ""
+        for frame in 0 ..< 300 {
+            let t = sway.time + sway.dt
+            sway.body.pose = sway.pose(offset: SIMD3(0.1 * sin(2 * Float.pi * t), 0, 0))
+            sway.frame()
+            if frame % 10 == 9 {
+                let excess = sway.excess()
+                XCTAssertTrue(excess.finite, "two sub-steps, frame \(frame): a particle is NaN")
+                worstFree = max(worstFree, excess.free)
+                worstPins = max(worstPins, excess.pins)
+                if let lag = sway.physics.trackingError(jointModelTransforms: sway.body.pose, entityWorld: sway.body.world), lag.distance > worstLag {
+                    worstLag = lag.distance; laggingPart = lag.part
+                }
+            }
+        }
+        XCTAssertLessThan(worstFree, 0.02, "two sub-steps: a particle strayed \(worstFree) m past its slack while the parts lagged \(worstLag) m")
+        XCTAssertLessThan(worstPins, 1e-3, "two sub-steps: a pin came \(worstPins) m off the skin during the sway")
+        XCTAssertEqual(sway.cloth.runawayCount, 0)
+        print("cloth sway 3 s, two sub-steps: worst excess \(worstFree) m, pins \(worstPins) m, parts lag up to \(worstLag) m (\(laggingPart)); \(sway.cloth.report)")
     }
 
     func testAPelvisJumpReseatsTheShirtOnTheNewPose() throws {
@@ -550,23 +627,94 @@ final class ZombieClothTests: XCTestCase {
     /// the cloth sleeps.
     func testAStillBodyPutsTheClothToSleepAndAMovingJointWakesIt() throws {
         let h = try makeHarness(configuration: skinOnly)
+        XCTAssertTrue(h.cloth.isSoftBodyActive(ofGarment: 0), "awake, Jolt has the body")
         h.frames(250)
         XCTAssertTrue(h.cloth.isAsleep, "a still body for 2.5 s: asleep (\(h.cloth.report))")
+        XCTAssertFalse(h.cloth.isSoftBodyActive(ofGarment: 0), "and the body is asleep in Jolt: the step skips it")
         let writes = h.body.overrideWrites, feeds = h.cloth.skinFeedCount
         XCTAssertLessThan(writes, 250, "the writes stopped before the 2.5 s were up")
+        let resting = h.particles
         h.frames(50)
         XCTAssertEqual(h.body.overrideWrites, writes, "asleep, nothing is written")
         XCTAssertEqual(h.cloth.skinFeedCount, feeds, "nor fed")
+        XCTAssertFalse(h.cloth.isSoftBodyActive(ofGarment: 0), "nothing woke the body")
+        XCTAssertEqual(h.particles, resting, "and not a particle moved")
         // A centimetre of motion wakes it.
         h.body.pose = h.pose(offset: SIMD3(0.01, 0, 0))
         h.frame()
         XCTAssertFalse(h.cloth.isAsleep)
+        XCTAssertTrue(h.cloth.isSoftBodyActive(ofGarment: 0), "awake, Jolt has the body again")
         XCTAssertEqual(h.body.overrideWrites, writes + 1, "awake, the override is written again")
         XCTAssertEqual(h.cloth.skinFeedCount, feeds + 1, "and the skin is fed again")
         h.frames(20)
         XCTAssertEqual(h.body.overrideWrites, writes + 21)
         XCTAssertLessThan(h.excess().free, 0.005)
         print("cloth sleep: asleep after \(writes) frames; \(h.cloth.report)")
+    }
+
+    /// Asleep, nothing moves the shirt's particles any more (the body is
+    /// out of Jolt's step, on a layer the parts do not meet), so the joints
+    /// alone can wake it — and a body creeping under the threshold every
+    /// frame never would, while its frozen override drifted off it. A
+    /// sleeping cloth measures the joints from where they stood when it
+    /// fell asleep as well: 0.4 mm a frame wakes it on the third frame.
+    func testAJointCreepingUnderTheThresholdWakesTheSleepingCloth() throws {
+        let h = try makeHarness(configuration: skinOnly)
+        h.frames(250)
+        XCTAssertTrue(h.cloth.isAsleep, "a still body for 2.5 s: asleep (\(h.cloth.report))")
+        let writes = h.body.overrideWrites
+        var offset = SIMD3<Float>.zero
+        var wokeAfter: Int?
+        for frame in 0 ..< 30 {
+            offset.x += 0.0004
+            h.body.pose = h.pose(offset: offset)
+            h.frame()
+            if wokeAfter == nil, !h.cloth.isAsleep { wokeAfter = frame + 1 }
+        }
+        let woke = try XCTUnwrap(wokeAfter, "a body creeping 0.4 mm a frame never woke the cloth")
+        XCTAssertLessThanOrEqual(woke, 3, "the cloth woke after \(woke) frames of 0.4 mm: 1 mm from where it fell asleep")
+        XCTAssertFalse(h.cloth.isAsleep, "and stays awake while the body moves")
+        XCTAssertTrue(h.cloth.isSoftBodyActive(ofGarment: 0), "Jolt has the body again")
+        XCTAssertEqual(h.body.overrideWrites, writes + 30 - (woke - 1), "the override was written from the wake on")
+        XCTAssertLessThan(h.excess().free, 0.005)
+        print("cloth creep: woke after \(woke) frames of 0.4 mm; \(h.cloth.report)")
+    }
+
+    /// With the ragdoll's parts inside the shirt, Jolt alone would wake the
+    /// sleeping body every step (an awake rigid body in a sleeping soft
+    /// body's bounds activates it): the resting layer closes the parts out,
+    /// so the sleep holds over the powered ragdoll — the headset's case —
+    /// and the body comes back on its own layer when the joints move. The
+    /// particles are taken out of the rule here (an infinite speed
+    /// threshold), so the joints alone decide: over the resting parts the
+    /// cuffs never go still by the 2 cm/s rule — the forearms and hands hang
+    /// a finger's width off their joints and keep the cuff particles moving
+    /// at 3 to 8 cm/s once settled (`testTheCapsuleFitOnTheDefaultModel`
+    /// has the fit) — so the rule as configured sleeps the shirt on its
+    /// skin alone, out of range, or once the parts themselves sleep.
+    func testTheSleepHoldsOverThePoweredRagdoll() throws {
+        var configuration = ZombieCloth.Configuration()
+        configuration.particleSpeedThreshold = .greatestFiniteMagnitude
+        let h = try makeHarness(configuration: configuration)
+        h.frames(250)
+        XCTAssertTrue(h.cloth.isAsleep, "a still body over the ragdoll: asleep (\(h.cloth.report))")
+        XCTAssertFalse(h.cloth.isSoftBodyActive(ofGarment: 0), "the body is asleep in Jolt")
+        let resting = h.particles
+        // The body is put back to sleep at every frame's end, so its state
+        // after a frame says nothing of what Jolt did in the step; the
+        // wakes Jolt gave it are counted as they are undone.
+        let wakes = h.cloth.joltWakeCount
+        h.frames(100)
+        XCTAssertEqual(h.cloth.joltWakeCount, wakes, "the parts inside the shirt never woke it in Jolt (\(h.cloth.joltWakeCount - wakes) wakes in 100 frames)")
+        XCTAssertEqual(h.particles, resting, "and not a particle moved")
+        XCTAssertTrue(h.cloth.isAsleep)
+        h.body.pose = h.pose(offset: SIMD3(0.01, 0, 0))
+        h.frame()
+        XCTAssertFalse(h.cloth.isAsleep)
+        XCTAssertTrue(h.cloth.isSoftBodyActive(ofGarment: 0), "a moving joint wakes it")
+        h.frames(50)
+        XCTAssertLessThan(h.excess().free, 0.01, "and it follows the parts within its slack again")
+        print("cloth sleep over the ragdoll: \(h.cloth.report)")
     }
 
     /// Nothing but the ball touches the shirt: the joints never move, so
@@ -580,6 +728,7 @@ final class ZombieClothTests: XCTestCase {
         let writes = h.body.overrideWrites, feeds = h.cloth.skinFeedCount
         h.frames(20)
         XCTAssertEqual(h.body.overrideWrites, writes, "asleep, nothing is written")
+        XCTAssertFalse(h.cloth.isSoftBodyActive(ofGarment: 0), "the body sleeps in Jolt, on the layer the balls meet")
         let front = h.shirt.positions.indices
             .filter { abs(h.shirt.positions[$0].x - 0.12) < 0.03 && abs(h.shirt.positions[$0].y - 1.25) < 0.03 }
             .max { h.shirt.positions[$0].z < h.shirt.positions[$1].z }
@@ -596,6 +745,7 @@ final class ZombieClothTests: XCTestCase {
             if !h.cloth.isAsleep { wokeAfter = frame; break }
         }
         XCTAssertNotNil(wokeAfter, "the ball woke the sleeping shirt")
+        XCTAssertTrue(h.cloth.isSoftBodyActive(ofGarment: 0), "Jolt woke the body for the ball, and the cloth keeps it awake")
         XCTAssertGreaterThan(h.body.overrideWrites, writes, "and the override follows it again")
         // The wake is the read-back's, after the frame's step: the feed
         // resumes with the next step.
@@ -637,32 +787,38 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertTrue(h.cloth.isBeyondRange)
         XCTAssertEqual(h.cloth.skinMultiplier, 0, "out of range the slack is shut")
         XCTAssertEqual(h.body.clears, 1, "and the body's own skinning shows")
-        let writes = h.body.overrideWrites
+        let writes = h.body.overrideWrites, feeds = h.cloth.skinFeedCount, wakes = h.cloth.joltWakeCount
+        XCTAssertFalse(h.cloth.isSoftBodyActive(ofGarment: 0), "out of range the body sleeps in Jolt")
+        let resting = h.particles
         h.frames(50, playerPosition: far)
         XCTAssertEqual(h.body.overrideWrites, writes, "nothing is read back out of range")
-        var worst: Float = 0
-        for (p, t) in zip(h.particles, h.targets) { worst = max(worst, simd_distance(p, t)) }
-        XCTAssertLessThan(worst, 1e-3, "the particles ride on the skin meanwhile (worst \(worst) m)")
-        // Far and still for longer than the sleep rule asks: the feed stops
-        // too, on the joints alone (nothing is read out of range).
+        XCTAssertEqual(h.cloth.skinFeedCount, feeds, "nor fed: a feed would wake the body")
+        XCTAssertEqual(h.particles, resting, "the particles stay where the range closed on them")
+        // Far and still for longer than the sleep rule asks: the cloth
+        // sleeps on the joints alone (nothing is read out of range).
         XCTAssertTrue(h.cloth.isAsleep, "far and still, the cloth sleeps (\(h.cloth.report))")
-        let feeds = h.cloth.skinFeedCount
-        h.frames(20, playerPosition: far)
-        XCTAssertEqual(h.cloth.skinFeedCount, feeds, "asleep out of range, nothing is fed")
-        // Far and moving: awake, fed every step, still nothing written.
+        // Far and moving: awake by the rule, yet nothing fed, solved or
+        // written — the return hard skins the body onto the pose.
         for _ in 0 ..< 60 {
             h.body.pose = h.pose(offset: SIMD3(0.1 * sin(2 * Float.pi * h.time), 0, 0))
             h.frame(playerPosition: far)
         }
-        XCTAssertFalse(h.cloth.isAsleep, "a far body that moves stays awake")
-        XCTAssertEqual(h.cloth.skinFeedCount, feeds + 60, "and is fed every step")
-        XCTAssertEqual(h.body.overrideWrites, writes, "but nothing is written out of range")
+        XCTAssertFalse(h.cloth.isAsleep, "a far body that moves is awake by the rule")
+        XCTAssertEqual(h.cloth.skinFeedCount, feeds, "but nothing is fed out of range")
+        XCTAssertFalse(h.cloth.isSoftBodyActive(ofGarment: 0), "and the body stays asleep in Jolt")
+        XCTAssertEqual(h.cloth.joltWakeCount, wakes, "nothing on the inert layer woke it in Jolt either")
+        XCTAssertEqual(h.body.overrideWrites, writes, "and nothing is written")
         h.body.pose = h.joints.bindModelTransforms
-        // Back in range: the override returns and the slack opens again.
+        // Back in range: a hard skin onto the pose, the override returns
+        // and the slack opens again.
+        let hardSkins = h.cloth.hardSkinCount
         h.frames(50, playerPosition: near)
         XCTAssertFalse(h.cloth.isBeyondRange)
+        XCTAssertTrue(h.cloth.isSoftBodyActive(ofGarment: 0), "back in range, Jolt has the body again")
+        XCTAssertGreaterThan(h.cloth.hardSkinCount, hardSkins, "the return hard skinned the shirt")
         XCTAssertGreaterThan(h.body.overrideWrites, writes)
         XCTAssertEqual(h.cloth.skinMultiplier, 1)
+        XCTAssertLessThan(h.excess().free, 0.005, "and the shirt sits within its slack of the pose")
     }
 
     // MARK: - The collision model
@@ -875,8 +1031,39 @@ final class ZombieClothTests: XCTestCase {
             let sorted = values.sorted()
             return String(format: "mean %.0f us, median %.0f us, max %.0f us", values.reduce(0, +) / Double(values.count), sorted[sorted.count / 2], sorted.last ?? 0)
         }
-        print("cloth timing (300 frames, 100 Hz, 3 sub-steps, \(h.shirt.particles.count) particles): skin \(stats(skin)); read-back \(stats(read)); step \(stats(step))")
+        print("cloth timing (300 frames, 100 Hz, 3 sub-steps, \(h.cloth.configuration.iterationsPerStep) iterations, \(h.shirt.particles.count) particles): skin \(stats(skin)); read-back \(stats(read)); step \(stats(step))")
         XCTAssertEqual(h.body.overrideWrites, 300)
     }
 
+    // MARK: - The hosts' launch arguments
+
+    /// `-cloth` and `-clothIterations` as both hosts parse them: the
+    /// defaults hold through no arguments, an unknown model, a count that
+    /// is not one and a flag with no value.
+    func testTheLaunchArgumentsSetTheClothConfiguration() {
+        let defaults = ZombieCloth.Configuration()
+        var configuration = defaults
+        configuration.apply(launchArguments: [])
+        XCTAssertTrue(configuration.enabled)
+        XCTAssertEqual(configuration.collisionModel, .ragdollAndSkin)
+        XCTAssertEqual(configuration.iterationsPerStep, 2, "the default is two iterations")
+        configuration.apply(launchArguments: ["-play", "-cloth", "off"])
+        XCTAssertFalse(configuration.enabled)
+        configuration = defaults
+        configuration.apply(launchArguments: ["-cloth", "skin", "-clothIterations", "3"])
+        XCTAssertTrue(configuration.enabled)
+        XCTAssertEqual(configuration.collisionModel, .skinOnly)
+        XCTAssertEqual(configuration.iterationsPerStep, 3)
+        configuration.apply(launchArguments: ["-cloth", "ragdoll"])
+        XCTAssertEqual(configuration.collisionModel, .ragdollAndSkin)
+        XCTAssertEqual(configuration.iterationsPerStep, 3, "the model alone changed")
+        configuration = defaults
+        configuration.apply(launchArguments: ["-cloth", "wool", "-clothIterations", "0"])
+        XCTAssertTrue(configuration.enabled, "an unknown model changes nothing")
+        XCTAssertEqual(configuration.collisionModel, .ragdollAndSkin)
+        XCTAssertEqual(configuration.iterationsPerStep, 2, "zero iterations is not a count")
+        configuration.apply(launchArguments: ["-clothIterations", "many", "-cloth"])
+        XCTAssertEqual(configuration.iterationsPerStep, 2, "nor is a word")
+        XCTAssertTrue(configuration.enabled, "a flag with no value is ignored")
+    }
 }

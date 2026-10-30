@@ -69,21 +69,10 @@ final class ZombieXRGame: @unchecked Sendable {
         {
             autoThrowInterval = interval
         }
-        // The shirt's simulation, as in the sandbox: `-cloth off|skin|ragdoll`
-        // and `-clothIterations <n>`.
-        if let index = arguments.firstIndex(of: "-cloth"), index + 1 < arguments.count {
-            switch arguments[index + 1] {
-            case "off": configuration.cloth.enabled = false
-            case "skin": configuration.cloth.collisionModel = .skinOnly
-            case "ragdoll": configuration.cloth.collisionModel = .ragdollAndSkin
-            default: print("CoolZombie: unknown -cloth \(arguments[index + 1]); off, skin or ragdoll")
-            }
-        }
-        if let index = arguments.firstIndex(of: "-clothIterations"), index + 1 < arguments.count,
-           let iterations = UInt32(arguments[index + 1]), iterations > 0
-        {
-            configuration.cloth.iterationsPerStep = iterations
-        }
+        // The shirt's simulation: the launch arguments (`-cloth
+        // off|skin|ragdoll`, `-clothIterations <n>`, as in the sandbox) or
+        // what the control window's pickers last chose.
+        configuration.cloth = ZombieXRHolder.shared.clothConfiguration
         roomSource = "detected"
         if let roomName {
             do {
@@ -98,7 +87,18 @@ final class ZombieXRGame: @unchecked Sendable {
         // The physics world: the room's boxes and the zombie's character
         // controller. Installed here, before the renderer exists, as the
         // registry asks; a reopened space finds the first one still there.
-        if let physics = ZombiePhysics.install() {
+        // Two Jolt sub-steps per 10 ms frame: 5 ms each keeps the ragdoll's
+        // 60 Hz motors within their 8 ms bound, and the third the Mac runs
+        // at 60 Hz would be another pass over the shirt's constraints and
+        // the parts for nothing. Jolt keeps its own thread count: on the
+        // Mac three workers measured the idle the same and the chase a
+        // sixth to a quarter lower on the medians, two runs each, inside
+        // the 19% spread of the two baseline runs (README) — so the device
+        // is left to measure for itself, and three is worth trying here,
+        // where four of the eight cores are efficiency cores.
+        var physicsConfiguration = ZombiePhysics.Configuration()
+        physicsConfiguration.collisionSteps = 2
+        if let physics = ZombiePhysics.install(configuration: physicsConfiguration) {
             game.attachPhysics(physics)
         }
     }
@@ -223,6 +223,10 @@ final class ZombieXRGame: @unchecked Sendable {
         if let mode = holder.takeAntiAliasingRequest() {
             setRendering(.antiAliasing(mode))
             print("CoolZombie: anti-aliasing \(mode)")
+        }
+        if let cloth = holder.takeClothRequest() {
+            game.setCloth(cloth)
+            print("CoolZombie: cloth \(cloth.enabled ? "\(cloth.collisionModel.rawValue), \(cloth.iterationsPerStep) iterations" : "off")")
         }
         // Test hooks: `-autoProvoke` starts the chase as soon as the zombie
         // is loaded, so a simulator run shows the chase without walking;

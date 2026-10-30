@@ -65,8 +65,34 @@ public final class ZombiePhysics: @unchecked Sendable {
         public var clothLayer: UInt32 = 5
         /// A layer nothing meets, in either direction: the cloth's when it
         /// is to collide with nothing at all and hang on its skin alone
-        /// (`ZombieCloth.Configuration.CollisionModel.skinOnly`).
+        /// (`ZombieCloth.Configuration.CollisionModel.skinOnly`), and the
+        /// cloth's while the player is out of its range.
         public var inertLayer: UInt32 = 6
+        /// The cloth's while it sleeps, put to sleep in Jolt by
+        /// `ZombieCloth`: only the balls meet it. Jolt wakes a sleeping soft
+        /// body for any awake rigid body that reaches its bounds on a layer
+        /// the two share — the ball a player throws at a still zombie
+        /// should, and the read-back then notices the particles moving and
+        /// wakes the cloth; the ragdoll's parts, which sit inside the
+        /// shirt, would wake it every step and undo the sleep. The floor
+        /// and the room do not move, so closing them loses nothing.
+        public var restingClothLayer: UInt32 = 7
+        /// Jolt sub-steps per engine step. The powered ragdoll's 60 Hz
+        /// motors need sub-steps of about 8 ms or less, or the hands trail
+        /// a run by half a metre: three at the Mac's 60 Hz (a 16.7 ms frame
+        /// in 5.6 ms sub-steps); the headset steps every 10 ms frame and
+        /// keeps the bound with two (5 ms), where a third would be another
+        /// pass over the cloth's constraints and the twenty parts for
+        /// nothing. Only the world's creator decides this: `install` on a
+        /// world already registered adopts it as it is.
+        public var collisionSteps: Int32 = 3
+        /// Jolt's worker threads for the step; nil leaves Jolt its default
+        /// (the cores but one). The cloth's constraints are solved on one
+        /// thread per soft body whatever the count, so fewer threads save
+        /// the fork-join without slowing the shirt; measured on the Mac
+        /// (README) before the headset host sets anything. As above, the
+        /// world's creator alone decides.
+        public var workerThreads: Int32? = nil
         /// Joint friction of a knocked-down ragdoll, in newton metres. A
         /// limp body has next to none: with more, the chain freezes in
         /// whatever shape it lands in instead of collapsing.
@@ -76,9 +102,9 @@ public final class ZombiePhysics: @unchecked Sendable {
         /// spring of this frequency and damping ratio, allowed this share
         /// of each joint's torque), so whatever touches it — a ball, a
         /// wall, a hand — bends it and the motors bring it back. 60 Hz
-        /// needs the world's three sub-steps: a spring trails a moving
-        /// target by about 2 / (2π f), a frame's worth at 20 Hz, which put
-        /// the hands half a metre behind a run.
+        /// needs sub-steps of 8 ms or less (`collisionSteps`): a spring
+        /// trails a moving target by about 2 / (2π f), a frame's worth at
+        /// 20 Hz, which put the hands half a metre behind a run.
         public var trackingMotorFrequency: Float = 60
         public var trackingMotorDamping: Float = 1
         /// Tracking needs torque to spare: a swinging arm at a run asks
@@ -172,10 +198,12 @@ public final class ZombiePhysics: @unchecked Sendable {
         settings.maxKinematicStep = 1.0
         settings.maxKinematicSpeed = 6.0
         settings.minContactSpeed = 0.35
-        // Three Jolt sub-steps per engine step: the powered ragdoll's
-        // motors can then run at 60 Hz, and the hands follow a run within a
-        // centimetre or two instead of trailing by half a metre.
-        settings.collisionSteps = 3
+        // The sub-steps per engine step (three at 60 Hz, two at the
+        // headset's 100 Hz): the powered ragdoll's motors then run at
+        // 60 Hz, and the hands follow a run within a centimetre or two
+        // instead of trailing by half a metre.
+        settings.collisionSteps = configuration.collisionSteps
+        settings.workerThreads = configuration.workerThreads
         guard let backend = registerJoltPhysics(settings: settings) else {
             print("CoolZombie: the Jolt physics backend could not be installed; no physics")
             return nil
@@ -194,7 +222,8 @@ public final class ZombiePhysics: @unchecked Sendable {
         config.collisionLayerMatrix = Self.layerMatrix(
             characterLayer: configuration.characterLayer, ragdollLayer: configuration.ragdollLayer,
             ballLayer: configuration.ballLayer, roomLayer: configuration.roomLayer,
-            clothLayer: configuration.clothLayer, inertLayer: configuration.inertLayer, ragdollMeetsRoom: isDown
+            clothLayer: configuration.clothLayer, inertLayer: configuration.inertLayer,
+            restingClothLayer: configuration.restingClothLayer, ragdollMeetsRoom: isDown
         )
         // The coordinator keeps the configuration and hands it to the
         // registry's backend; a backend built without the registry (the
@@ -208,12 +237,13 @@ public final class ZombiePhysics: @unchecked Sendable {
     /// The character never meets the ragdoll (the same body twice), the
     /// balls (the parts take those) nor the cloth (the controller walks
     /// through the shirt the body wears); the ragdoll and the cloth meet
-    /// the room only when `ragdollMeetsRoom` (the body is down); the inert
-    /// layer meets nothing; everything else meets everything. The bridge
-    /// opens a pair when either side's mask says so, so a closed pair is
-    /// cleared on both sides.
+    /// the room only when `ragdollMeetsRoom` (the body is down); the
+    /// resting cloth meets the balls and nothing else; the inert layer
+    /// meets nothing; everything else meets everything. The bridge opens a
+    /// pair when either side's mask says so, so a closed pair is cleared on
+    /// both sides.
     static func layerMatrix(characterLayer: UInt32, ragdollLayer: UInt32, ballLayer: UInt32, roomLayer: UInt32,
-                            clothLayer: UInt32, inertLayer: UInt32, ragdollMeetsRoom: Bool) -> [UInt32]
+                            clothLayer: UInt32, inertLayer: UInt32, restingClothLayer: UInt32, ragdollMeetsRoom: Bool) -> [UInt32]
     {
         var masks = Array(repeating: UInt32.max, count: 32)
         func close(_ a: UInt32, _ b: UInt32) {
@@ -227,6 +257,7 @@ public final class ZombiePhysics: @unchecked Sendable {
             close(ragdollLayer, roomLayer)
             close(clothLayer, roomLayer)
         }
+        for layer in UInt32(0) ..< 32 where layer != ballLayer { close(restingClothLayer, layer) }
         masks[Int(inertLayer)] = 0
         for layer in masks.indices { masks[layer] &= ~(UInt32(1) << inertLayer) }
         return masks

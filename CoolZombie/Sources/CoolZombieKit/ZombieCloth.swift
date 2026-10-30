@@ -35,6 +35,10 @@ public protocol ZombieClothBody: AnyObject {
     func writeOverride(indices: [UInt32], positions: [SIMD3<Float>], normals: [SIMD3<Float>])
     /// Lets the mesh show its own skinning again.
     func clearOverride()
+    /// Takes the body off the override's path again: the inverse of
+    /// `beginOverride`, so a detached body is skinned as it was before the
+    /// cloth, at the price it paid before.
+    func endOverride()
 }
 
 /// The zombie entity as the cloth's body. The mesh and the skeleton sit on
@@ -97,6 +101,14 @@ public final class ZombieClothEntityBody: ZombieClothBody {
         guard let meshEntity else { return }
         clearEntityDeformationOverride(entityId: meshEntity, meshIndex: meshIndex)
     }
+
+    /// Back to vertex-shader skinning: the engine drops the deformation
+    /// component (and its buffers) from the skinned descendants, and the
+    /// next draw binds the mesh's own streams. The command buffers in
+    /// flight hold their own references, so the drop is safe mid-frame.
+    public func endOverride() {
+        removeEntityDeformation(entityId: entity)
+    }
 }
 
 /// The zombie's shirt as a Jolt soft body skinned to the skeleton, worn
@@ -119,7 +131,9 @@ public final class ZombieClothEntityBody: ZombieClothBody {
 /// particles, turns them into mesh space and writes the override the
 /// deformation pass applies after the skinning, before the draws. The body
 /// moves to compute skinning for that (`setEntityDeformation(.lbs)`); it
-/// was vertex-shader skinned before, and that is the price of the override.
+/// was vertex-shader skinned before, and that is the price of the override,
+/// paid while a garment is attached: `detach` returns the body to its own
+/// skinning (`removeEntityDeformation`).
 ///
 /// Whenever the body is put somewhere at once rather than moved — the
 /// ragdoll re-seated on a pelvis jump or a stand-up, a reset, the bind-pose
@@ -129,16 +143,22 @@ public final class ZombieClothEntityBody: ZombieClothBody {
 /// the parts have reached the pose, so the shirt does not flail while the
 /// body catches up. A still body (no joint moved, no particle moving) puts
 /// the cloth to sleep after `sleepAfter`: no feed, no override, the last
-/// override stays, until a joint moves or something moves the particles —
-/// asleep, only their positions are read each frame, so a ball through a
-/// sleeping shirt wakes it rather than denting Jolt's shirt under a frozen
-/// one. Beyond `lodDistance` from the player the slack is shut and the
-/// override cleared: the shirt is the body's skinning again, Jolt keeps the
-/// particles on the skin for the return, and a far body that stands still
-/// sleeps on its joints alone, so it stops feeding too. The joints' motion
-/// is a frame's: a long frame runs as several sub-steps on one displayed
-/// pose, and they are measured against the last frame, not each other.
-/// Frame thread only, like `ZombiePhysics`.
+/// override stays, and the soft body is put to sleep in Jolt — the step
+/// skips it, which is where the shirt's cost was — on a layer only the
+/// balls meet, until a joint moves or a ball moves the particles: Jolt
+/// wakes the body for the ball, and asleep the cloth reads the positions
+/// each frame, so the ball wakes the cloth too rather than denting Jolt's
+/// shirt under a frozen one. Asleep, a joint's motion is measured from
+/// where it stood when the cloth fell asleep as well as from the last
+/// frame: nothing moves a sleeping shirt's particles any more, so a body
+/// creeping under the threshold every frame would otherwise drift out from
+/// under its frozen override for good. Beyond `lodDistance` from the player the
+/// override is cleared and the body put to sleep on the inert layer: the
+/// shirt is the body's skinning again and nothing is fed, solved or read;
+/// the return hard skins it. The joints' motion is a frame's: a long frame
+/// runs as several sub-steps on one displayed pose, and they are measured
+/// against the last frame, not each other. Frame thread only, like
+/// `ZombiePhysics`.
 public final class ZombieCloth: @unchecked Sendable {
     public struct Configuration: Sendable {
         /// What the cloth collides with. `ragdollAndSkin` puts it on the
@@ -158,9 +178,12 @@ public final class ZombieCloth: @unchecked Sendable {
         /// too and come in a later phase.
         public var garments: [String] = ["shirt"]
         public var collisionModel: CollisionModel = .ragdollAndSkin
-        /// Jolt solver iterations per step; the demo steps at the display
-        /// rate with three sub-steps.
-        public var iterationsPerStep: UInt32 = 3
+        /// Jolt solver iterations per step (Jolt runs them inside each of
+        /// the world's sub-steps). Two keep the shirt within its slack at
+        /// the demo's cadence — the fit tests run at this default — and
+        /// are what the headset's frame affords; three for the Mac's A/B
+        /// (`-clothIterations 3`, the quality picker on the device).
+        public var iterationsPerStep: UInt32 = 2
         /// Per particle, in kilograms: 50 mg makes the 4,000-particle shirt
         /// 0.2 kg.
         public var particleMass: Float = 0.00005
@@ -184,14 +207,18 @@ public final class ZombieCloth: @unchecked Sendable {
         public var rampDuration: Float = 0.25
         /// The cloth sleeps once no joint has moved `jointMotionThreshold`
         /// metres in a frame and no particle faster than
-        /// `particleSpeedThreshold` for `sleepAfter` seconds; asleep, the
-        /// particles' positions are still read, and one faster than the
-        /// threshold wakes it.
+        /// `particleSpeedThreshold` for `sleepAfter` seconds: the soft body
+        /// is put to sleep in Jolt and moved to the resting layer; asleep,
+        /// the particles' positions are still read, and one faster than the
+        /// threshold (a ball, which Jolt wakes the body for) wakes it, as
+        /// does a joint `jointMotionThreshold` from where it stood when the
+        /// cloth fell asleep, however slowly it got there.
         public var sleepAfter: Float = 0.5
         public var jointMotionThreshold: Float = 0.001
         public var particleSpeedThreshold: Float = 0.02
-        /// Farther than this from the player the slack is shut and nothing
-        /// is read back or written; the simulation shows again once the
+        /// Farther than this from the player nothing is fed, solved, read
+        /// back or written (the body sleeps on the inert layer); the
+        /// simulation shows again, hard skinned onto the pose, once the
         /// player is back within `lodDistance - lodHysteresis`, so a player
         /// standing at the line does not flip it every frame.
         public var lodDistance: Float = 4
@@ -203,6 +230,28 @@ public final class ZombieCloth: @unchecked Sendable {
         /// has one that is not a number): the body is hard skinned.
         public var runawayDistance: Float = 2
         public init() {}
+
+        /// The hosts' launch arguments, the same on the Mac and the headset:
+        /// `-cloth off|skin|ragdoll` picks the model (off leaves the shirt
+        /// body-skinned, skin hangs it on the skin alone on a layer nothing
+        /// meets, ragdoll — the default — collides), `-clothIterations <n>`
+        /// the solver's iterations. Anything else stays as it was; an
+        /// unknown model is named once.
+        public mutating func apply(launchArguments arguments: [String]) {
+            if let index = arguments.firstIndex(of: "-cloth"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "off": enabled = false
+                case "skin": collisionModel = .skinOnly
+                case "ragdoll": collisionModel = .ragdollAndSkin
+                default: print("CoolZombie: unknown -cloth \(arguments[index + 1]); off, skin or ragdoll")
+                }
+            }
+            if let index = arguments.firstIndex(of: "-clothIterations"), index + 1 < arguments.count,
+               let iterations = UInt32(arguments[index + 1]), iterations > 0
+            {
+                iterationsPerStep = iterations
+            }
+        }
     }
 
     /// A particle binds to the exported vertices within this of its
@@ -238,6 +287,9 @@ public final class ZombieCloth: @unchecked Sendable {
         /// report's target motion.
         var previousJointWorld: [simd_float4x4]
         var previousJointPositions: [SIMD3<Float>]
+        /// The joints as they stood when the cloth fell asleep: what a
+        /// sleeping cloth measures their motion from, besides the last frame.
+        var sleepJointPositions: [SIMD3<Float>]
         var worldPositions: [SIMD3<Float>] = []
         var worldNormals: [SIMD3<Float>] = []
         var previousWorldPositions: [SIMD3<Float>] = []
@@ -259,6 +311,7 @@ public final class ZombieCloth: @unchecked Sendable {
             jointWorld = Array(repeating: matrix_identity_float4x4, count: skeletonJoints.count)
             previousJointWorld = jointWorld
             previousJointPositions = Array(repeating: .zero, count: skeletonJoints.count)
+            sleepJointPositions = previousJointPositions
         }
 
         var pelvisWorld: SIMD3<Float> {
@@ -346,6 +399,17 @@ public final class ZombieCloth: @unchecked Sendable {
     /// snapshots the last frame's as the frame's reference.
     private var frameOpen = false
     private var maxParticleSpeed: Float = 0
+    /// The farthest any joint moved this frame, metres (the sleep rule's
+    /// figure), and the last whole frame's, which `report` prints so the
+    /// threshold can be judged against what the idle does.
+    private var maxJointMotion: Float = 0
+    private var lastFrameJointMotion: Float = 0
+    /// The engine layer the soft bodies sit on now (`applyBodyRest`).
+    private var bodyLayer: UInt32?
+    /// Whether the last `applyBodyRest` put the bodies to sleep and no feed
+    /// of the cloth's own has woken them since: a body found awake then was
+    /// woken by Jolt itself (a ball reaching a resting shirt).
+    private var bodyPutToRest = false
 
     private var skinMicroseconds: Double = 0
     private var readBackMicroseconds: Double = 0
@@ -377,6 +441,12 @@ public final class ZombieCloth: @unchecked Sendable {
     public private(set) var runawayCount = 0
     public private(set) var skinFeedCount = 0
     public private(set) var overrideWriteCount = 0
+    /// Times Jolt woke a resting body on its own (a ball reaching the
+    /// shirt) and the cloth, still asleep by its rule, put it back to sleep
+    /// at the frame's end. The ragdoll's parts must never show here: that is
+    /// what the resting layer is for, and the tests hold it at zero over
+    /// the powered ragdoll.
+    public private(set) var joltWakeCount = 0
 
     /// Builds the garments on `entityId` — the zombie, revealed and with the
     /// ragdoll placed — in `physics`'s world. False when nothing attached.
@@ -451,14 +521,23 @@ public final class ZombieCloth: @unchecked Sendable {
         runawayCount = 0
         skinFeedCount = 0
         overrideWriteCount = 0
+        joltWakeCount = 0
+        // The bodies were built on the layer their model asks for, awake.
+        bodyLayer = nil
+        bodyPutToRest = false
         // Onto the displayed pose before the first step; the next feed is
         // hard too, so the pose the step then runs on is a resting one. The
         // attach pose is the first frame's reference (the report would
-        // otherwise measure the first frame's motion from the identity).
+        // otherwise measure the first frame's motion from the identity), and
+        // the attach's own placement, measured from the identity the joints
+        // were born with, is not a motion: the figure starts over after it.
         hardSkinNow()
         snapshotJoints()
+        maxJointMotion = 0
+        lastFrameJointMotion = 0
         frameOpen = false
         pendingHardSkin = true
+        applyBodyRest()
         return true
     }
 
@@ -560,7 +639,10 @@ public final class ZombieCloth: @unchecked Sendable {
         )
     }
 
-    /// Removes the soft bodies, the hooks and the override. The hooks go
+    /// Removes the soft bodies, the hooks and the override, and returns the
+    /// body to its own skinning: the inverse of `attach`, so a detached body
+    /// is as it was before the cloth, vertex-shader skinned at that price
+    /// (the next attach moves it to compute skinning again). The hooks go
     /// back to what they were at the attach: the cloth is the last to chain
     /// onto `willStep` and `didReseat` (nothing else in the demo chains),
     /// so a link added after it would come off with it. Frame thread.
@@ -573,6 +655,7 @@ public final class ZombieCloth: @unchecked Sendable {
         previousWillStep = nil
         previousDidReseat = nil
         body?.clearOverride()
+        body?.endOverride()
         body = nil
         self.physics = nil
         jointInfo = nil
@@ -582,6 +665,7 @@ public final class ZombieCloth: @unchecked Sendable {
         pendingHardSkin = false
         ramp = 1
         skinMultiplier = 1
+        bodyLayer = nil
     }
 
     // MARK: - Events
@@ -594,7 +678,10 @@ public final class ZombieCloth: @unchecked Sendable {
         pendingHardSkin = true
         asleep = false
         stillTime = 0
-        if isAttached { hardSkinNow() }
+        if isAttached {
+            hardSkinNow()
+            applyBodyRest()
+        }
     }
 
     /// The bind-pose inspection entered (`true`) or left: a hard skin either
@@ -620,7 +707,11 @@ public final class ZombieCloth: @unchecked Sendable {
     /// as several sub-steps, each calling this with the same displayed pose,
     /// so the frame's first call keeps the last frame's joints as the
     /// reference and every call compares against those, never against the
-    /// last sub-step.
+    /// last sub-step. Asleep, a joint is also measured from where it stood
+    /// when the cloth fell asleep: a frame's motion under the threshold
+    /// adds up to one over it, and the frozen override must not stay
+    /// behind on a body that crept away from it (nothing moves a sleeping
+    /// shirt's particles, so the particle rule cannot catch that).
     private func placeJoints(_ model: [simd_float4x4], meshToWorld: simd_float4x4) -> Bool {
         if !frameOpen {
             frameOpen = true
@@ -632,7 +723,10 @@ public final class ZombieCloth: @unchecked Sendable {
                 let m = meshToWorld * model[joint]
                 garment.jointWorld[k] = m
                 let p = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
-                if simd_distance(p, garment.previousJointPositions[k]) >= configuration.jointMotionThreshold { moved = true }
+                let distance = simd_distance(p, garment.previousJointPositions[k])
+                maxJointMotion = max(maxJointMotion, distance)
+                if distance >= configuration.jointMotionThreshold { moved = true }
+                if asleep, simd_distance(p, garment.sleepJointPositions[k]) >= configuration.jointMotionThreshold { moved = true }
             }
         }
         return moved
@@ -655,6 +749,8 @@ public final class ZombieCloth: @unchecked Sendable {
     private func endFrame() {
         frameOpen = false
         jointsMoved = false
+        lastFrameJointMotion = maxJointMotion
+        maxJointMotion = 0
     }
 
     private func hardSkinNow() {
@@ -664,6 +760,8 @@ public final class ZombieCloth: @unchecked Sendable {
             physics.backend.skinSoftBody(garment.soft, jointWorldMatrices: garment.jointWorld, hardSkinAll: true)
             physics.backend.setSoftBodySkin(garment.soft, maxDistanceMultiplier: 0)
         }
+        // The feed woke the bodies.
+        bodyPutToRest = false
         ramp = 0
         skinMultiplier = 0
         hardSkinCount += 1
@@ -686,9 +784,12 @@ public final class ZombieCloth: @unchecked Sendable {
         if jointsMoved, asleep {
             asleep = false
             stillTime = 0
+            applyBodyRest()
         }
-        // Asleep, Jolt keeps the last feed: the joints have not moved.
-        guard !asleep || pendingHardSkin else { return }
+        // Asleep, Jolt keeps the last feed: the joints have not moved. Out
+        // of range nothing is fed either — the body sleeps where it was and
+        // the return hard skins it — since a feed would wake it.
+        guard (!asleep && !lodActive) || pendingHardSkin else { return }
         let hard = pendingHardSkin
         pendingHardSkin = false
         if hard {
@@ -700,6 +801,8 @@ public final class ZombieCloth: @unchecked Sendable {
         for garment in garments {
             physics.backend.skinSoftBody(garment.soft, jointWorldMatrices: garment.jointWorld, hardSkinAll: hard)
         }
+        // The feed woke the bodies (a hard skin reaches a resting one).
+        bodyPutToRest = false
         skinFeedCount += 1
         // The slack: the ramp's share, shut out of range and in a bind pose
         // the parts have not reached.
@@ -739,25 +842,30 @@ public final class ZombieCloth: @unchecked Sendable {
         if far != lodActive {
             lodActive = far
             if far {
-                // The body's own skinning shows; Jolt keeps the particles on
-                // the skin meanwhile.
+                // The body's own skinning shows; the slack is shut for the
+                // return's hard skin, and the body sleeps where it was.
                 body.clearOverride()
+                skinMultiplier = 0
             } else {
                 requestHardSkin()
             }
         }
+        // Whatever the frame did, the bodies' state in Jolt follows the
+        // cloth's at its end.
+        defer { applyBodyRest() }
         if far {
             // Nothing is read out of range, so the joints alone say whether
-            // the body is still: a far body standing still stops feeding too.
+            // the body is still; nothing is fed either (`willStep`).
             readBackMicroseconds = 0
             accumulateStillness(deltaTime: deltaTime, particlesStill: true)
             return
         }
         if asleep {
-            // The joints have not moved, but something else may have moved
-            // the particles — a ball through the hem — and the override on
-            // screen would freeze while Jolt's shirt deforms: the positions
-            // alone are read, and a particle on the move wakes the cloth.
+            // The joints have not moved, but a ball may have moved the
+            // particles — Jolt wakes the sleeping body for it — and the
+            // override on screen would freeze while Jolt's shirt deforms:
+            // the positions alone are read, and a particle on the move wakes
+            // the cloth.
             let speed = sampleParticleSpeed(deltaTime: deltaTime)
             guard speed >= configuration.particleSpeedThreshold else {
                 readBackMicroseconds = (CACurrentMediaTime() - started) * 1e6
@@ -790,10 +898,54 @@ public final class ZombieCloth: @unchecked Sendable {
     private func accumulateStillness(deltaTime: Float, particlesStill: Bool) {
         if !jointsMoved, particlesStill {
             stillTime += max(deltaTime, 0)
-            if stillTime >= configuration.sleepAfter { asleep = true }
+            if stillTime >= configuration.sleepAfter, !asleep {
+                asleep = true
+                // Where the joints stand as the cloth falls asleep: what
+                // their motion is measured from until it wakes.
+                for garment in garments {
+                    for k in garment.jointWorld.indices {
+                        let c = garment.jointWorld[k].columns.3
+                        garment.sleepJointPositions[k] = SIMD3(c.x, c.y, c.z)
+                    }
+                }
+            }
         } else {
             stillTime = 0
         }
+    }
+
+    /// The soft bodies follow the cloth's state in Jolt. Awake and in range
+    /// they simulate on their model's layer. Asleep they are put to sleep —
+    /// Jolt then skips them, which is where the shirt's cost was — on the
+    /// resting layer, where only the balls meet them: a ragdoll part inside
+    /// the shirt would otherwise wake the body every step through Jolt's
+    /// own pairing and undo the sleep, while a ball should wake it (the
+    /// skin-only model stays on its inert layer, as nothing meets it
+    /// awake either). Out of range nothing should wake them, so they sleep
+    /// on the inert layer. The feed wakes a body by itself, so the state is
+    /// made explicit here instead, and re-asserted at the end of every
+    /// frame: a ball may have woken the body during the step without
+    /// moving a particle past the wake threshold yet — such a wake is
+    /// counted (`joltWakeCount`) before it is undone, which is how the
+    /// tests see that the parts never reach a resting shirt.
+    private func applyBodyRest() {
+        guard let physics, !garments.isEmpty else { return }
+        let resting = asleep || lodActive
+        let layer: UInt32
+        if lodActive || configuration.collisionModel == .skinOnly {
+            layer = physics.configuration.inertLayer
+        } else {
+            layer = asleep ? physics.configuration.restingClothLayer : physics.configuration.clothLayer
+        }
+        if layer != bodyLayer {
+            bodyLayer = layer
+            for garment in garments { physics.backend.setSoftBodyLayer(garment.soft, layer) }
+        }
+        if resting, bodyPutToRest {
+            for garment in garments where physics.backend.isSoftBodyActive(garment.soft) { joltWakeCount += 1 }
+        }
+        for garment in garments { physics.backend.setSoftBodyActive(garment.soft, !resting) }
+        bodyPutToRest = resting
     }
 
     /// The fastest particle since the last read, from the positions alone
@@ -873,10 +1025,11 @@ public final class ZombieCloth: @unchecked Sendable {
     /// read-back), the farthest particle from its skinned target (with
     /// where it sits on the garment at rest, model space) and the fastest,
     /// how far the skinned targets moved over the last frame (what the
-    /// cloth had to follow), and the hard skins, runaways and writes so far.
-    /// It skins every particle on the CPU twice for the two distances, so
-    /// it is for a once-a-second print; a readout refreshed every frame
-    /// takes `summary`.
+    /// cloth had to follow) and the farthest a joint moved in it (what the
+    /// sleep rule saw), and the hard skins, runaways, writes and the wakes
+    /// Jolt gave a resting body so far. It skins every particle on the CPU
+    /// twice for the two distances, so it is for a once-a-second print; a
+    /// readout refreshed every frame takes `summary`.
     public var report: String {
         guard isAttached else { return "cloth: none" }
         let names = garments.map(\.name).joined(separator: "+")
@@ -903,12 +1056,22 @@ public final class ZombieCloth: @unchecked Sendable {
             }
             farthest = String(format: "%.3fm@(%.2f,%.2f,%.2f)", worst, at.x, at.y, at.z)
         }
-        let state = (asleep ? "asleep" : "awake") + (lodActive ? " out of range" : "")
         return String(
-            format: "cloth %@: %d particles (%d pins) mult=%.2f %@ skin=%.0fus read=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm hard=%d runaway=%d writes=%d",
-            names, particles, pins, skinMultiplier, state, skinMicroseconds, readBackMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
-            hardSkinCount, runawayCount, overrideWriteCount
+            format: "cloth %@: %d particles (%d pins) mult=%.2f %@ skin=%.0fus read=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d joltWakes=%d",
+            names, particles, pins, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
+            lastFrameJointMotion * 1000, hardSkinCount, runawayCount, overrideWriteCount, joltWakeCount
         )
+    }
+
+    /// Awake or asleep, out of range, and whether Jolt has the bodies
+    /// (`jolt=on`) or skips them (`jolt=off`).
+    private var stateDescription: String {
+        var state = asleep ? "asleep" : "awake"
+        if lodActive { state += " out of range" }
+        if let physics, let first = garments.first {
+            state += physics.backend.isSoftBodyActive(first.soft) ? " jolt=on" : " jolt=off"
+        }
+        return state
     }
 
     /// The short form of `report` for a readout refreshed every frame (the
@@ -919,10 +1082,9 @@ public final class ZombieCloth: @unchecked Sendable {
         guard isAttached else { return "cloth: none" }
         let names = garments.map(\.name).joined(separator: "+")
         let particles = garments.reduce(0) { $0 + $1.bindWorld.count }
-        let state = (asleep ? "asleep" : "awake") + (lodActive ? " out of range" : "")
         return String(
             format: "cloth %@: %d particles mult=%.2f %@ skin=%.0fus read=%.0fus step=%.0fus hard=%d runaway=%d writes=%d",
-            names, particles, skinMultiplier, state, skinMicroseconds, readBackMicroseconds, worldMicroseconds,
+            names, particles, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, worldMicroseconds,
             hardSkinCount, runawayCount, overrideWriteCount
         )
     }
@@ -938,6 +1100,13 @@ public final class ZombieCloth: @unchecked Sendable {
     /// The slack per particle of a garment, as built.
     func maxDistances(ofGarment index: Int) -> [Float] {
         garments.indices.contains(index) ? garments[index].maxDistance : []
+    }
+
+    /// Whether Jolt is simulating a garment's body (false while the cloth
+    /// rests), for the tests.
+    func isSoftBodyActive(ofGarment index: Int) -> Bool {
+        guard garments.indices.contains(index), let physics else { return false }
+        return physics.backend.isSoftBodyActive(garments[index].soft)
     }
 
     /// The particles of a garment as Jolt has them now, world space.

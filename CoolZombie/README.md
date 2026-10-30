@@ -70,7 +70,9 @@ clips loaded):
   its console whether the zombie goes around the wall, and adding
   `-target behindWall` whether it ends up with its hands on it;
   `-cloth off|skin|ragdoll` and `-clothIterations <n>` pick the shirt's
-  simulation (see Physics), `-resetEvery <seconds>` resets the zombie
+  simulation and `-collisionSteps <n>` / `-workerThreads <n>` the Jolt
+  world's sub-steps and threads (see Physics; the Cloth dropdown switches
+  the shirt's model live), `-resetEvery <seconds>` resets the zombie
   every so often (a fallen one stands up).
 
 ## Assets
@@ -435,8 +437,10 @@ the chest every so often for scripted runs). The
 ball is a rigid body in the same world, and so is the zombie's body: it
 is a powered ragdoll all the time — the pelvis rides the animation, the
 other nineteen parts are dynamic under gravity and held onto the
-animation by 60 Hz joint motors (Jolt runs three sub-steps per engine
-step for that; the hands then follow a run within a few centimetres; the
+animation by 60 Hz joint motors (Jolt runs sub-steps of 8 ms or less for
+that — three per engine step at the Mac's 60 Hz, two per 10 ms frame on
+the headset, `ZombiePhysics.Configuration.collisionSteps`; the hands then
+follow a run within a few centimetres; the
 targets are aimed a frame ahead, except across a jump of the pelvis — a
 floor snap, a respawn: over 20 cm in a frame, which no animation does —
 when every part is re-seated on the new pose instead, since dynamic parts
@@ -572,16 +576,39 @@ until a joint moves or something moves the particles — asleep, only their
 positions are read each frame, so a ball through the hem of a sleeping
 shirt wakes it instead of denting Jolt's shirt under a frozen one. A
 frame's joint motion is measured against the last frame, not the last
-sub-step (a long frame runs as several on one displayed pose). Beyond 4 m
-from the player the slack is shut and the override cleared, so the shirt
-is the body's own skinning again while Jolt keeps the particles on the
-skin for the return (within 3.5 m: half a metre of hysteresis, so a
-player at the line does not flip it); a far body that stands still sleeps
-on its joints alone and stops feeding too. A particle that is not a
-number or 2 m from the pelvis hard skins the body (counted in the report).
-Jolt keeps solving the body through all of this (the plugin has no call
-to put a soft body to sleep): what the sleep and the range save is the
-feed, the read-back and the override, not the step.
+sub-step (a long frame runs as several on one displayed pose); asleep,
+it is measured from where the joints stood when the cloth fell asleep as
+well, since nothing moves a sleeping shirt's particles any more and a body
+creeping under the millimetre every frame would otherwise walk out from
+under its frozen override for good (0.4 mm a frame wakes it on the third;
+`ZombieClothTests` pins it). Beyond 4 m
+from the player the override is cleared, so the shirt is the body's own
+skinning again (within 3.5 m: half a metre of hysteresis, so a player at
+the line does not flip it), and the return hard skins it onto the pose. A
+particle that is not a number or 2 m from the pelvis hard skins the body
+(counted in the report).
+
+Asleep or out of range the soft body is put to sleep in Jolt
+(`setSoftBodyActive`): the step skips it altogether — no solve, no
+collision, no skinning — which is where the shirt's cost was (the sleep
+used to save only the feed, the read-back and the override while Jolt
+kept solving 24,000 constraints). Jolt wakes a sleeping soft body for any
+awake rigid body that reaches its bounds on a layer the two share, and
+the ragdoll's parts sit inside the shirt, so the sleep would be undone
+every step on the cloth's own layer: a sleeping shirt moves to a resting
+layer (`restingClothLayer`) that only the balls meet — a ball thrown at a
+still zombie wakes the body in Jolt, the read-back sees the particles
+move and wakes the cloth, which puts the body back on its layer — and an
+out-of-range shirt to the inert layer, where nothing is fed or solved
+until the player returns. The report prints `jolt=on|off` beside the
+cloth's own state, `joltWakes=` the times Jolt woke a resting body on its
+own (a ball; the parts must never show there, and the tests hold it at
+zero over the powered ragdoll) and `joints<=` the farthest a joint moved
+in the last frame: the idle clip moves its fastest joint about a
+millimetre a frame (half that at 100 Hz), so the joint half of the sleep
+rule passes most frames; it is the particles, moving with the skin at
+0.2–0.5 m/s, that keep the cloth awake during it (see the measurements
+below).
 The cloth is on a collision layer of its own: the ragdoll's parts push it
 (one way, the cloth never pushes them), the balls dent it, the floor stops
 it, the controller walks through it (the pair is closed both ways), and the
@@ -589,13 +616,81 @@ room's boxes meet it only while the body is down, like the ragdoll.
 `-cloth off|skin|ragdoll` picks the model on both hosts — off leaves the
 shirt body-skinned, `skin` hangs it on its skin alone on a layer nothing
 meets (the A/B), `ragdoll` (the default) collides as above — and
-`-clothIterations <n>` sets the solver's iterations (3). With `-debugLog`
+`-clothIterations <n>` sets the solver's iterations: two by default (the
+fit tests run at two), three for the A/B. The same choices switch live:
+the Mac's Cloth dropdown, and on the headset the control window's *Cloth*
+(Off / Skin only / Ragdoll and skin) and *Cloth quality* (1, 2 or 3
+iterations) pickers, each change taking the shirt off and putting it back
+on rebuilt (`ZombieChaseGame.setCloth`). Off returns the body to its own
+vertex-shader skinning (`ZombieCloth.detach` removes the deformation
+component the attach added, `removeEntityDeformation`), so it is the
+launch's `-cloth off` and the footnote's frame line reads the compute
+path's GPU price against it — the per-eye cost of compute skinning the
+41,700-vertex body, not yet measured on the device. The device defaults are two
+iterations and two Jolt sub-steps per 10 ms frame (a 5 ms sub-step keeps
+the 60 Hz motors' 8 ms bound; the Mac keeps three at 60 Hz) with Jolt's
+own thread count. Measured on the Mac (M4 Max, release, 60 Hz, 35 s runs,
+the report's step figure — Jolt's step plus the coordinator's read-back,
+sampled once a second — as a median over the awake, in-range samples,
+with the largest sample in brackets; the idle is `-play -inspect idle
+-debugLog`, the chase `-play -debugLog -throwBall 8 -resetEvery 12`; one
+figure per run where a configuration was run more than once):
+
+| configuration | idle step, median (max) | chase step, median (max) | worst target, idle / chase |
+| --- | --- | --- | --- |
+| HEAD 9ab1901: 3 iterations, 3 sub-steps, Jolt solving the sleeping shirt | 1698 (3340) us | 2288 (11534) us | 5.2 cm / 12.9 cm |
+| this change at 3 and 3, three runs | 1800 (7201), 1870 (2140), 1872 (4546) us | 2660 (3829), 3154 (4173), 3034 (4248) us | 5.2–5.3 cm / 8.8–12.0 cm |
+| 2 iterations, 3 sub-steps | 1371 (4021) us | 2280 (4323) us | 5.2 cm / 8.5 cm |
+| 3 iterations, 2 sub-steps | 1297 (2847) us | 2040 (2720) us | 5.3 cm / 13.3 cm |
+| 2 iterations, 2 sub-steps (the device's), three runs | 940 (2122), 1045 (11602), 1300 (1808) us | 1845 (3245), 2036 (3507), 1857 (2419) us | 5.2–5.4 cm / 8.9–14.0 cm |
+| skin only, 2 and 2, two runs | 1018 (3415), 966 (3642) us | 916 (47211), 905 (4006) us | 5.2–5.3 cm / 6.4–7.0 cm |
+| 2 and 2, three worker threads, two runs | 1289 (2209), 901 (6286) us | 1405 (3659), 1702 (2605) us | 5.2 cm / 9.7, 8.8 cm |
+
+Against HEAD the device's defaults take the idle step from 1698 to
+940–1300 us (a quarter to two fifths off) and the chase from 2288 to
+1845–2036 us (a tenth to a fifth off); this change's own three runs at 3
+and 3 came out 16–38 % above HEAD's chase and 19 % apart, which is the
+run-to-run spread every chase figure sits in (the idle's three runs at 2
+and 2 spread 940–1300 us the same way). Not one run woke a resting body
+in Jolt (`joltWakes=0` throughout, eight balls a chase). The idle's worst target is the armpit figure above
+at every setting, so two iterations cost nothing there; the chase's worst
+figures are the knockdown and reset transients. The two-sub-step rows at
+60 Hz split a 16.7 ms frame into 8.3 ms sub-steps, past the motors' 8 ms
+bound, so they stand for the step's cost and not for the ragdoll's
+tracking at the device's 5 ms (their 13–14 cm chase worsts cannot be told
+from motor lag); the device's own cadence, two 5 ms sub-steps at 100 Hz,
+is held to the slack and to the parts' rest errors by `ZombieClothTests`
+(`testTheDeviceTwoSubStepsKeepTheShirtWithinItsSlack`): at two
+sub-steps the idle shirt sits 3.0 mm inside its slack and the sway
+18 mm past it against the 20 mm bound (11 mm at three), the hands
+resting 3.2 cm off their joints at either. The skin-only chase's first
+median hides one 47 ms sample at a reset (its mean is 3.8 ms, the next
+largest sample 13 ms; the second run's largest is 4.0 ms), where every
+other configuration's chase maximum is 2.4–4.5 ms. Asleep or out of range the step is the ragdoll's
+and the room's alone: 237 us median with the body asleep in Jolt, against
+1744 us when Jolt still solved the far shirt. Three worker threads
+measured the idle the same and the chase a sixth to a quarter lower on
+the medians (1405 and 1702 against 1845 and 2036 us, two runs each),
+inside the 19 % spread of the two runs at 3 and 3, so the device keeps
+Jolt's default — three is worth trying on the M2, where four of the eight
+cores are efficiency cores. The idle never slept
+in any run: its fastest joint moves 0.7–1.0 mm a frame at 60 Hz (bursts
+of 6 mm), which at the headset's 100 Hz is 0.4–0.6 mm and would pass the
+1 mm rule most frames, but the shirt's particles move 0.2–0.5 m/s with
+it, far over the 2 cm/s rule, and over a perfectly still powered ragdoll
+the cuffs keep moving at 3–8 cm/s against the forearm and hand parts
+(`ZombieClothTests` documents it), so a 2 mm joint threshold would change
+nothing; the sleep fires on the skin alone, out of range, or once the
+parts sleep too. With `-debugLog`
 the sandbox prints the cloth's report every second (particles, pins, the
-slack multiplier, awake or asleep, the skin feed and read-back
-microseconds, the step interval, the farthest particle from its target)
-and warns when the override count stood still for a second while the
-cloth was awake and in range; the headset shows the short form (state,
-timings, counters) in the control window's footnote. A body that does not
+slack multiplier, awake or asleep and Jolt's state, the skin feed and
+read-back microseconds, the step interval, the farthest particle from its
+target, the joints' motion, the wakes Jolt gave a resting body) and warns when the override count stood still
+for a second while the cloth was awake and in range; the headset shows
+the short form (state, timings, counters) in the control window's
+footnote, beside the frame's own line (the engine's CPU update and
+encode and GPU milliseconds in a debug build, and the frames whose GPU
+work finished after the compositor's deadline). A body that does not
 take the deformation component at the attach is refused like a stale
 sidecar, since the override's write is silent. The ragdoll's
 capsules are fitted inside the body and a particle's radius under the
@@ -723,7 +818,10 @@ either platform (`-room none` turns the sample off); launch arguments
 set the engine's pose-timing knobs at launch; the window's *Pose*,
 *Pacing* and *AA* pickers switch the same two and the anti-aliasing live,
 for telling the presentation from the tracking when the body sways against
-the room while its coordinates hold)
+the room while its coordinates hold; `-cloth off|skin|ragdoll` and
+`-clothIterations <n>` set the shirt's simulation at launch and the
+*Cloth* and *Cloth quality* pickers switch it live, the footnote's cloth
+and frame lines side by side for each — see Physics)
 without gaze-and-pinch input, for automated runs:
 
 ```bash
