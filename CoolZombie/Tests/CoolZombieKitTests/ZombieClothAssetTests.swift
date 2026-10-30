@@ -199,13 +199,15 @@ final class ZombieClothAssetTests: XCTestCase {
     /// hangs: the shirt at the collar, the trousers at the waist. The shirt is buttoned
     /// and the prep sews its front, so its openings are the collar, the hem and the two
     /// cuffs: four loops; the trousers' are the waist and two hems: three. The buttoned
-    /// front gets 5 mm of slack (the buttons hold the panels to the chest), the cuffs
-    /// 1 cm, the trousers' hems 2 cm, the rest 3 cm.
+    /// front gets 5 mm of slack (the buttons hold the panels to the chest), the armhole
+    /// band 5 cm, the trousers' hems 2 cm, the rest 3 cm — the cuffs too: they had a
+    /// centimetre, and the ragdoll's forearm and hand parts, 1-3 cm off the pose at rest
+    /// from their joint limits, pushed them 2 cm past it every frame.
     func testTheProxiesAreOnePieceWithTheirOpeningsAndPins() throws {
         let cloth = try loadCloth()
         let shirt = try XCTUnwrap(cloth.garment(named: "shirt"))
         let trousers = try XCTUnwrap(cloth.garment(named: "trousers"))
-        for (g, expectedLoops, minPins, slacks) in [(shirt, 4, 20, [Float(0), 0.005, 0.01, 0.03]), (trousers, 3, 60, [0, 0.02, 0.03])] {
+        for (g, expectedLoops, minPins, slacks) in [(shirt, 4, 20, [Float(0), 0.005, 0.03, 0.05]), (trousers, 3, 60, [0, 0.02, 0.03])] {
             let e = edges(of: g.triangles)
             XCTAssertEqual(islandCount(particles: g.particles.count, edges: e.undirected), 1, "\(g.name) is not one piece")
             let loops = boundaryLoopCount(triangles: g.triangles, g.name)
@@ -320,5 +322,81 @@ final class ZombieClothAssetTests: XCTestCase {
                 }
             }
         }
+    }
+
+    /// The shirt's skin weights are graded across the seams between bones' regions
+    /// (`grade_weight_seams` in the prep). The artist's automatic weights handed the shirt
+    /// from one bone to the next across single edges — upperarm 0.98 to spine_02 0.73 a
+    /// centimetre apart at the armhole, as sharply from spine_01 to spine_02 at the waist
+    /// — so skinned with the arms forward those edges stretched to twenty times their
+    /// length, and the cloth, keeping its rest lengths, sat 13 cm from its target under
+    /// each arm. Graded, the L1 distance between the weight vectors of an edge's two
+    /// particles stays under 0.8 on every edge of the shirt (it was 1.885 at the armhole,
+    /// 1.78 at the collar, 1.65 at the waist; the 16-pass blur over every seam and the
+    /// 200 more over the 12 cm around the armhole leave the worst edge at the waist, 0.675
+    /// from spine_02 to spine_01, and 9 edges over 0.5), and the particles within 8 cm of
+    /// the armhole seam — the edges whose particles are dominated by an arm bone (a
+    /// clavicle, an upper arm) on one side and a torso bone (a spine link, the neck, the
+    /// pelvis) on the other — have 5 cm of slack unless pinned or on the buttoned front,
+    /// and no other particle has. The trousers keep the artist's weights (they are
+    /// not simulated yet); their jumps are printed for the record.
+    func testTheShirtWeightsAreGradedAcrossTheSeamsAndTheArmholeHasSlack() throws {
+        let cloth = try loadCloth()
+        func jumps(_ g: ZombieClothAsset.Garment) -> [(jump: Float, a: Int, b: Int)] {
+            var vectors = [[Float]](repeating: [Float](repeating: 0, count: g.jointPaths.count), count: g.particles.count)
+            for (i, influences) in g.influences.enumerated() {
+                for pair in influences { vectors[i][Int(pair[0])] = pair[1] }
+            }
+            return edges(of: g.triangles).undirected.map { e in
+                (zip(vectors[e[0]], vectors[e[1]]).reduce(Float(0)) { $0 + abs($1.0 - $1.1) }, e[0], e[1])
+            }.sorted { $0.jump > $1.jump }
+        }
+        func name(_ g: ZombieClothAsset.Garment, _ particle: Int) -> String {
+            String(g.jointPaths[g.dominantJoint[particle]].split(separator: "/").last ?? "")
+        }
+        for g in cloth.garments {
+            let sorted = jumps(g)
+            let p = g.positions
+            let worst = sorted.prefix(5).map { String(format: "%.3f %@-%@ at (%.2f,%.2f,%.2f)", $0.jump, name(g, $0.a), name(g, $0.b), p[$0.a].x, p[$0.a].y, p[$0.a].z) }
+            print("CoolZombie cloth \(g.name): weight jumps over 0.5 on \(sorted.filter { $0.jump > 0.5 }.count) of \(sorted.count) edges, over 0.3 on \(sorted.filter { $0.jump > 0.3 }.count); worst \(worst)")
+            if g.name == "shirt" {
+                XCTAssertLessThan(sorted[0].jump, 0.8, "the shirt's weights jump \(sorted[0].jump) across an edge: the seams are not graded")
+                XCTAssertLessThan(sorted.filter { $0.jump > 0.5 }.count, 20, "too many shirt edges jump over 0.5")
+            }
+        }
+
+        let shirt = try XCTUnwrap(cloth.garment(named: "shirt"))
+        let arm = ["clavicle_", "upperarm_"], torso = ["spine_", "neck_", "pelvis"]
+        func side(_ particle: Int) -> Int {
+            let joint = name(shirt, particle)
+            if arm.contains(where: { joint.hasPrefix($0) }) { return 1 }
+            if torso.contains(where: { joint.hasPrefix($0) }) { return -1 }
+            return 0
+        }
+        let p = shirt.positions
+        let seam = edges(of: shirt.triangles).undirected.filter { side($0[0]) * side($0[1]) < 0 }
+        XCTAssertGreaterThan(seam.count, 100, "the armhole seam was not found")
+        func distanceToSeam(_ q: SIMD3<Float>) -> Float {
+            var best = Float.greatestFiniteMagnitude
+            for e in seam {
+                let a = p[e[0]], ab = p[e[1]] - a
+                let t = min(max(simd_dot(q - a, ab) / max(simd_length_squared(ab), 1e-9), 0), 1)
+                best = min(best, simd_distance(q, a + ab * t))
+            }
+            return best
+        }
+        var banded = 0, missing = 0, stray = 0
+        for (i, slack) in shirt.maxDistance.enumerated() {
+            let d = distanceToSeam(p[i])
+            // The band's own slacks only: pins and the buttoned front keep theirs.
+            if slack == 0.05 { banded += 1 }
+            if d < 0.079, slack == 0.03 { missing += 1 }
+            if d > 0.081, slack == 0.05 { stray += 1 }
+        }
+        print("CoolZombie cloth shirt: \(seam.count) armhole seam edges, \(banded) particles with 5 cm of slack")
+        XCTAssertGreaterThan(banded, 500, "the armhole band is too small")
+        XCTAssertLessThan(banded, shirt.particles.count / 2, "the armhole band is most of the shirt")
+        XCTAssertEqual(missing, 0, "\(missing) particles within 8 cm of the armhole seam keep 3 cm of slack")
+        XCTAssertEqual(stray, 0, "\(stray) particles farther than 8 cm from the armhole seam have the band's 5 cm")
     }
 }

@@ -38,8 +38,16 @@ clip pipeline expect, the UE4-mannequin convention that `ZombieAA` had:
     longer than 39 mm, never makes a sliver, and keeps the UVs; after it every vertex,
     edge midpoint and face centre of both proxies is pushed to 2 mm off the body (a
     40 mm chord over a thigh sags into the skin) — the proxies are what the game draws
-    until the render shell is bound to them. The full shirt shell with its buttons stays
+    until the render shell is bound to them. The shirt's weights are graded across every
+    seam between bones' regions (the artist's jump from the upper arm to the spine over
+    a single edge at the armhole, and the like at the waist and the elbow: the vertices
+    within 6 cm of a seam are blurred over about 5 cm), and the sidecar opens the slack
+    to 5 cm within 8 cm of the armhole seam. The full shirt shell with its buttons stays
     in the rig file as `Shirt_Render`, hidden and not exported, for that later phase;
+  * the ragdoll's twenty capsules fitted to this body and logged in the rig's syntax
+    (`fit_capsules`): inside the skin the part's bones move and a cloth particle's
+    collision radius (1 cm) inside the shirt and the trousers proxies, for
+    ZombieRagdollRig.swift's table, which ZombieRagdollRigTests holds to the export;
   * the belt loops of the new trousers join the shoes as rigid skin: they ride the waist;
   * the texture sets baked into one 2x2 atlas of TEX_SIZE tiles: face, body and the old
     clothes (the shoes) take three tiles as before; the fourth tile holds the shirt and
@@ -57,7 +65,7 @@ clip pipeline expect, the UE4-mannequin convention that `ZombieAA` had:
     of the collar face the body, and those particles are listed so the game can put their
     back-stop on the body side), joint paths, influences, the per-particle slack
     (`maxDistance`: 0 pins the collar of the shirt and the waist of the trousers, 5 mm the
-    shirt's buttoned front, 1 cm the cuffs, 2 cm the trousers' hems, 3 cm everywhere
+    shirt's buttoned front, 5 cm its armhole band, 2 cm the trousers' hems, 3 cm everywhere
     else), the back-stop depth, the dominant joint and the bind-pose joint matrices; the
     game binds the particles to the exported vertices by position (the exporter splits
     vertices on UV seams, so one particle maps to several);
@@ -1118,6 +1126,174 @@ def recap_influences(obj):
     log(f"{obj.name}: {capped} split vertices cut back to 4 influences ({rehomed} rehomed); influences per vertex {histogram}")
 
 
+ARM_BONES = ("clavicle_", "upperarm_")
+TORSO_BONES = ("spine_", "neck_", "pelvis")
+# Metres either side of a weight seam that are graded; the wider band around the armhole
+# seam that is blurred further, and the number of passes; and the band around it whose
+# particles get the opened slack in the sidecar.
+SEAM_BAND = 0.06
+ARMPIT_BAND = 0.12
+ARMPIT_PASSES = 200
+ARMHOLE_SLACK_BAND = 0.08
+ARMHOLE_SLACK = 0.05
+armhole_slack_vertices = set()
+
+
+def vertex_weights(obj):
+    return {v.index: {g.group: g.weight for g in v.groups if g.weight > 0} for v in obj.data.vertices}
+
+
+def dominant_group(weights):
+    return max(weights, key=weights.get) if weights else None
+
+
+def weight_jumps(obj, names, weights=None):
+    """Per edge, the L1 distance between its ends' weight vectors, worst first, as
+    (jump, (index a, index b), position a, position b, the two dominant bones)."""
+    mw = obj.matrix_world
+    weights = weights or vertex_weights(obj)
+    jumps = []
+    for e in obj.data.edges:
+        a, b = e.vertices
+        wa, wb = weights[a], weights[b]
+        jump = sum(abs(wa.get(k, 0.0) - wb.get(k, 0.0)) for k in wa.keys() | wb.keys())
+        da, db = dominant_group(wa), dominant_group(wb)
+        jumps.append((jump, (a, b), mw @ obj.data.vertices[a].co, mw @ obj.data.vertices[b].co,
+                      (names[da] if da is not None else None, names[db] if db is not None else None)))
+    jumps.sort(key=lambda j: j[0], reverse=True)
+    return jumps
+
+
+def seam_edges(obj, weights, sides=None):
+    """The edges whose ends are dominated by different bones; with `sides`, a pair of
+    name-prefix tuples, only those with one end on each side. As world-space segments."""
+    names = [g.name for g in obj.vertex_groups]
+    mw = obj.matrix_world
+    out = []
+    for e in obj.data.edges:
+        a, b = e.vertices
+        da, db = dominant_group(weights[a]), dominant_group(weights[b])
+        if da is None or db is None or da == db:
+            continue
+        if sides is not None:
+            na, nb = names[da], names[db]
+            if not ((na.startswith(sides[0]) and nb.startswith(sides[1])) or (nb.startswith(sides[0]) and na.startswith(sides[1]))):
+                continue
+        out.append((mw @ obj.data.vertices[a].co, mw @ obj.data.vertices[b].co))
+    return out
+
+
+def within(obj, segments, distance):
+    """The vertex indices within `distance` of any of the world-space `segments`."""
+    mw = obj.matrix_world
+    return {v.index for v in obj.data.vertices if any(segment_distance(mw @ v.co, a, b) <= distance for a, b in segments)}
+
+
+def grade_weight_seams(obj, arm, band=SEAM_BAND, slack_band=ARMHOLE_SLACK_BAND, blend=0.5, passes=16, trace=0.03,
+                       armpit_band=ARMPIT_BAND, armpit_passes=ARMPIT_PASSES):
+    """The artist's automatic weights hand the shirt from one bone to the next across
+    single edges: at the armhole from the upper arm (0.98) to the spine (0.73) a
+    centimetre apart, and as sharply from spine_01 to spine_02 at the waist and from the
+    upper arm to the forearm at the elbow. Skinned with the arms held forward, the armhole
+    edges stretch to twenty times their length; the cloth keeps its rest lengths, so under
+    each arm it sat 13 cm from its skinned target whatever the solver did (Mac,
+    2026-10-30); the waist and the elbow do the same when the body bends or the forearm
+    turns. This grades the weights across every seam, in place: a seam is an edge whose
+    ends are dominated by different bones; every vertex within `band` of one has its
+    weights replaced by the blend of its one-ring's (inverse edge length weighted,
+    `blend` of the ring against the rest of itself) `passes` times, then the shirt is
+    capped at four influences again. The passes are a blur, and their number its width:
+    sixteen half-weight passes over 1.7 cm edges spread a step over about 5 cm either
+    side, which fits inside the band (the vertices beyond it hold their weights) and
+    stays a local ramp. Run to convergence instead, the band — three quarters of the
+    shirt, since the seams at the yoke and the back lie close — becomes one harmonic
+    blend of every bone around it: the upper arm's weight reached the shoulder blade
+    and a pure spine_02 pocket there met it across a jump of 0.77. The armhole alone is
+    then blurred further: the vertices within `armpit_band` of the armhole seam (an arm
+    bone's region against a torso bone's, as the artist left it) take `armpit_passes`
+    more. The chase's idle holds the arms out in front, 40 cm from where they hang in
+    the bind pose, and the sleeve's underside hangs between that arm and a flank that
+    did not move; the cloth keeps its rest lengths where the skinning stretches them,
+    so the farthest particle from its skinned target there is what the ramp's width
+    sets: 16.3 cm with the artist's weights, 9.4 after the 16 passes, 5.2 with two
+    hundred more over 12 cm (ZombieClothTests measures it, on the skin alone the same
+    figure: the ragdoll's capsules play no part). Wider or deeper than that it turns
+    back up (6.7 cm at 300 passes over 11 cm, 7.1 at 400 over 12, the blur reaching the
+    yoke and the back), and a band of 13 cm or more carries arm weight to within 20 cm
+    of the pelvis, which ZombieSkinTests forbids. The blur's tails go:
+    a bone left with less than `trace` of a vertex is dropped and the rest renormalised,
+    since 3 % of a bone moves a vertex by nothing the eye sees and only carries a far
+    bone where the prune took it off (two per cent of the upper arm had reached the
+    waist, and ZombieSkinTests holds the hips to no arm weight at all). The vertices within
+    `slack_band` of the armhole seam as it lies after the grading (an arm bone's region
+    against a torso bone's) are kept for the sidecar's slack (`shirt_slack` opens theirs
+    to ARMHOLE_SLACK): the graded skin still stretches those edges most. Positions
+    never move: the particles stay the exported vertices. Logs the worst jumps before
+    and after."""
+    names = [g.name for g in obj.vertex_groups]
+    weights = vertex_weights(obj)
+    mw = obj.matrix_world
+    positions = {v.index: mw @ v.co for v in obj.data.vertices}
+    seams = seam_edges(obj, weights)
+    armhole_before = seam_edges(obj, weights, sides=(ARM_BONES, TORSO_BONES))
+    if not armhole_before:
+        fail(obj.name, "has no armhole seam: no edge runs from an arm bone's vertex to a torso bone's")
+    seam_band = within(obj, seams, band)
+    armpit = within(obj, armhole_before, armpit_band)
+    before = weight_jumps(obj, names, weights)
+
+    def blur(vertices, count):
+        ring = {i: [] for i in vertices}
+        for e in obj.data.edges:
+            a, b = e.vertices
+            length = max((positions[a] - positions[b]).length, 1e-4)
+            if a in ring:
+                ring[a].append((b, 1.0 / length))
+            if b in ring:
+                ring[b].append((a, 1.0 / length))
+        for _ in range(count):
+            blended = {}
+            for i, neighbours in ring.items():
+                total = sum(w for _, w in neighbours)
+                if total <= 0:
+                    continue
+                mixed = {k: (1.0 - blend) * w for k, w in weights[i].items()}
+                for j, a in neighbours:
+                    for k, w in weights[j].items():
+                        mixed[k] = mixed.get(k, 0.0) + blend * a / total * w
+                norm = sum(mixed.values())
+                blended[i] = {k: w / norm for k, w in mixed.items() if w > 0}
+            weights.update(blended)
+
+    blur(seam_band, passes)
+    blur(armpit, armpit_passes)
+    graded = seam_band | armpit
+    for i in graded:
+        kept = {k: w for k, w in weights[i].items() if w >= trace} or dict(weights[i])
+        norm = sum(kept.values())
+        weights[i] = {k: w / norm for k, w in kept.items()}
+        v = obj.data.vertices[i]
+        for gi in [g.group for g in v.groups]:
+            obj.vertex_groups[gi].remove([i])
+        for gi, w in weights[i].items():
+            obj.vertex_groups[gi].add([i], w, "REPLACE")
+    capped, rehomed, histogram = cap_influences(obj, arm)
+    after = weight_jumps(obj, names)
+    armhole_after = seam_edges(obj, vertex_weights(obj), sides=(ARM_BONES, TORSO_BONES))
+    near = within(obj, armhole_after, slack_band)
+    armhole_slack_vertices.clear(); armhole_slack_vertices.update(near)
+    log(f"{obj.name} seams: {len(seams)} edges between bones' regions ({len(armhole_before)} at the armhole), {len(seam_band)} vertices within "
+        f"{band * 100:.0f} cm graded over {passes} passes, {len(armpit)} within {armpit_band * 100:.0f} cm of the armhole over {armpit_passes} more; "
+        f"{capped} vertices capped back to 4 influences; influences per vertex {histogram}; "
+        f"armhole seam afterwards {len(armhole_after)} edges, {len(near)} vertices within {slack_band * 100:.0f} cm get {ARMHOLE_SLACK * 100:.0f} cm of slack")
+    for label, jumps in (("before", before), ("after", after)):
+        worst = jumps[0]
+        log(f"  {obj.name} weight jumps {label}: worst {worst[0]:.3f} across {worst[1]} {tuple(round(c, 3) for c in worst[2])} ({worst[4][0]}) - "
+            f"{tuple(round(c, 3) for c in worst[3])} ({worst[4][1]}); {sum(1 for j in jumps if j[0] > 0.5)} edges jump more than 0.5, "
+            f"{sum(1 for j in jumps if j[0] > 0.3)} more than 0.3; next {[round(j[0], 3) for j in jumps[1:6]]}")
+    return len(seams), len(graded), before[0][0], after[0][0]
+
+
 def orient_outward(obj, tree):
     """Consistent face normals, pointing away from the body (the reference surface)."""
     bm = bmesh.new(); bm.from_mesh(obj.data)
@@ -1489,9 +1665,254 @@ outer_layer(shirt, body_tree)
 sew_placket(shirt, body_tree)
 decimate_proxy(shirt, 4000)
 recap_influences(shirt)
+grade_weight_seams(shirt, arm)
 orient_outward(shirt, body_tree)
 push_off_body(shirt, body_tree)
 report_proxy("shirt", shirt, loops=4)
+
+
+# ---------------------------------------------------------------- ragdoll capsule fit
+# Engine space is the exporter's: Blender (x, y, z) -> (x, z, -y) at the game scale the
+# meshes already have. The sidecar below and the capsule fit here both report in it.
+from bpy_extras.io_utils import axis_conversion
+CONVERSION = axis_conversion(from_forward="-Y", from_up="Z", to_forward="Z", to_up="Y").to_4x4()
+if (CONVERSION @ Vector((1, 2, 3))) != Vector((1, 3, -2)):
+    fail("axis conversion is not (x, z, -y):", CONVERSION @ Vector((1, 2, 3)))
+
+
+def engine_point(p):
+    q = CONVERSION @ p
+    return [round(q.x, 6), round(q.y, 6), round(q.z, 6)]
+
+
+# The ragdoll (ZombieRagdollRig.swift) is twenty capsules on the rig's joints. Their
+# sizes used to be the old mannequin's, and on this body the spine capsules reached
+# 7 cm through the back of the shirt, so with ragdoll collisions on the cloth sat past its
+# slack and jittered. Here every capsule is fitted to this body, in its bind pose, and the
+# numbers are pasted into the rig's table (ZombieRagdollRigTests holds them to the export).
+# The fit, per part: the skin its bones move (the body without hair, plus the shoes it
+# wears), profiled around the capsule's own line in bins of CAPSULE_T_BIN along it and
+# CAPSULE_SECTORS around it, where the skin's reach is the farthest vertex in the bin
+# (teeth, tongue and eyes are never the farthest, so cavities do not fool it); the line
+# runs along the bone through the mean of those profile points, or for the limbs from the
+# centroid of their first third to their last third's (the shin leaves the ankle at the
+# Achilles tendon, the femur is lateral in the thigh); the span is the bone, the chain's
+# free ends taking the skin's extent (crown, finger tips, heel to the ball) and the pelvis
+# the hips; the radius is the largest that keeps every surface sample within the skin's
+# reach plus CAPSULE_SKIN_TOLERANCE and every point of both garment proxies, the shirt and
+# the trousers, CAPSULE_GARMENT_MARGIN clear — the proxies' surfaces sampled on a lattice
+# of GARMENT_SAMPLES_PER_EDGE points along every triangle edge (28 points a triangle), since
+# the vertices alone put the surface 0.3-2.6 mm farther than it is — scanned by the
+# millimetre and verified on a denser sampling. A high percentile of the radial distances,
+# the first idea, pokes through the front and the back of every torso link: the torso is
+# an ellipse and a capsule is round. The garment margin is a cloth particle's collision
+# radius (ZombieCloth.Configuration.vertexRadius): Jolt holds a particle that far off a
+# capsule, so a capsule any closer under a garment pushes the cloth off its skin before the
+# part has moved at all — and the parts hang a finger's width off their joints at rest
+# (the forearm 1 cm, the hand 3 cm, under the tight sleeve and its cuff). The trousers are
+# not simulated yet, but they are in the sidecar and one configuration switch away, and a
+# thigh capsule fitted to the shirt alone sat 0.7 mm through them.
+CAPSULE_T_BIN = 0.01
+CAPSULE_SECTORS = 24
+CAPSULE_SKIN_TOLERANCE = 0.003
+CAPSULE_GARMENT_MARGIN = 0.010
+GARMENT_SAMPLES_PER_EDGE = 6
+# A part thinner than this is no body: the clavicles, which the shirt's yoke hugs, keep it.
+CAPSULE_MIN_RADIUS = 0.005
+CAPSULE_SAFETY = 0.001
+CAPSULE_TIP_INSET = 0.015
+
+
+def capsule_frame(d):
+    up = np.array([0, 1, 0.0]) if abs(d[1]) < 0.9 else np.array([1, 0, 0.0])
+    u = np.cross(d, up); u /= np.linalg.norm(u)
+    return u, np.cross(d, u)
+
+
+def capsule_cylindrical(points, origin, d):
+    """Station along the line, perpendicular offset, radius, and the (station, sector) bin."""
+    u, v = capsule_frame(d)
+    w = points - origin
+    t = w @ d
+    perp = w - np.outer(t, d)
+    r = np.linalg.norm(perp, axis=1)
+    sector = ((np.arctan2(perp @ v, perp @ u) + np.pi) / (2 * np.pi) * CAPSULE_SECTORS).astype(int) % CAPSULE_SECTORS
+    return t, perp, r, np.floor(t / CAPSULE_T_BIN).astype(int), sector
+
+
+def skin_profile(points, origin, d):
+    """Per bin, (reach, index of the farthest vertex)."""
+    t, perp, r, ti, si = capsule_cylindrical(points, origin, d)
+    prof = {}
+    for i in range(len(points)):
+        key = (ti[i], si[i])
+        if key not in prof or r[i] > prof[key][0]:
+            prof[key] = (r[i], i)
+    return prof, t, perp, r
+
+
+def capsule_surface(a, b, d, r, step, around, latitudes):
+    """Sample points on a capsule: rings along the cylinder a..b and over both caps."""
+    u, v = capsule_frame(d)
+    angles = (np.arange(around) + 0.5) / around * 2 * np.pi
+    ring = np.outer(np.cos(angles), u) + np.outer(np.sin(angles), v)
+    n = max(int(np.linalg.norm(b - a) / step) + 1, 2)
+    out = [a + (b - a) * s + ring * r for s in np.linspace(0, 1, n)]
+    for lat in np.linspace(0.15, 1.0, latitudes):
+        th = lat * np.pi / 2
+        out.append(a - d * (r * np.sin(th)) + ring * (r * np.cos(th)))
+        out.append(b + d * (r * np.sin(th)) + ring * (r * np.cos(th)))
+    return np.concatenate(out)
+
+
+def points_to_segment(points, a, b):
+    ab = b - a
+    s = np.clip(((points - a) @ ab) / max(ab @ ab, 1e-12), 0, 1)
+    return np.linalg.norm(points - (a + np.outer(s, ab)), axis=1)
+
+
+def garment_surface(obj, n=GARMENT_SAMPLES_PER_EDGE):
+    """The proxy's surface as points, engine space: every triangle sampled on the
+    barycentric lattice with `n` steps along each edge (its corners, the vertices, among
+    them) — (n + 1)(n + 2) / 2 points a triangle, 28 for six. ZombieRagdollRigTests samples
+    the sidecar's triangles the same way."""
+    mw = obj.matrix_world
+    verts = np.array([engine_point(mw @ v.co) for v in obj.data.vertices])
+    tris = np.array([list(p.vertices) for p in obj.data.polygons])
+    a, b, c = verts[tris[:, 0]], verts[tris[:, 1]], verts[tris[:, 2]]
+    return np.concatenate([(a * i + b * j + c * (n - i - j)) / n for i in range(n + 1) for j in range(n + 1 - i)])
+
+
+def fit_capsules(body_objs, garment_objs, arm):
+    """Logs one fitted capsule per ragdoll part (see above) and returns them by name as
+    (from, to, radius) in engine space, the tips of the capsule. `garment_objs` are the
+    proxies the capsules must stay CAPSULE_GARMENT_MARGIN under, the shirt and the
+    trousers."""
+    heads = {b.name: np.array(engine_point(arm.matrix_world @ b.head_local)) for b in arm.data.bones}
+    points, dominants = [], []
+    for o in body_objs:
+        names = [g.name for g in o.vertex_groups]
+        for v in o.data.vertices:
+            best = max(((g.weight, g.group) for g in v.groups), default=None)
+            if best is None:
+                continue
+            points.append(engine_point(o.matrix_world @ v.co)); dominants.append(names[best[1]])
+    points = np.array(points); dominants = np.array(dominants, dtype=object)
+    garments = [(o.name, garment_surface(o)) for o in garment_objs]
+    # The rig's parts: joint, the joint the bone aims at (or continues from), how the
+    # line is laid (along the bone, or through the skin's centroids for a limb), the
+    # span (the bone; the skin's extent from the joint for the head, from a finger's
+    # width below the wrist for the palm; the heel to the ball for the foot; the hips
+    # for the pelvis) and the bones whose skin is
+    # the part's (the upper torso takes the clavicles' too: spine_03 alone moves little
+    # more than the upper back).
+    parts = [
+        ("pelvis", "pelvis", ("toward", "spine_02"), "bone", ("hips", -0.12, 0.04), ["pelvis"]),
+        ("spine_01", "spine_01", ("toward", "spine_02"), "bone", ("bone",), ["spine_01"]),
+        ("spine_02", "spine_02", ("toward", "spine_03"), "bone", ("bone",), ["spine_02"]),
+        ("spine_03", "spine_03", ("toward", "neck_01"), "bone", ("bone",), ["spine_03", "clavicle_l", "clavicle_r"]),
+        ("neck_01", "neck_01", ("toward", "head"), "bone", ("bone",), ["neck_01"]),
+        ("head", "head", ("continuing", "neck_01"), "bone", ("extent",), ["head"]),
+    ]
+    for s in ("l", "r"):
+        parts += [
+            (f"clavicle_{s}", f"clavicle_{s}", ("toward", f"upperarm_{s}"), "bone", ("bone",), [f"clavicle_{s}"]),
+            (f"upperarm_{s}", f"upperarm_{s}", ("toward", f"lowerarm_{s}"), "skin", ("bone",), [f"upperarm_{s}"]),
+            (f"lowerarm_{s}", f"lowerarm_{s}", ("toward", f"hand_{s}"), "skin", ("bone",), [f"lowerarm_{s}"]),
+            (f"hand_{s}", f"hand_{s}", ("continuing", f"lowerarm_{s}"), "bone", ("palm",), [f"hand_{s}"]),
+        ]
+    for s in ("l", "r"):
+        parts += [
+            (f"thigh_{s}", f"thigh_{s}", ("toward", f"calf_{s}"), "skin", ("bone",), [f"thigh_{s}"]),
+            (f"calf_{s}", f"calf_{s}", ("toward", f"foot_{s}"), "skin", ("bone",), [f"calf_{s}"]),
+            (f"foot_{s}", f"foot_{s}", ("toward", f"ball_{s}"), "skin", ("heel_ball",), [f"foot_{s}", f"ball_{s}"]),
+        ]
+
+    def measure(skin, centre, d, lo, hi, r, dense):
+        # Bins run from the capsule's first tip, as the test's do (ZombieRagdollRigTests
+        # has only the tips), so both read the same skin reach.
+        tip = centre + d * lo
+        a, b = centre + d * (lo + r), centre + d * (hi - r)
+        if hi - lo < 2 * r + 0.005:
+            m = (lo + hi) / 2; a, b = centre + d * (m - 0.0025), centre + d * (m + 0.0025)
+        prof, _, _, _ = skin_profile(skin, tip, d)
+        samples = capsule_surface(a, b, d, r, 0.0025 if dense else 0.005, 96 if dense else 48, 14 if dense else 6)
+        _, _, sr, sti, ssi = capsule_cylindrical(samples, tip, d)
+        excess = -9.0
+        for i in range(len(samples)):
+            reach = prof.get((sti[i], ssi[i]))
+            if reach is not None and sr[i] - reach[0] > excess:
+                excess = sr[i] - reach[0]
+        # The clearance per garment, the smallest first.
+        clearances = sorted((points_to_segment(surface, a, b).min() - r, name) for name, surface in garments)
+        return excess, clearances
+
+    fitted = {}
+    for name, joint, (how, other), line_rule, span_rule, bones in parts:
+        p0 = heads[joint]
+        d = (p0 - heads[other]) if how == "continuing" else (heads[other] - p0)
+        bone_length = np.linalg.norm(d); d = d / bone_length
+        skin = points[np.isin(dominants, bones)]
+        centre, direction = p0.copy(), d.copy()
+        for _ in range(3):
+            prof, t, perp, r = skin_profile(skin, centre, direction)
+            outer = np.array([prof[k][1] for k in prof])
+            centre = centre + perp[outer].mean(axis=0)
+        if line_rule == "skin":
+            for _ in range(2):
+                prof, t, perp, r = skin_profile(skin, centre, direction)
+                outer = np.array([prof[k][1] for k in prof])
+                t_outer = t[outer]; lo, hi = t_outer.min(), t_outer.max()
+                first = skin[outer][t_outer < lo + (hi - lo) / 3]; last = skin[outer][t_outer > hi - (hi - lo) / 3]
+                direction = last.mean(axis=0) - first.mean(axis=0); direction /= np.linalg.norm(direction)
+                centre = skin[outer].mean(axis=0)
+                prof, t, perp, r = skin_profile(skin, centre, direction)
+                outer = np.array([prof[k][1] for k in prof])
+                centre = centre + perp[outer].mean(axis=0)
+        prof, t, perp, r = skin_profile(skin, centre, direction)
+        outer = np.array([prof[k][1] for k in prof])
+        station = (p0 - centre) @ direction
+        if span_rule[0] == "bone":
+            lo, hi = station, (heads[other] - centre) @ direction
+        elif span_rule[0] == "extent":
+            lo, hi = station, np.percentile(t[outer], 99.5) - CAPSULE_TIP_INSET
+        elif span_rule[0] == "palm":
+            # From a finger's width below the wrist: the hand part sits 3 cm off its
+            # joint at rest (its limits), and a capsule up to the wrist reached into
+            # the cuff and pushed it off its skin.
+            lo, hi = station + 0.02, np.percentile(t[outer], 99.5) - CAPSULE_TIP_INSET
+        elif span_rule[0] == "heel_ball":
+            lo, hi = np.percentile(t[outer], 1) + CAPSULE_TIP_INSET, (heads[other] - centre) @ direction + 0.02
+        else:
+            lo, hi = station + span_rule[1], station + span_rule[2]
+        radius = 0.0; stop = "?"
+        for k in range(1, 300):
+            excess, clearances = measure(skin, centre, direction, lo, hi, k * 0.001, False)
+            if excess > CAPSULE_SKIN_TOLERANCE or clearances[0][0] < CAPSULE_GARMENT_MARGIN:
+                stop = "the skin" if excess > CAPSULE_SKIN_TOLERANCE else "the " + clearances[0][1].lower()
+                break
+            radius = k * 0.001
+        radius -= CAPSULE_SAFETY
+        while radius > CAPSULE_MIN_RADIUS:
+            excess, clearances = measure(skin, centre, direction, lo, hi, radius, True)
+            if excess <= CAPSULE_SKIN_TOLERANCE and clearances[0][0] >= CAPSULE_GARMENT_MARGIN:
+                break
+            radius -= 0.001
+        radius = max(radius, CAPSULE_MIN_RADIUS)
+        excess, clearances = measure(skin, centre, direction, lo, hi, radius, True)
+        tip_from, tip_to = centre + direction * lo, centre + direction * hi
+        angle = math.degrees(math.acos(min(1, max(-1, float(direction @ d)))))
+        fitted[name] = (tip_from, tip_to, radius)
+        log(f"capsule {name}: {len(skin)} skin vertices, line {angle:.1f} deg off the bone, {hi - lo:.3f} m from {tuple(round(c, 3) for c in tip_from)} "
+            f"to {tuple(round(c, 3) for c in tip_to)}, radius {radius:.3f} stopped by {stop}: skin excess {excess * 1000:+.1f} mm, "
+            + ", ".join(f"{garment.lower()} clearance {c * 1000:+.1f} mm" for c, garment in sorted(clearances, key=lambda x: x[1])))
+    log("capsules for ZombieRagdollRig.swift (engine space, the capsule's tips):")
+    for name, (a, b, r) in fitted.items():
+        log(f'  {name}: Capsule(from: SIMD3({a[0]:.3f}, {a[1]:.3f}, {a[2]:.3f}), to: SIMD3({b[0]:.3f}, {b[1]:.3f}, {b[2]:.3f}), radius: {r:.3f})')
+    return fitted
+
+
+fit_capsules([body, shoes], [shirt, trousers], arm)
 
 
 # ---------------------------------------------------------------- UVs into the atlas
@@ -1543,21 +1964,10 @@ log(f"body: {len(hidden)} faces under the clothes removed, {len(body.data.polygo
 
 
 # ---------------------------------------------------------------- cloth sidecar data
-# Engine space is the exporter's: Blender (x, y, z) -> (x, z, -y) at the game scale the
-# meshes already have. The particles are the proxy vertices before the join (the join
-# keeps every vertex where it is), the triangles the proxy faces, counter-clockwise seen
-# from outside the garment (the faces point away from the body, see orient_outward).
-from bpy_extras.io_utils import axis_conversion
-CONVERSION = axis_conversion(from_forward="-Y", from_up="Z", to_forward="Z", to_up="Y").to_4x4()
-if (CONVERSION @ Vector((1, 2, 3))) != Vector((1, 3, -2)):
-    fail("axis conversion is not (x, z, -y):", CONVERSION @ Vector((1, 2, 3)))
-
-
-def engine_point(p):
-    q = CONVERSION @ p
-    return [round(q.x, 6), round(q.y, 6), round(q.z, 6)]
-
-
+# In engine space (CONVERSION, above). The particles are the proxy vertices before the
+# join (the join keeps every vertex where it is), the triangles the proxy faces,
+# counter-clockwise seen from outside the garment (the faces point away from the body,
+# see orient_outward).
 def engine_matrix_column_major(m):
     e = CONVERSION @ m @ CONVERSION.inverted()
     return [round(e[r][c], 7) for c in range(4) for r in range(4)]
@@ -1638,31 +2048,30 @@ def garment_record(obj, name, slack):
     }
 
 
-hand_heads = [arm.matrix_world @ arm.data.bones[n].head_local for n in ("hand_l", "hand_r")]
-
-
 def shirt_slack(bm, loops, band=0.02):
-    """The collar loop and its one-ring pinned, the buttoned front 5 mm, the cuffs 1 cm,
-    the rest (the body of the shirt and its hem) 3 cm. The collar is the loop with the
-    highest centroid (the front is sewn, so it is a loop of its own); a cuff is a loop
-    whose centroid sits within 20 cm of a hand; the buttoned front is the band of
-    `band` either side of the centre line at the front, from the hem up to the collar,
-    where the buttons hold the two panels to each other and to the chest."""
+    """The collar loop and its one-ring pinned, the buttoned front 5 mm, the armhole band
+    5 cm, the rest (the body of the shirt, its hem and its cuffs) 3 cm. The collar is the
+    loop with the highest centroid (the front is sewn, so it is a loop of its own); the
+    buttoned front is the band of `band` either side of the centre line at the front,
+    from the hem up to the collar, where the buttons hold the two panels to each other
+    and to the chest; the armhole band is the vertices within ARMHOLE_SLACK_BAND of the
+    seam (grade_weight_seams), where the graded skin still stretches the edges most and
+    the cloth needs room to keep its lengths. The cuffs had a centimetre, to ride the
+    forearm; but the ragdoll's forearm and hand parts hang 1-3 cm off the pose at rest
+    (their joint limits) and 8-13 cm off in a run, and their capsules pushed the cuffs
+    2 cm past that slack every frame, so the cuffs take the body's slack and hang on the
+    wrist."""
     mw = shirt.matrix_world
     collar = max(loops, key=lambda l: sum((mw @ v.co).z for v in l) / len(l))
     pinned = ring(bm, collar, 1)
-    cuffs = set()
-    for l in loops:
-        c = sum((mw @ v.co for v in l), Vector()) / len(l)
-        if any((c - h).length < 0.20 for h in hand_heads):
-            cuffs |= set(l)
     collar_z = min((mw @ v.co).z for v in collar)
     front = {v for v in bm.verts if abs((mw @ v.co).x) < band and (mw @ v.co).y < 0.06 and (mw @ v.co).z < collar_z}
+    armhole = {v for v in bm.verts if v.index in armhole_slack_vertices} - pinned - front
     log(f"shirt: {len(loops)} loops; collar loop {len(collar)} verts (z from {collar_z:.3f}), pinned with one-ring {len(pinned)}, "
-        f"cuff verts {len(cuffs)}, buttoned front {len(front - pinned)} verts")
-    if len(cuffs) == 0:
-        fail("shirt: no cuff loop found near the hands")
-    return [0.0 if v in pinned else (0.005 if v in front else (0.01 if v in cuffs else 0.03)) for v in bm.verts]
+        f"buttoned front {len(front - pinned)} verts, armhole band {len(armhole)} verts")
+    if len(armhole) == 0:
+        fail("shirt: the armhole band is empty; grade_weight_seams did not run on this proxy")
+    return [0.0 if v in pinned else (0.005 if v in front else (ARMHOLE_SLACK if v in armhole else 0.03)) for v in bm.verts]
 
 
 def trousers_slack(bm, loops):

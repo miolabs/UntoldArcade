@@ -160,7 +160,30 @@ four again (a vertex made by splitting a long edge inherits the groups of
 both ends) and every vertex, edge midpoint and face centre of both proxies
 is pushed to 2 mm off the body: a 40 mm chord over a thigh sags into the
 skin even when its ends stand off it (1072 edge and face middles lifted on
-the trousers before the decimation, more after). The full shirt shell with
+the trousers before the decimation, more after). The shirt's skin weights
+are then graded across the seams between the bones' regions: the artist's
+automatic weights handed the shirt from the upper arm (0.98) to the spine
+(0.73) across single centimetre edges at the armhole, and as sharply from
+spine_01 to spine_02 at the waist and from the upper arm to the forearm at
+the elbow, so skinned with the arms held forward the armhole edges
+stretched to twenty times their length and the cloth, which keeps its rest
+lengths, sat 13 cm from its skinned target under each arm whatever the
+solver did. Every vertex within 6 cm of such a seam (3,055 of the shirt's
+3,995) has its weights blurred over its one-ring sixteen times — a blur of
+about 5 cm, kept local on purpose: run to convergence the band becomes one
+harmonic blend of every bone around the yoke and the upper arm's weight
+reaches the shoulder blade — and the 2,142 within 12 cm of the armhole seam
+two hundred times more, since the arms-forward idle is what the grading is
+for: the farthest the cloth sits from its skinned target there was 16.3 cm
+with the artist's weights, 9.4 after the sixteen passes and is 5.2 with the
+two hundred (`ZombieClothTests` measures it; wider or deeper the figure turns
+back up, 6.7 cm at 300 passes over 11 cm, and a band of 13 cm or more
+carries arm weight to within 20 cm of the pelvis, which `ZombieSkinTests`
+forbids). Then the traces under 3 % go (two per cent of the upper arm had
+reached the waist) and the influences are capped at four again; the worst
+jump between an edge's two weight vectors falls from 1.89 to 0.68, at the
+waist, and the edges jumping more than 0.5 from 762 to 9. The positions
+never move: the particles stay the exported vertices. The full shirt shell with
 its buttons stays in the rig `.blend` as `Shirt_Render`, hidden and not
 exported, for the render-binding phase. The five belt loops of the new
 trousers stay undecimated and join the shoes as rigid skin.
@@ -182,7 +205,10 @@ choice of taste: the engine binds the animation per skinned mesh node, and
 the exporter splits a multi-material object into one node per material, so
 a split body would be animated once per part.
 `Tests/CoolZombieKitTests/ZombieModelTests.swift` holds the cooked model to
-this.
+this. Before the skin under the clothes is culled, the script also fits the
+ragdoll's twenty capsules to this body and under both garment proxies
+(`fit_capsules`, see the ragdoll below) and logs them in the rig's syntax
+for `ZombieRagdollRig.swift`.
 
 Beside the model the script writes `Zombie.cloth.json`, the cloth sidecar,
 in engine space (the exporter's axes: engine x, y, z is Blender x, z, −y):
@@ -198,8 +224,15 @@ particle summing to one, how far each particle may stray from its skinned
 position (0 pins it: the shirt's collar loop and its one-ring, 100
 particles, the trousers' waist and its two-ring, 167; 5 mm down the
 shirt's buttoned front, where the buttons hold the panels to the chest;
-1 cm at the cuffs, 2 cm at the trousers' hems, 3 cm everywhere else), a 3 mm
-back-stop, the dominant joint, and the bind-pose joint matrices.
+5 cm within 8 cm of the shirt's armhole seam — the edges whose particles
+follow an arm bone on one side and a torso bone on the other, 1,321
+particles, where the graded skin still stretches the edges most and the
+cloth needs room to keep its lengths; 2 cm at the trousers' hems, 3 cm
+everywhere else, the cuffs included: they had a centimetre, to ride the
+forearm, but the ragdoll's forearm and hand parts hang 1-3 cm off the pose
+at rest from their joint limits and pushed them 2 cm past it every
+frame), a 3 mm back-stop, the dominant joint, and the bind-pose joint
+matrices.
 `ZombieClothAsset.swift` decodes it; `ZombieClothAssetTests.swift` holds it
 to the export (every particle on an exported vertex within 0.2 mm, one piece
 per garment with its openings traced as closed boundary cycles — four for
@@ -456,7 +489,42 @@ joints and bind pose, this frame's joint transforms, a per-joint physics
 pose with weights, applied after foot IK); the physics side is the
 plugin's ragdoll (`JoltRagdoll`), built by `ZombieRagdollRig` from the
 skeleton's bind pose so the parts sit on the joints and read straight back
-onto them. The character controller and the ragdoll are on collision
+onto them. The capsules are fitted to the body: `prep_zombie.py` profiles
+the skin each part's bones move around the capsule's own line (1 cm bins
+along it, 15° sectors around it, the skin's reach in a bin its farthest
+vertex, so the teeth and eyes inside the head never count) and keeps the
+largest radius whose surface stays within that reach everywhere, to 3 mm,
+and a cloth particle's collision radius (1 cm) inside the shirt and the
+trousers proxies, their surfaces sampled 28 points a triangle — Jolt holds
+a particle that far off a capsule, so a capsule any closer pushes the
+resting garment off its skin, and the parts hang a finger's width off
+their joints at rest (the forearm 1 cm, the hand 3 cm: the tracking
+motors' springs leave each joint a fraction of a degree to a degree and a
+half short, and it adds up along the chain; `ZombieClothTests` pins the
+figures and holds the cuffs to the hands'); the line runs along the bone
+through the skin's centre — for the
+limbs from the centroid of their first third to their last third's, since
+the shin leaves the ankle at the Achilles tendon and the femur lies
+lateral in the thigh — and spans the bone, the chain's free ends reaching
+the skin's extent (the crown, the palm from a finger's width below the
+wrist, the heel to the ball) and the pelvis the hips. The numbers are
+pasted into the rig's table and `ZombieRagdollRigTests` holds every
+capsule to the export: no point of its surface more than 5 mm out of the
+skin where the export keeps skin (its own bones', and the neighbouring
+parts' where the caps enter them; under the clothes the prep culls it),
+every point of the shirt's and the trousers' surfaces 2 mm clear, at least
+95 % of each capsule's surface samples with skin or a garment around them,
+and every joint within a tenth of a metre of its capsule's line. The torso
+is an ellipse and a capsule is round, so the spine links are as thick as
+their thinnest direction allows (7-9 cm; the hips 10 cm, the head 7 cm,
+the neck 4 cm), the legs as thick as the trousers leave room under them
+(the thighs 3.4-4 cm, the shins 1.5 cm; the knee and the ankle would allow
+5 and 2.3; the feet 2 cm along the sole, inside the shoes) and the arms as
+thick as the tight sleeve leaves room under it (1.0-1.4 cm; the clavicles
+the fit's floor of 5 mm under the yoke): thin for a ball to find, but the
+balls are thrown at the chest. Sized for the old mannequin the capsules
+reached 7 cm through the back of this shirt.
+The character controller and the ragdoll are on collision
 layers that ignore each other; the balls pass through the controller's
 shape and meet the ragdoll's parts. The room's walls
 and furniture are on a layer of their own that the controller and the
@@ -477,7 +545,8 @@ of a millimetre; the exporter splits a vertex on UV seams, so one particle
 drives several), the body is built at the bind pose and hard skinned onto
 the frame's pose before anything steps, and from then on Jolt keeps each
 particle within its slack of where the skin puts it (3 cm on the whole,
-5 mm down the buttoned front, 1 cm at the cuffs, pinned at the collar) and
+5 mm down the buttoned front, 5 cm around the armholes, pinned at the
+collar) and
 outside a back-stop 3 mm behind the skin — the body underneath — while the
 triangles' stretch, shear and bend constraints make it cloth. The frame
 runs: the animation composes the pose; the physics step begins and the
@@ -528,19 +597,30 @@ and warns when the override count stood still for a second while the
 cloth was awake and in range; the headset shows the short form (state,
 timings, counters) in the control window's footnote. A body that does not
 take the deformation component at the attach is refused like a stale
-sidecar, since the override's write is silent. Measured
-on the model as it is, the rig's torso capsules — sized for the old
-model — reach through the back of this shirt (the spine_03 capsule, radius
-0.14 at z −0.19, ends at z −0.33; the shirt's back is at −0.25) and push
-the back's particles 5 cm past their slack and keep them jittering against
-the skin (`ZombieClothTests` prints the figure per region; `-cloth skin`
-shows the shirt without it). And the shirt's skin weights jump from the
-upper arm to the spine across single edges at the armhole, so the
-arms-forward idle stretches those edges up to twenty times their rest
-length in the skinning; the cloth holds its rest lengths there and sits up
-to 14 cm from its skinned target under each arm — the report's `target<=`
-figure, with where it sits — until the seam's weights are graded or its
-slack widened in the sidecar.
+sidecar, since the override's write is silent. The ragdoll's
+capsules are fitted inside the body and a particle's radius under the
+shirt (above), so on the default model the resting shirt stays within its
+slack in every region (`ZombieClothTests` prints the figure per region for both models
+and holds the default to 5 mm; sized for the old mannequin, the spine
+capsules reached 7 cm through the back of this shirt and pushed the
+back's particles 5 cm past their slack, jittering against the skin). The
+shirt's weights are graded across its seams and the sidecar opens the
+slack to 5 cm around the armhole (Assets, above), for the arms-forward
+idle, where the artist's weights stretched the armhole edges twenty-fold
+in the skinning and the cloth, holding its rest lengths, sat 13-14 cm
+from its skinned target under each arm — the report's `target<=` figure,
+with where it sits; in that pose the farthest particle is now 5.2 cm off,
+at the yoke (16.3 with the artist's weights, 9.4 with the seams graded
+over 16 passes alone; `ZombieClothTests` pins it). The capsules play no
+part in it: on the skin alone, with no part in the world, the figure is
+the same to a millimetre. What remains is the skinned targets': the
+sleeve's underside hangs between an arm that moved 40 cm and a flank that
+did not, the skinning stretches those edges and the cloth will not, so the
+particle rests short of a target it could reach. A wider or deeper blur
+turns the figure back up and 13 cm or more puts arm weight on the hips, so
+closer would take other targets (hand-painted armpit weights, or a
+skinning that does not stretch), not the sidecar's blur; the 4 cm this
+round aimed at was not reached.
 
 The package depends on the miolabs fork of the plugin at its
 `feature/zombie_cloth` branch (the character controller, the ragdoll, the

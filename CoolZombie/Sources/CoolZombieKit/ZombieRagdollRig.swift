@@ -15,13 +15,19 @@ import UntoldJoltPhysics
 
 /// The zombie's ragdoll: twenty rigid parts on the mannequin rig's bones
 /// from the pelvis up and out — every link of the spine, the neck, the
-/// clavicles — each a capsule along its bone with the body origin at the
-/// joint, jointed to the part on its parent joint by a swing-twist
-/// constraint (so no bind-pose offset is frozen into a joint). Built from
-/// the skeleton's bind pose, so the parts sit exactly on the joints and a
-/// pose read back from the parts maps straight onto them. Bones without a
-/// part (the toes, the fingers, the twist helpers) keep their animated
-/// offsets under whichever part moves them.
+/// clavicles — each a capsule fitted to the body around its bone with the
+/// body origin at the joint, jointed to the part on its parent joint by a
+/// swing-twist constraint (so no bind-pose offset is frozen into a joint).
+/// Built from the skeleton's bind pose, so the parts' origins sit exactly
+/// on the joints and a pose read back from the parts maps straight onto
+/// them; the capsules are the fitted ones (`specs`), in the zombie export's
+/// model space, carried into each part's frame at build — up to 8 cm off
+/// the joint where the spine runs along the back of the trunk — so the rig
+/// takes any skeleton with these joints but places the capsules where this
+/// body is (ZombieRagdollRigTests holds every joint to within a tenth of a
+/// metre of its capsule on the export). Bones without a part (the toes, the
+/// fingers, the twist helpers) keep their animated offsets under whichever
+/// part moves them.
 public struct ZombieRagdollRig: Sendable {
     /// How a part's capsule is aimed: at another joint, or continuing the
     /// direction from a previous joint (for the last bone of a chain).
@@ -41,14 +47,23 @@ public struct ZombieRagdollRig: Sendable {
         case backward(Float)
     }
 
+    /// A part's capsule in the bind pose, model space: its two tips and its
+    /// radius, fitted to the exported body (see `specs`). The capsule is
+    /// carried into the part's frame at build time, so it sits on the body
+    /// whatever the joint's own axes are.
+    public struct Capsule: Sendable {
+        public let from: simd_float3
+        public let to: simd_float3
+        public let radius: Float
+    }
+
     struct PartSpec: Sendable {
         let name: String
         let joint: String
         let parent: String?
+        /// Where the joint's twist axis points: along the bone.
         let axis: Axis
-        /// Total length of the capsule; nil = the distance to the aimed joint.
-        let length: Float?
-        let radius: Float
+        let capsule: Capsule
         let mass: Float
         /// Swing half-cone of the bend (a rotation about the plane axis,
         /// tilting the bone toward the normal) and twist half-range from
@@ -59,9 +74,10 @@ public struct ZombieRagdollRig: Sendable {
         /// plane axis); nil = the same as `cone`. A hinge gets a sliver.
         var abduction: Float? = nil
         var flexion: Flexion = .none
-        /// Metres the capsule is raised along the world up in the bind
-        /// pose: a foot's capsule sits on the sole, not around it.
-        var lift: Float = 0
+    }
+
+    private static func capsule(_ fx: Float, _ fy: Float, _ fz: Float, _ tx: Float, _ ty: Float, _ tz: Float, _ radius: Float) -> Capsule {
+        Capsule(from: simd_float3(fx, fy, fz), to: simd_float3(tx, ty, tz), radius: radius)
     }
 
     private static func deg(_ degrees: Float) -> Float { degrees * .pi / 180 }
@@ -85,38 +101,100 @@ public struct ZombieRagdollRig: Sendable {
 
     /// Parents before children, the order Jolt wants. Ranges are a limp
     /// body's: what the joint allows, not what a walk uses.
+    ///
+    /// The capsules are fitted to the body: the numbers are what
+    /// `Tools/blender/prep_zombie.py` (`fit_capsules`) logs for
+    /// `Zombie_new_cloth.blend`, 2026-10-30, in the bind pose, engine space.
+    /// Per part it takes the skin the part's bones move (the body without
+    /// its hair, plus the shoes), profiles it around the capsule's own line
+    /// in 1 cm bins along the line and 15° sectors around it — the skin's
+    /// reach in a bin is its farthest vertex, so the teeth and the eyes
+    /// inside the head never count — and keeps the largest radius whose
+    /// surface stays within that reach everywhere (to 3 mm) and a cloth
+    /// particle's collision radius, 1 cm, inside the shirt and the trousers
+    /// proxies: Jolt holds a particle that far off a capsule, so a capsule
+    /// any closer pushes the resting garment off its skin, and the parts hang
+    /// a finger's width off their joints at rest (the forearm 1 cm, the hand
+    /// 3 cm, from the tracking motors' stiffness: ZombieClothTests pins
+    /// them). The line runs along the
+    /// bone through the skin's centre, for the limbs from the centroid of
+    /// their first third to their last third's (the shin leaves the ankle
+    /// at the Achilles tendon, the femur lies lateral in the thigh); it
+    /// spans the bone, the chain's free ends reaching the skin's extent
+    /// (the crown, the palm from a finger's width below the wrist, the heel
+    /// to the ball) and the pelvis the hips. The mannequin's radii before this
+    /// reached 7 cm through the back of this shirt; a high percentile of
+    /// the radial distances, the first idea, pokes through the front and the
+    /// back of every spine link, because the torso is an ellipse and a
+    /// capsule is round — so the torso links are as thick as their thinnest
+    /// direction allows, and the sides of the chest are the skin's own. The
+    /// arms are as thick as the tight sleeve leaves room for a particle's
+    /// radius under it, 1.0-1.4 cm, and the clavicles keep the fit's floor of
+    /// 5 mm under the yoke: thin for a ball to find, but the balls are thrown
+    /// at the chest, and a sleeve pushed off its skin every frame showed more.
+    /// The hips, the belly link, the thighs and the shins are bounded the same
+    /// way by the trousers proxy (not simulated yet, but in the sidecar and
+    /// one switch away): the thighs 3.4-4 cm, the shins 1.5. The right-side
+    /// radii differ from the left's where the artist's body does; the
+    /// garment surfaces are sampled 28 points a triangle, so the margin is
+    /// the surface's and not the vertices'. `ZombieRagdollRigTests` holds
+    /// every capsule to the export.
     static let specs: [PartSpec] = {
         var parts: [PartSpec] = [
-            // The pelvis reaches up toward the second spine joint: on a rig whose
-            // first spine joint sits level with the hips (the studio's zombie)
-            // the first would give it no height at all.
-            PartSpec(name: "pelvis", joint: Path.pelvis, parent: nil, axis: .toward(Path.spine2), length: 0.16, radius: 0.13, mass: 12, cone: 0, twist: 0),
-            PartSpec(name: "spine_01", joint: Path.spine1, parent: "pelvis", axis: .toward(Path.spine2), length: nil, radius: 0.12, mass: 7, cone: deg(25), twist: deg(20), abduction: deg(15), flexion: .forward(deg(10))),
-            PartSpec(name: "spine_02", joint: Path.spine2, parent: "spine_01", axis: .toward(Path.spine3), length: nil, radius: 0.13, mass: 7, cone: deg(25), twist: deg(20), abduction: deg(15), flexion: .forward(deg(10))),
-            PartSpec(name: "spine_03", joint: Path.spine3, parent: "spine_02", axis: .toward(Path.neck), length: nil, radius: 0.14, mass: 9, cone: deg(25), twist: deg(20), abduction: deg(15), flexion: .forward(deg(10))),
-            PartSpec(name: "neck_01", joint: Path.neck, parent: "spine_03", axis: .toward(Path.head), length: nil, radius: 0.05, mass: 1, cone: deg(35), twist: deg(30), abduction: deg(25)),
-            PartSpec(name: "head", joint: Path.head, parent: "neck_01", axis: .continuing(from: Path.neck), length: 0.22, radius: 0.10, mass: 4, cone: deg(30), twist: deg(35), abduction: deg(20)),
+            // The pelvis part is the hips, from above the crotch to the waist
+            // (the first spine joint sits level with the hips on this rig, so
+            // the belly is spine_01's); its twist axis still points up the
+            // spine for the pose read-back.
+            PartSpec(name: "pelvis", joint: Path.pelvis, parent: nil, axis: .toward(Path.spine2), capsule: capsule(0.000, 0.886, -0.059, 0.000, 1.037, -0.110, 0.104), mass: 12, cone: 0, twist: 0),
+            PartSpec(name: "spine_01", joint: Path.spine1, parent: "pelvis", axis: .toward(Path.spine2), capsule: capsule(-0.000, 1.000, -0.060, -0.000, 1.149, -0.060, 0.089), mass: 7, cone: deg(25), twist: deg(20), abduction: deg(15), flexion: .forward(deg(10))),
+            PartSpec(name: "spine_02", joint: Path.spine2, parent: "spine_01", axis: .toward(Path.spine3), capsule: capsule(0.000, 1.161, -0.099, 0.000, 1.326, -0.143, 0.081), mass: 7, cone: deg(25), twist: deg(20), abduction: deg(15), flexion: .forward(deg(10))),
+            PartSpec(name: "spine_03", joint: Path.spine3, parent: "spine_02", axis: .toward(Path.neck), capsule: capsule(-0.001, 1.293, -0.110, -0.001, 1.427, -0.075, 0.068), mass: 9, cone: deg(25), twist: deg(20), abduction: deg(15), flexion: .forward(deg(10))),
+            PartSpec(name: "neck_01", joint: Path.neck, parent: "spine_03", axis: .toward(Path.head), capsule: capsule(0.001, 1.442, -0.144, 0.001, 1.577, -0.080, 0.041), mass: 1, cone: deg(35), twist: deg(30), abduction: deg(25)),
+            PartSpec(name: "head", joint: Path.head, parent: "neck_01", axis: .continuing(from: Path.neck), capsule: capsule(0.001, 1.582, -0.091, 0.001, 1.731, -0.021, 0.070), mass: 4, cone: deg(30), twist: deg(35), abduction: deg(20)),
         ]
+        // The right side mirrors the left in x; the fit gives each its own
+        // numbers, a millimetre or two apart where the artist's body is.
+        let clavicle = ["l": capsule(0.060, 1.378, -0.021, 0.192, 1.391, -0.119, 0.005), "r": capsule(-0.058, 1.379, -0.023, -0.190, 1.392, -0.122, 0.005)]
+        let upperArm = ["l": capsule(0.188, 1.414, -0.156, 0.292, 1.166, -0.129, 0.014), "r": capsule(-0.190, 1.416, -0.155, -0.292, 1.166, -0.131, 0.010)]
+        let lowerArm = ["l": capsule(0.321, 1.174, -0.151, 0.475, 0.990, -0.051, 0.013), "r": capsule(-0.324, 1.174, -0.155, -0.474, 0.990, -0.050, 0.013)]
+        let hand = ["l": capsule(0.479, 0.970, -0.043, 0.507, 0.936, -0.025, 0.014), "r": capsule(-0.479, 0.970, -0.043, -0.507, 0.936, -0.025, 0.014)]
+        let thigh = ["l": capsule(0.105, 0.915, -0.091, 0.092, 0.498, -0.107, 0.034), "r": capsule(-0.099, 0.914, -0.094, -0.100, 0.496, -0.102, 0.040)]
+        let calf = ["l": capsule(0.112, 0.500, -0.129, 0.133, 0.089, -0.158, 0.015), "r": capsule(-0.112, 0.500, -0.130, -0.132, 0.089, -0.157, 0.015)]
+        let foot = ["l": capsule(0.122, 0.047, -0.175, 0.164, 0.034, -0.038, 0.020), "r": capsule(-0.122, 0.048, -0.175, -0.164, 0.034, -0.038, 0.020)]
         for side in ["l", "r"] {
             parts += [
                 // The clavicle is a short link: it carries the shoulder's
                 // true offset so an arm hangs from where the animation put
-                // it, not from the bind pose.
+                // it, not from the bind pose. Its capsule is the collar bone
+                // under the shirt's yoke, which hugs it: the fit's floor.
                 // The clavicle is a proxy joint the retarget turns freely: on
                 // a rig whose clavicles rest pulled back (the studio's zombie,
                 // 37°) the clips ask it for 40° of twist, and a tight twist
                 // limit there leaves the whole arm a fist off the animation.
-                PartSpec(name: "clavicle_\(side)", joint: Path.clavicle(side), parent: "spine_03", axis: .toward(Path.upperArm(side)), length: nil, radius: 0.04, mass: 1, cone: deg(35), twist: deg(50), abduction: deg(20)),
-                PartSpec(name: "upperarm_\(side)", joint: Path.upperArm(side), parent: "clavicle_\(side)", axis: .toward(Path.lowerArm(side)), length: nil, radius: 0.05, mass: 2.2, cone: deg(95), twist: deg(70), abduction: deg(80), flexion: .forward(deg(25))),
-                PartSpec(name: "lowerarm_\(side)", joint: Path.lowerArm(side), parent: "upperarm_\(side)", axis: .toward(Path.hand(side)), length: nil, radius: 0.045, mass: 1.5, cone: deg(75), twist: deg(80), abduction: deg(15), flexion: .forward(deg(70))),
-                PartSpec(name: "hand_\(side)", joint: Path.hand(side), parent: "lowerarm_\(side)", axis: .continuing(from: Path.lowerArm(side)), length: 0.14, radius: 0.045, mass: 0.5, cone: deg(60), twist: deg(30), abduction: deg(40)),
+                PartSpec(name: "clavicle_\(side)", joint: Path.clavicle(side), parent: "spine_03", axis: .toward(Path.upperArm(side)), capsule: clavicle[side]!, mass: 1, cone: deg(35), twist: deg(50), abduction: deg(20)),
+                // The arms are as thick as the tight sleeve allows a
+                // particle's radius under it; fitted to the skin alone they
+                // would be 2-2.5 cm, the elbow's and the wrist's.
+                PartSpec(name: "upperarm_\(side)", joint: Path.upperArm(side), parent: "clavicle_\(side)", axis: .toward(Path.lowerArm(side)), capsule: upperArm[side]!, mass: 2.2, cone: deg(95), twist: deg(70), abduction: deg(80), flexion: .forward(deg(25))),
+                PartSpec(name: "lowerarm_\(side)", joint: Path.lowerArm(side), parent: "upperarm_\(side)", axis: .toward(Path.hand(side)), capsule: lowerArm[side]!, mass: 1.5, cone: deg(75), twist: deg(80), abduction: deg(15), flexion: .forward(deg(70))),
+                // The hand is the palm, from a finger's width below the wrist:
+                // the zombie's fingers are a claw, and a capsule through them
+                // would have to be a wire; and the hand part sits 3 cm off its
+                // joint at rest (its limits), so a capsule up to the wrist
+                // reached into the shirt's cuff and pushed it off its skin.
+                PartSpec(name: "hand_\(side)", joint: Path.hand(side), parent: "lowerarm_\(side)", axis: .continuing(from: Path.lowerArm(side)), capsule: hand[side]!, mass: 0.5, cone: deg(60), twist: deg(30), abduction: deg(40)),
             ]
         }
         for side in ["l", "r"] {
             parts += [
-                PartSpec(name: "thigh_\(side)", joint: Path.thigh(side), parent: "pelvis", axis: .toward(Path.calf(side)), length: nil, radius: 0.08, mass: 8, cone: deg(75), twist: deg(25), abduction: deg(30), flexion: .forward(deg(50))),
-                PartSpec(name: "calf_\(side)", joint: Path.calf(side), parent: "thigh_\(side)", axis: .toward(Path.foot(side)), length: nil, radius: 0.06, mass: 4, cone: deg(75), twist: deg(12), abduction: deg(12), flexion: .backward(deg(72))),
-                PartSpec(name: "foot_\(side)", joint: Path.foot(side), parent: "calf_\(side)", axis: .toward(Path.ball(side)), length: 0.16, radius: 0.035, mass: 1, cone: deg(30), twist: deg(15), abduction: deg(15), lift: 0.03),
+                // The thigh and the shin are as thick as the trousers leave
+                // room for a particle's radius under them (the knee and the
+                // ankle would let them be 4.7-5 and 2.3 cm).
+                PartSpec(name: "thigh_\(side)", joint: Path.thigh(side), parent: "pelvis", axis: .toward(Path.calf(side)), capsule: thigh[side]!, mass: 8, cone: deg(75), twist: deg(25), abduction: deg(30), flexion: .forward(deg(50))),
+                PartSpec(name: "calf_\(side)", joint: Path.calf(side), parent: "thigh_\(side)", axis: .toward(Path.foot(side)), capsule: calf[side]!, mass: 4, cone: deg(75), twist: deg(12), abduction: deg(12), flexion: .backward(deg(72))),
+                // The foot's capsule lies along the sole from the heel to just
+                // past the ball; the twist axis still points at the toes.
+                PartSpec(name: "foot_\(side)", joint: Path.foot(side), parent: "calf_\(side)", axis: .toward(Path.ball(side)), capsule: foot[side]!, mass: 1, cone: deg(30), twist: deg(15), abduction: deg(15)),
             ]
         }
         return parts
@@ -134,6 +212,9 @@ public struct ZombieRagdollRig: Sendable {
     /// Each part's bone direction in its own frame, and its length.
     public let localDirections: [simd_float3]
     public let lengths: [Float]
+    /// Each part's capsule in its own frame: the two ends of the cylinder
+    /// and the radius (what `nearestPart` measures against).
+    public let localCapsules: [Capsule]
     /// The body's front in model space, read off the feet (toes ahead of
     /// ankles); +Z when the feet cannot say.
     public let forward: simd_float3
@@ -161,6 +242,7 @@ public struct ZombieRagdollRig: Sendable {
         var parentIndices: [Int?] = []
         var localDirections: [simd_float3] = []
         var lengths: [Float] = []
+        var localCapsules: [Capsule] = []
         var indexByName: [String: Int] = [:]
 
         var front = simd_float3.zero
@@ -174,7 +256,7 @@ public struct ZombieRagdollRig: Sendable {
         for spec in Self.specs {
             guard let jointIndex = indexByPath[spec.joint], let origin = position(spec.joint) else { return nil }
             let direction: simd_float3
-            var length: Float
+            let length: Float
             switch spec.axis {
             case let .toward(path):
                 guard let target = position(path) else { return nil }
@@ -189,14 +271,19 @@ public struct ZombieRagdollRig: Sendable {
                 guard length > 1e-4 else { return nil }
                 direction = delta / length
             }
-            if let override = spec.length { length = override }
 
             let frame = rotation(jointIndex)
             let localDirection = simd_normalize(frame.inverse.act(direction))
-            // A capsule's axis is its local Y: turn it onto the bone and
-            // centre it halfway along.
-            let shapeRotation = simd_normalize(simd_quatf(from: simd_float3(0, 1, 0), to: localDirection))
-            let cylinder = max(length - 2 * spec.radius, 0.005)
+            // The capsule is the fitted one, carried into the part's frame:
+            // its axis is its local Y, turned onto the fitted line, its
+            // centre halfway between the tips, the caps inside them.
+            let capsule = spec.capsule
+            let span = capsule.to - capsule.from
+            let spanLength = simd_length(span)
+            let capsuleDirection = simd_normalize(frame.inverse.act(span / spanLength))
+            let shapeRotation = simd_normalize(simd_quatf(from: simd_float3(0, 1, 0), to: capsuleDirection))
+            let cylinder = max(spanLength - 2 * capsule.radius, 0.005)
+            let capsuleCentre = frame.inverse.act((capsule.from + capsule.to) / 2 - origin)
             // The hinge: across the body. A bend turns about an axis square
             // to the bone and to the body's front — sideways for the spine,
             // the neck, the legs and the feet, the arm plane's up for the
@@ -220,14 +307,14 @@ public struct ZombieRagdollRig: Sendable {
             var part = JoltRagdollPart(
                 name: spec.name,
                 parentIndex: parentIndex,
-                shape: .capsule(radius: spec.radius, height: cylinder),
+                shape: .capsule(radius: capsule.radius, height: cylinder),
                 mass: spec.mass,
                 position: origin,
                 rotation: frame,
                 twistAxis: direction,
                 planeAxis: plane
             )
-            part.shapeOffset = localDirection * (length / 2) + frame.inverse.act(simd_float3(0, spec.lift, 0))
+            part.shapeOffset = capsuleCentre
             part.shapeRotation = shapeRotation
             part.twistRange = (-spec.twist) ... spec.twist
             // The bend is a rotation about the plane axis, which tilts the
@@ -268,6 +355,7 @@ public struct ZombieRagdollRig: Sendable {
             parentIndices.append(parentIndex)
             localDirections.append(localDirection)
             lengths.append(length)
+            localCapsules.append(Capsule(from: capsuleCentre - capsuleDirection * (cylinder / 2), to: capsuleCentre + capsuleDirection * (cylinder / 2), radius: capsule.radius))
         }
 
         var descriptor = JoltRagdollDescriptor(parts: parts)
@@ -319,6 +407,7 @@ public struct ZombieRagdollRig: Sendable {
         jointCount = joints.jointPaths.count
         self.localDirections = localDirections
         self.lengths = lengths
+        self.localCapsules = localCapsules
     }
 
     public var partCount: Int { jointIndices.count }
@@ -383,13 +472,13 @@ public struct ZombieRagdollRig: Sendable {
         return (transforms, weights)
     }
 
-    /// The part whose capsule passes nearest a world point.
+    /// The part whose capsule's surface passes nearest a world point.
     public func nearestPart(to point: simd_float3, partWorldTransforms: [simd_float4x4]) -> Int {
         var best = 0
         var bestDistance = Float.greatestFiniteMagnitude
         for (part, transform) in partWorldTransforms.enumerated() where part < partCount {
             let c = transform.columns.3
-            let start = simd_float3(c.x, c.y, c.z)
+            let origin = simd_float3(c.x, c.y, c.z)
             let rotation = simd_quatf(simd_float3x3(
                 columns: (
                     simd_normalize(simd_float3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)),
@@ -397,9 +486,11 @@ public struct ZombieRagdollRig: Sendable {
                     simd_normalize(simd_float3(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z))
                 )
             ))
-            let axis = rotation.act(localDirections[part]) * lengths[part]
+            let capsule = localCapsules[part]
+            let start = origin + rotation.act(capsule.from)
+            let axis = rotation.act(capsule.to - capsule.from)
             let t = min(max(simd_dot(point - start, axis) / max(simd_length_squared(axis), 1e-6), 0), 1)
-            let distance = simd_distance(point, start + axis * t)
+            let distance = simd_distance(point, start + axis * t) - capsule.radius
             if distance < bestDistance {
                 bestDistance = distance
                 best = part
