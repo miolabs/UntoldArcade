@@ -24,26 +24,41 @@ clip pipeline expect, the UE4-mannequin convention that `ZombieAA` had:
     hand and finger weight, as the fused clothes were; the garments keep the artist's
     weights, cleaned: `Hips.001` folded into `Hips`, the non-bone groups (skin, body,
     hair, Group, GROW) dropped, hand weights removed, bones farther than REACH pruned,
-    four influences at most, renormalised — the same weights go into the sidecar, so what
-    the simulation pins is exactly what the skin draws;
+    four influences at most, renormalised, and the shirt's arm weights taken off its
+    hips (within HIP_ARM_FREE of the pelvis, tapered over HIP_ARM_TAPER beyond) — the
+    same weights go into the sidecar, so what the simulation pins is exactly what the
+    skin draws;
   * the garments turned into SIMULATION PROXIES: the trousers' two panels sewn at the side
     seams (merge by distance on the boundary vertices only), every vertex inside or within
     2 mm of the body pushed out to 2 mm, then decimated to about 3,000 vertices; the shirt
     cut to its OUTER layer (a face is outer when its normal points away from the nearest
-    body point), buttons and bits dropped, its buttoned front sewn (the panels overlap by
+    body point; the hem strip, which the artist butted against the shell's bottom edge,
+    is sewn back on where the rim between them cut it off), buttons and bits dropped,
+    its buttoned front sewn (the panels overlap by
     14 mm at the placket, the buttons sit in the overlap: the hidden panel's overlap is
     trimmed and the two edges are zipped together, up to the collar's notch), decimated to
     about 4,000. The decimation is a shortest-edge-first collapse that never moves a
     boundary or UV-seam vertex off its line, never makes an edge shorter than 8.5 mm or
     longer than 39 mm, never makes a sliver, and keeps the UVs; after it every vertex,
     edge midpoint and face centre of both proxies is pushed to 2 mm off the body (a
-    40 mm chord over a thigh sags into the skin) — the proxies are what the game draws
-    until the render shell is bound to them. The shirt's weights are graded across every
-    seam between bones' regions (the artist's jump from the upper arm to the spine over
-    a single edge at the armhole, and the like at the waist and the elbow: the vertices
-    within 6 cm of a seam are blurred over about 5 cm), and the sidecar opens the slack
-    to 5 cm within 8 cm of the armhole seam. The full shirt shell with its buttons stays
-    in the rig file as `Shirt_Render`, hidden and not exported, for that later phase;
+    40 mm chord over a thigh sags into the skin). The trousers proxy is what the game
+    draws for now; the shirt proxy only simulates. The shirt's weights are graded across
+    every seam between bones' regions (the artist's jump from the upper arm to the spine
+    over a single edge at the armhole, and the like at the waist and the elbow: the
+    vertices within 6 cm of a seam are blurred over about 5 cm);
+  * the artist's shirt SHELL (`Shirt_Render`: both layers, the fold, the seven buttons and
+    the fourteen bits) is the shirt the game draws: it takes the proxy's graded weights
+    (interpolated from the nearest proxy face, capped at four), so body-skinned — the
+    cloth off, the player out of range — it sits where the simulation would put it at
+    rest, and the sidecar carries its RENDER BINDING to the proxy (`render_binding`):
+    per shell vertex the nearest proxy triangle at the bind pose, the barycentric
+    coordinates of the closest point, and the vertex's rest offset in that triangle's
+    frame, so the simulated triangles carry the shell rigidly (its normals the game
+    reads off the exported mesh, one per exported copy, since the exporter splits a
+    vertex on the artist's sharp edges, and carries in the same frame); a button or a
+    bit binds whole to the one triangle nearest its centre and stays rigid. The proxy
+    itself is kept in the rig file as `Shirt_Proxy`, hidden and not exported: it lives
+    in the sidecar only;
   * the ragdoll's twenty capsules fitted to this body and logged in the rig's syntax
     (`fit_capsules`): inside the skin the part's bones move and a cloth particle's
     collision radius (1 cm) inside the shirt and the trousers proxies, for
@@ -56,19 +71,24 @@ clip pipeline expect, the UE4-mannequin convention that `ZombieAA` had:
     Metallic, Height and Emissive maps are not used (the engine material takes base
     colour, roughness and normal; the garments' metallic and emissive maps are empty);
   * the alpha-masked hair cards and the cornea shell dropped, the shape keys baked, the
-    skin the clothes cover removed (one face ring kept under every edge), and body, eyes,
-    shoes, belt loops and the two proxies joined into one mesh with one material — the
-    engine binds the animation per skinned node and the exporter splits per material;
+    skin under the trousers and the shoes removed (one face ring kept under every edge;
+    the skin under the shirt stays: the shell hangs off it, and the back-stop, a
+    millimetre behind the skinned position, keeps the proxy off it), and body, eyes,
+    shoes, belt loops, the shirt shell and the trousers
+    proxy joined into one mesh with one material — the engine binds the animation per
+    skinned node and the exporter splits per material;
   * a sidecar `<NAME>.cloth.json` beside the export, in ENGINE space (the exporter's
     scale and axes: engine (x, y, z) = Blender (x, z, -y)): per garment the particles,
     triangles (wound consistently, outward on the whole: the rolled cuffs and the inside
     of the collar face the body, and those particles are listed so the game can put their
     back-stop on the body side), joint paths, influences, the per-particle slack
-    (`maxDistance`: 0 pins the collar of the shirt and the waist of the trousers, 5 mm the
-    shirt's buttoned front, 5 cm its armhole band, 2 cm the trousers' hems, 3 cm everywhere
-    else), the back-stop depth, the dominant joint and the bind-pose joint matrices; the
-    game binds the particles to the exported vertices by position (the exporter splits
-    vertices on UV seams, so one particle maps to several);
+    (`maxDistance`; the shirt's schedule is `shirt_slack`: the collar band and the cuffs
+    pinned, the yoke 1 cm, the sleeves 5 cm, the armhole band 6 cm, the chest 8, the back
+    10, the hem band 12, the buttoned front 5 mm; the trousers' waist pinned, their hems
+    2 cm, the rest 3), the back-stop depth, the dominant joint, the bind-pose joint
+    matrices and, for the shirt, the render binding with the shell's rest positions; the
+    game binds the shell's vertices (the trousers' particles) to the exported vertices by
+    position (the exporter splits vertices on UV seams, so one maps to several);
   * everything else deleted and orphan data purged.
 
 Env: SRC (artist .blend), OUT_BLEND (prepped rig .blend, the BLEND for the retarget
@@ -84,6 +104,7 @@ import bpy, bmesh, os, json, hashlib, heapq, math, shutil
 import numpy as np
 from mathutils import Vector, Matrix
 from mathutils.bvhtree import BVHTree
+from mathutils.kdtree import KDTree
 from pathlib import Path
 
 SRC = os.environ.get("SRC", os.path.expanduser("~/Downloads/Zombie_new_cloth/Zombie_new_cloth.blend"))
@@ -772,7 +793,9 @@ def boundary_loops(bm):
         if loop[-1] == loop[0]:
             loop.pop()
         loops.append(loop)
-    loops.sort(key=len, reverse=True)
+    # Longest first, ties by centroid: the edge set iterates in memory order, which
+    # differs from run to run, and the cuff loops are the same length give or take one.
+    loops.sort(key=lambda l: (-len(l), tuple(round(c, 5) for c in sum((v.co for v in l), Vector()) / len(l))))
     return loops
 
 
@@ -1128,15 +1151,24 @@ def recap_influences(obj):
 
 ARM_BONES = ("clavicle_", "upperarm_")
 TORSO_BONES = ("spine_", "neck_", "pelvis")
+# The sleeves' bones against the body panel's (the torso and the clavicles, whose region
+# is the yoke): the seam between them is the armhole as a tailor would cut it, where the
+# sleeve cap meets the body — not the wider set of arm-against-torso edges above, which
+# also runs between the clavicle and the spine across the yoke.
+SLEEVE_BONES = ("upperarm_", "lowerarm_")
+BODY_BONES = TORSO_BONES + ("clavicle_",)
 # Metres either side of a weight seam that are graded; the wider band around the armhole
-# seam that is blurred further, and the number of passes; and the band around it whose
-# particles get the opened slack in the sidecar.
+# seam that is blurred further, and the number of passes.
 SEAM_BAND = 0.06
 ARMPIT_BAND = 0.12
 ARMPIT_PASSES = 200
-ARMHOLE_SLACK_BAND = 0.08
-ARMHOLE_SLACK = 0.05
-armhole_slack_vertices = set()
+# The armhole seam (sleeve cap against body panel) as world-space segments, taken from
+# the artist's weights BEFORE the grading: graded, the dominant bone flips back and forth
+# across the blurred band and the "seam" between dominants zigzags three edges wide, so a
+# band measured from it comes out twice as wide as asked. The artist's weights hand the
+# sleeve over across single edges, which is one clean line per arm once the stray
+# pockets' rims are dropped (`seam_chains`; `shirt_slack` uses it).
+sleeve_seam_segments = []
 
 
 def vertex_weights(obj):
@@ -1183,13 +1215,49 @@ def seam_edges(obj, weights, sides=None):
     return out
 
 
+def seam_chains(obj, weights, sides, keep=2):
+    """The seam edges between `sides` (as `seam_edges`) grouped into connected chains,
+    the `keep` largest kept as world-space segments, the rest dropped: the artist's
+    automatic weights leave stray pockets of one bone's dominance inside the other's
+    region (a spot of upper arm on the shoulder blade), and each pocket's rim is a
+    little seam of its own that a band measured from "the seam" would wrap in. The
+    armhole is two chains, one per arm. Logs the chain sizes."""
+    names = [g.name for g in obj.vertex_groups]
+    mw = obj.matrix_world
+    pairs = []
+    for e in obj.data.edges:
+        a, b = e.vertices
+        da, db = dominant_group(weights[a]), dominant_group(weights[b])
+        if da is None or db is None or da == db:
+            continue
+        na, nb = names[da], names[db]
+        if (na.startswith(sides[0]) and nb.startswith(sides[1])) or (nb.startswith(sides[0]) and na.startswith(sides[1])):
+            pairs.append((a, b))
+    parent = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+
+    for a, b in pairs:
+        parent[find(a)] = find(b)
+    chains = {}
+    for a, b in pairs:
+        chains.setdefault(find(a), []).append((a, b))
+    sizes = sorted((len(c) for c in chains.values()), reverse=True)
+    kept = sorted(chains.values(), key=len, reverse=True)[:keep]
+    log(f"{obj.name}: seam {sides[0]} against {sides[1]}: {len(pairs)} edges in {len(chains)} chains of {sizes[:8]}{'...' if len(sizes) > 8 else ''}; the {len(kept)} largest kept")
+    return [(mw @ obj.data.vertices[a].co, mw @ obj.data.vertices[b].co) for chain in kept for a, b in chain]
+
+
 def within(obj, segments, distance):
     """The vertex indices within `distance` of any of the world-space `segments`."""
     mw = obj.matrix_world
     return {v.index for v in obj.data.vertices if any(segment_distance(mw @ v.co, a, b) <= distance for a, b in segments)}
 
 
-def grade_weight_seams(obj, arm, band=SEAM_BAND, slack_band=ARMHOLE_SLACK_BAND, blend=0.5, passes=16, trace=0.03,
+def grade_weight_seams(obj, arm, band=SEAM_BAND, blend=0.5, passes=16, trace=0.03,
                        armpit_band=ARMPIT_BAND, armpit_passes=ARMPIT_PASSES):
     """The artist's automatic weights hand the shirt from one bone to the next across
     single edges: at the armhole from the upper arm (0.98) to the spine (0.73) a
@@ -1224,12 +1292,11 @@ def grade_weight_seams(obj, arm, band=SEAM_BAND, slack_band=ARMHOLE_SLACK_BAND, 
     a bone left with less than `trace` of a vertex is dropped and the rest renormalised,
     since 3 % of a bone moves a vertex by nothing the eye sees and only carries a far
     bone where the prune took it off (two per cent of the upper arm had reached the
-    waist, and ZombieSkinTests holds the hips to no arm weight at all). The vertices within
-    `slack_band` of the armhole seam as it lies after the grading (an arm bone's region
-    against a torso bone's) are kept for the sidecar's slack (`shirt_slack` opens theirs
-    to ARMHOLE_SLACK): the graded skin still stretches those edges most. Positions
-    never move: the particles stay the exported vertices. Logs the worst jumps before
-    and after."""
+    waist, and ZombieSkinTests holds the hips to no arm weight at all). The sleeve seam
+    as the artist's weights draw it, before the blur, is kept (`sleeve_seam_segments`)
+    for the sidecar's armhole band (`shirt_slack`): the graded skin still stretches those
+    edges most. Positions never move: the particles stay the proxy's own. Logs the worst
+    jumps before and after."""
     names = [g.name for g in obj.vertex_groups]
     weights = vertex_weights(obj)
     mw = obj.matrix_world
@@ -1238,6 +1305,9 @@ def grade_weight_seams(obj, arm, band=SEAM_BAND, slack_band=ARMHOLE_SLACK_BAND, 
     armhole_before = seam_edges(obj, weights, sides=(ARM_BONES, TORSO_BONES))
     if not armhole_before:
         fail(obj.name, "has no armhole seam: no edge runs from an arm bone's vertex to a torso bone's")
+    sleeve_seam_segments.clear(); sleeve_seam_segments.extend(seam_chains(obj, weights, sides=(SLEEVE_BONES, BODY_BONES)))
+    if not sleeve_seam_segments:
+        fail(obj.name, "has no sleeve seam: no edge runs from an upper-arm vertex to a body-panel vertex")
     seam_band = within(obj, seams, band)
     armpit = within(obj, armhole_before, armpit_band)
     before = weight_jumps(obj, names, weights)
@@ -1280,12 +1350,10 @@ def grade_weight_seams(obj, arm, band=SEAM_BAND, slack_band=ARMHOLE_SLACK_BAND, 
     capped, rehomed, histogram = cap_influences(obj, arm)
     after = weight_jumps(obj, names)
     armhole_after = seam_edges(obj, vertex_weights(obj), sides=(ARM_BONES, TORSO_BONES))
-    near = within(obj, armhole_after, slack_band)
-    armhole_slack_vertices.clear(); armhole_slack_vertices.update(near)
-    log(f"{obj.name} seams: {len(seams)} edges between bones' regions ({len(armhole_before)} at the armhole), {len(seam_band)} vertices within "
+    log(f"{obj.name} seams: {len(seams)} edges between bones' regions ({len(armhole_before)} at the armhole, {len(sleeve_seam_segments)} of them sleeve cap against body panel), {len(seam_band)} vertices within "
         f"{band * 100:.0f} cm graded over {passes} passes, {len(armpit)} within {armpit_band * 100:.0f} cm of the armhole over {armpit_passes} more; "
         f"{capped} vertices capped back to 4 influences; influences per vertex {histogram}; "
-        f"armhole seam afterwards {len(armhole_after)} edges, {len(near)} vertices within {slack_band * 100:.0f} cm get {ARMHOLE_SLACK * 100:.0f} cm of slack")
+        f"armhole seam afterwards {len(armhole_after)} edges between dominants")
     for label, jumps in (("before", before), ("after", after)):
         worst = jumps[0]
         log(f"  {obj.name} weight jumps {label}: worst {worst[0]:.3f} across {worst[1]} {tuple(round(c, 3) for c in worst[2])} ({worst[4][0]}) - "
@@ -1417,7 +1485,7 @@ if belt.data.vertices and len(belt.data.vertices) != len(belt_verts):
 log(f"belt loops: {len(belt.data.vertices)} verts, {len(belt.data.polygons)} faces, kept undecimated as rigid skin")
 
 # --- shirt: the outer layer of the shell, decimated --------------------------------
-def outer_layer(obj, body_tree, fold=0.5, margin=0.15):
+def outer_layer(obj, body_tree, fold=0.5, margin=0.15, sew=0.0015):
     """Cut the closed two-layer shell of `obj` down to its outer layer, in place.
 
     The shell is one closed surface about 1 mm thick: an outer layer, an inner layer
@@ -1428,8 +1496,9 @@ def outer_layer(obj, body_tree, fold=0.5, margin=0.15):
     less than about 60 degrees; a rim meets a layer at a right angle), weighted by area:
     the sleeve's outer layer is one region and its armpit goes with it. A region whose
     vote is weaker than `margin` of its area (a rim band) is neither and goes, as do the
-    buttons and the bits of thread (other islands) and anything not connected to the
-    largest outer piece."""
+    buttons and the bits of thread (other islands); an outer piece cut off from the
+    largest by a rim is sewn back onto it where their boundaries meet within `sew` (the
+    hem strip, see below), or goes."""
     bm = bmesh.new(); bm.from_mesh(obj.data)
     parts = islands(bm)
     log(f"{obj.name}: {len(parts)} islands {[len(p) for p in parts[:8]]}...")
@@ -1495,6 +1564,50 @@ def outer_layer(obj, body_tree, fold=0.5, margin=0.15):
     bmesh.ops.delete(bm, geom=[f for f in bm.faces if label.get(f.index, 0) <= 0], context="FACES")
     parts = islands(bm)
     if len(parts) > 1:
+        # The outer surface can come in pieces: the artist's hem is a doubled strip of
+        # its own, the lowest 1.5-4 cm of the shirt, butted against the shell's bottom
+        # edge with its top rim on the shell's bottom rim — two rims a fabric's
+        # thickness tall, one facing up and one down, each touching an inner layer, so
+        # the fill above leaves them and the strip's outer face (voted outer, clearly)
+        # is cut off from the rest. Dropped, the proxy's hem stopped 9-33 mm above the
+        # drawn hem and the shell's hem strip rode the boundary triangles as a 3 cm
+        # lever on the hem band's 12 cm of slack (2026-10-31). The rims coincide, so
+        # the strip's top edge sits on the main piece's bottom edge: each boundary
+        # vertex of a loose piece is welded onto the nearest boundary vertex of the
+        # main piece within `sew`, the trousers' side-seam stitch; a piece that stays
+        # loose after that is a scrap and goes.
+        main_boundary = [v for v in parts[0] if v.is_boundary]
+        tree = KDTree(len(main_boundary))
+        for i, v in enumerate(main_boundary):
+            tree.insert(mw @ v.co, i)
+        tree.balance()
+        targets = {}; moves = []
+        for p in parts[1:]:
+            for v in p:
+                if not v.is_boundary:
+                    continue
+                co, i, d = tree.find(mw @ v.co)
+                if d <= sew:
+                    targets[v] = main_boundary[i]; moves.append(d)
+        pieces = [(len(p), min((mw @ v.co).z for v in p), max((mw @ v.co).z for v in p)) for p in parts[1:]]
+        filled = []
+        if targets:
+            bmesh.ops.weld_verts(bm, targetmap=targets)
+            # The two edges do not match vertex for vertex along their whole length:
+            # where the main piece's edge steps (the placket's corner) a few vertices
+            # find no partner and a sliver of a hole is left between the edges, a
+            # handful of edges round and millimetres across. Those are filled; the
+            # decimation collapses the slivers.
+            small = [l for l in boundary_loops(bm) if len(l) <= 8]
+            if small:
+                filled = [(len(l), max((mw @ a.co - mw @ b.co).length for a in l for b in l)) for l in small]
+                hole_edges = {e for l in small for v in l for e in v.link_edges if e.is_boundary}
+                bmesh.ops.holes_fill(bm, edges=list(hole_edges), sides=8)
+        parts = islands(bm)
+        log(f"{obj.name} outer layer: {len(pieces)} loose piece(s) of {[n for n, _, _ in pieces]} vertices (z {min(z for _, z, _ in pieces):.3f}..{max(z for _, _, z in pieces):.3f}); "
+            f"{len(targets)} boundary vertices welded onto the main piece's boundary"
+            + (f" (moved {min(moves) * 1000:.2f}..{max(moves) * 1000:.2f} mm)" if moves else "")
+            + f"; {len(filled)} sliver hole(s) between the edges filled {[(n, round(d * 1000, 1)) for n, d in filled]} (vertices, mm across); {len(parts)} piece(s) left")
         for p in parts[1:]:
             zs = [(mw @ v.co).z for v in p]; xs = [(mw @ v.co).x for v in p]
             log(f"{obj.name} outer layer: loose piece of {len(p)} vertices dropped (z {min(zs):.3f}..{max(zs):.3f}, x {min(xs):.3f}..{max(xs):.3f})")
@@ -1661,14 +1774,89 @@ def sew_placket(obj, body_tree, cap=0.020, max_overlap=0.002):
     obj.data.update()
 
 
+# The automatic weights leave traces of the upper arms and the clavicles (2-6 %) on
+# the shirt's flanks down to the waist, a fifth of a metre from the pelvis, where an arm
+# swinging 30 cm drags the skinned target a centimetre and a half sideways. The prune
+# above cannot reach them: the elbows hang beside the waist in the bind pose, so the
+# upper arm is within REACH of the flank. The export is held to no arm weight within
+# 20 cm of the pelvis (ZombieSkinTests, since such traces made the 15 cm cuff fin) and
+# the proxy passed that by its vertex spacing alone — its traces sat just outside the
+# 20 cm — but the shell samples the proxy's weights between its vertices
+# (`transfer_weights`) and showed 34 of them inside (2026-10-31). So every arm weight
+# within HIP_ARM_FREE of the pelvis goes from the proxy before the shell takes its
+# weights, and the sidecar carries the same — tapered off over HIP_ARM_TAPER beyond
+# that radius rather than cut, since the armpit grading's fringe (15 % of an upper arm
+# at the lowest) reaches the radius, and a cut there would be a weight step of the
+# kind the grading exists to remove.
+HIP_ARM_FREE = 0.23
+HIP_ARM_TAPER = 0.06
+HIP_ARM_BONES = ("clavicle_", "upperarm_", "lowerarm_") + HAND_PREFIXES
+
+
+def free_hips_of_arm_weights(obj, arm, radius=HIP_ARM_FREE, taper=HIP_ARM_TAPER):
+    """Scales every weight of an arm bone (HIP_ARM_BONES) on the vertices of `obj` by
+    their distance from the pelvis joint — nothing left within `radius`, untouched
+    from `radius + taper` out, linear between — and renormalises the rest; a vertex
+    left with nothing goes to the nearest bone. Returns (vertices changed, the largest
+    weight taken off a vertex, vertices within `radius + taper`)."""
+    pelvis = arm.matrix_world @ arm.data.bones["pelvis"].head_local
+    segments = bone_segments(arm)
+    names = [g.name for g in obj.vertex_groups]
+    mw = obj.matrix_world
+    changed = reached = 0; largest = 0.0
+    for v in obj.data.vertices:
+        p = mw @ v.co
+        factor = min(max(((p - pelvis).length - radius) / taper, 0.0), 1.0)
+        if factor >= 1.0:
+            continue
+        reached += 1
+        weights = {names[g.group]: g.weight for g in v.groups if g.weight > 0}
+        arm_weights = {n: w for n, w in weights.items() if n.lower().startswith(HIP_ARM_BONES)}
+        if not arm_weights:
+            continue
+        changed += 1; largest = max(largest, max(arm_weights.values()) * (1 - factor))
+        kept = {n: (w * factor if n in arm_weights else w) for n, w in weights.items()}
+        kept = {n: w for n, w in kept.items() if w > 0}
+        total = sum(kept.values())
+        for n in weights:
+            if n not in kept:
+                obj.vertex_groups[n].remove([v.index])
+        if total < 1e-4:
+            nearest = min(segments, key=lambda n: segment_distance(p, *segments[n]))
+            obj.vertex_groups[nearest].add([v.index], 1.0, "REPLACE")
+        else:
+            for n, w in kept.items():
+                obj.vertex_groups[n].add([v.index], w / total, "REPLACE")
+    return changed, largest, reached
+
+
 outer_layer(shirt, body_tree)
 sew_placket(shirt, body_tree)
 decimate_proxy(shirt, 4000)
 recap_influences(shirt)
 grade_weight_seams(shirt, arm)
+changed, largest, near = free_hips_of_arm_weights(shirt, arm)
+log(f"shirt: {changed} of the {near} particles within {HIP_ARM_FREE + HIP_ARM_TAPER:.2f} m of the pelvis carried arm weight, taken off "
+    f"(wholly within {HIP_ARM_FREE} m, tapered beyond; the most taken off one vertex {largest:.3f})")
 orient_outward(shirt, body_tree)
 push_off_body(shirt, body_tree)
 report_proxy("shirt", shirt, loops=4)
+
+# The shell is drawn and the proxy simulates, so the two must agree on where the body
+# puts the shirt: hard skinned (the attach, a re-seat, the slack shut) every particle
+# sits on its skinned position and the shell is rebuilt from those triangles; with the
+# cloth off or the player out of range the shell is drawn by its own weights. Had the
+# shell kept the artist's weights, cleaned but ungraded, those two pictures would differ
+# by the grading (centimetres under the arms, where the grading moved the skin most) and
+# the shirt would jump at every switch. So the shell takes the proxy's weights,
+# interpolated from the nearest proxy face as the shoes take the body's — the inner layer
+# the same face as the outer, a button the placket's — and is capped at four influences
+# again, the exporter's cut. The grading itself was tuned on the proxy's 17 mm edges
+# (its pass counts are a blur width in edges), so it is not rerun on the shell's 8 mm
+# ones: the transfer carries the finished result.
+transfer_weights(shirt, shirt_render)
+capped, rehomed, histogram = cap_influences(shirt_render, arm)
+log(f"{shirt_render.name}: weights taken from the shirt proxy; {capped} vertices cut to 4 influences, {rehomed} rehomed; influences per vertex {histogram}")
 
 
 # ---------------------------------------------------------------- ragdoll capsule fit
@@ -1930,14 +2118,19 @@ for o in (belt, trousers):
 for o in (shirt, shirt_render):
     remap_uvs(o, {i: "shirt" for i in range(len(o.material_slots))})
 
-# The skin the clothes cover goes: it is never seen, and where the two meshes bend
-# apart it is what pokes through. A face is covered when a ray from its centre along
-# its normal meets the clothes within `reach`; a one-face ring stays under every edge
-# of the clothes, so a sleeve or a collar that lifts a little shows skin, not a hole.
-# The hands and wrists are never culled: the rolled cuffs stand off the arm, and when
-# the hand bends away from a cuff the skin under it shows — culled, it showed the
-# inside of the cuff through a hole (headset, 2026-10-27). The cover is the shirt
-# proxy (the outer layer), the trousers proxy and the rigid clothing.
+# The skin under the trousers and the shoes goes: it is never seen, and where the two
+# meshes bend apart it is what pokes through. A face is covered when a ray from its
+# centre along its normal meets the clothes within `reach`; a one-face ring stays under
+# every edge of the clothes, so a hem that lifts a little shows skin, not a hole. The
+# hands and wrists are never culled: the rolled cuffs stand off the arm, and when the
+# hand bends away from a cuff the skin under it shows — culled, it showed the inside of
+# the cuff through a hole (headset, 2026-10-27). The skin under the SHIRT stays: the
+# shirt is simulated cloth that hangs off the body — it swings, sags and is dented, and
+# where it leaves the torso the torso must be there — and where the body presses into
+# the cloth the back-stop (BACKSTOP, below) holds each particle within a millimetre
+# behind its skinned position, which the push-out put 2 mm off the skin, so the proxy
+# and the shell's outer layer on it stay off the body. The cover is the trousers proxy
+# and the rigid clothing.
 def covered_faces(obj, tree, reach=0.04, keep_groups=(), keep_near=(), keep_radius=0.08):
     mw = obj.matrix_world; nm = mw.to_3x3().inverted().transposed()
     names = [g.name for g in obj.vertex_groups]
@@ -1958,9 +2151,9 @@ def covered_faces(obj, tree, reach=0.04, keep_groups=(), keep_near=(), keep_radi
     return [i for i in covered if not any(v in exposed_vertices for v in obj.data.polygons[i].vertices)]
 
 wrists = [arm.matrix_world @ arm.data.bones[name].head_local for name in ("hand_l", "hand_r")]
-hidden = covered_faces(body, surface_tree([shirt, trousers, shoes, belt]), keep_groups=HAND_PREFIXES, keep_near=wrists)
+hidden = covered_faces(body, surface_tree([trousers, shoes, belt]), keep_groups=HAND_PREFIXES, keep_near=wrists)
 delete_faces(body, hidden)
-log(f"body: {len(hidden)} faces under the clothes removed, {len(body.data.polygons)} left")
+log(f"body: {len(hidden)} faces under the trousers and the shoes removed, {len(body.data.polygons)} left (the skin under the shirt stays)")
 
 
 # ---------------------------------------------------------------- cloth sidecar data
@@ -1987,14 +2180,29 @@ def ring(bm, seeds, depth):
     return out
 
 
-def garment_record(obj, name, slack):
+# How far BEHIND its skinned position a particle may be pushed: Jolt's back stop is a
+# sphere (a plane, at its default radius) whose surface starts this far behind the
+# skinned vertex, against its normal, and a particle inside it is pushed back out. The
+# push-out above leaves every particle 2 mm off the body, so the stop is what the skin
+# kept under the shirt (`covered_faces`) can be seen through: at 3 mm (with the proxy
+# drawn and the skin under it culled) the stop sat 1 mm inside the skin, and at 5 mm,
+# the first cook with the skin kept, 3 mm inside it — and Jolt switches a stop off
+# where it is not short of the slack, so 5 mm also switched the buttoned front's off
+# (2026-10-31). One millimetre keeps the proxy, and the shell's outer layer on it, a
+# millimetre off the skin wherever the body presses into the cloth; the inner layer, a
+# millimetre inside the proxy, may touch the skin and is never seen.
+BACKSTOP = 0.001
+
+
+def garment_record(obj, name, slack, render=None):
     """The sidecar entry for a proxy: `slack(bm, loops)` returns the per-vertex
     maxDistance list (0 pins). The faces are wound consistently and point away from the
     body on the whole (orient_outward), but not every one does: the rolled cuffs and the
     inside of the collar wrap back towards the arm and the neck. A back-stop placed
     behind the face would sit on the wrong side of those particles, so the ones whose
     normal points at the body are listed (`bodyFacingParticles`) for the game to put
-    their back-stop on the body side."""
+    their back-stop on the body side. `render`, when given, is the drawn shell's binding
+    to this proxy (`render_binding`), written under the garment as "render"."""
     mw = obj.matrix_world
     if max(abs(x - y) for r0, r1 in zip(mw, Matrix.Identity(4)) for x, y in zip(r0, r1)) > 1e-5:
         fail(obj.name, "is not at the origin; the exporter would bake another transform")
@@ -2033,45 +2241,237 @@ def garment_record(obj, name, slack):
     log(f"{name} sidecar: {len(me.vertices)} particles, {len(triangles)} triangles, {len(used)} joints, {pins} pins, "
         f"slack histogram {dict(sorted(((round(d, 3), max_distance.count(d)) for d in set(max_distance))))}, "
         f"{len(body_facing)} particles face the body")
-    return {
+    record = {
         "name": name,
         "particles": [engine_point(mw @ v.co) for v in me.vertices],
         "triangles": triangles,
         "jointPaths": [bone_path(arm.data.bones[n]) for n in used],
         "influences": influences,
         "maxDistance": [round(d, 4) for d in max_distance],
-        "backstop": 0.003,
+        "backstop": BACKSTOP,
         "bodyFacingParticles": body_facing,
         "pinCount": pins,
         "dominantJoint": dominant,
         "bindJointWorldMatrices": [engine_matrix_column_major(arm.matrix_world @ arm.data.bones[n].matrix_local) for n in used],
     }
+    if render is not None:
+        record["render"] = render
+    return record
 
 
-def shirt_slack(bm, loops, band=0.02):
-    """The collar loop and its one-ring pinned, the buttoned front 5 mm, the armhole band
-    5 cm, the rest (the body of the shirt, its hem and its cuffs) 3 cm. The collar is the
-    loop with the highest centroid (the front is sewn, so it is a loop of its own); the
-    buttoned front is the band of `band` either side of the centre line at the front,
-    from the hem up to the collar, where the buttons hold the two panels to each other
-    and to the chest; the armhole band is the vertices within ARMHOLE_SLACK_BAND of the
-    seam (grade_weight_seams), where the graded skin still stretches the edges most and
-    the cloth needs room to keep its lengths. The cuffs had a centimetre, to ride the
-    forearm; but the ragdoll's forearm and hand parts hang 1-3 cm off the pose at rest
-    (their joint limits) and 8-13 cm off in a run, and their capsules pushed the cuffs
-    2 cm past that slack every frame, so the cuffs take the body's slack and hang on the
-    wrist."""
+def surface_distances(bm, seeds, limit):
+    """Dijkstra over the edges from `seeds` (BMVerts at distance 0): {BMVert: distance
+    along the surface} for every vertex within `limit`. Edge paths overestimate the true
+    geodesic by a few per cent on a triangle mesh, close enough for a band's width."""
+    bm.verts.ensure_lookup_table()
+    dist = {v: 0.0 for v in seeds}
+    heap = [(0.0, v.index) for v in seeds]
+    heapq.heapify(heap)
+    while heap:
+        d, i = heapq.heappop(heap)
+        v = bm.verts[i]
+        if d > dist.get(v, math.inf):
+            continue
+        for e in v.link_edges:
+            o = e.other_vert(v); nd = d + e.calc_length()
+            if nd <= limit and nd < dist.get(o, math.inf):
+                dist[o] = nd
+                heapq.heappush(heap, (nd, o.index))
+    return dist
+
+
+# The shirt's slack schedule, metres (0 pins), and the bands that place it, along the
+# surface (`surface_distances`) where a band is measured from a loop or a seam. The
+# headset showed the shirt as a second skin — the same 3 cm everywhere — with a
+# sawtooth collar and cuffs fighting the hands (2026-10-30): a shirt hangs from its
+# shoulders. So the collar band (the collar, its stand and its points, within
+# COLLAR_BAND of the collar loop) and the cuffs (within CUFF_BAND of the cuff loops) are
+# hard skinned and follow the body exactly — the rolled cuffs ride the forearm's
+# animation and never fight the hand parts' tracking error; the yoke (the back and the
+# shoulder tops within YOKE_BAND below the collar band, not the chest) is held to a
+# centimetre, which is what the shirt hangs from; below it the chest, the back and the
+# hem band (the lowest HEM_BAND of the body panels) hang freer the lower they are, the
+# sleeves swing on 5 cm and the armhole band (within ARMHOLE_BAND of the sleeve seam,
+# where the graded skin still stretches the edges most) on 6; the buttoned front keeps
+# its 5 mm, since the buttons hold the panels to the chest. The chest is what lies in
+# front of the torso's axis below the shoulder line, the back what lies behind it.
+SLACK = {"collar": 0.0, "cuff": 0.0, "placket": 0.005, "yoke": 0.01, "sleeve": 0.05, "armhole": 0.06, "chest": 0.08, "back": 0.10, "hem": 0.12}
+COLLAR_BAND = 0.08
+CUFF_BAND = 0.06
+YOKE_BAND = 0.12
+HEM_BAND = 0.12
+ARMHOLE_BAND = 0.06
+# Blender y of the torso's axis (the spine runs at y 0.10-0.14, the chest in front of
+# it at smaller y) and Blender z of the shoulder line (the upper arms start at 1.41):
+# above it a yoke vertex is a shoulder top whatever its y.
+TORSO_AXIS_Y = 0.10
+SHOULDER_Z = 1.40
+PLACKET_HALF_WIDTH = 0.02
+PLACKET_FRONT_Y = 0.06
+
+
+def render_binding(shell, proxy):
+    """The drawn shell's binding to the simulated proxy, at the bind pose, as the sidecar's
+    "render" block (engine space where a position is stored; a frame coordinate is the
+    same in both spaces, the axis conversion being a rotation).
+
+    Every shell vertex binds to the proxy triangle nearest to it by point-to-triangle
+    distance (the inner layer to the same outer-proxy triangle as the outer, a millimetre
+    farther), at the barycentric coordinates of the closest point, with its rest offset
+    from that point expressed in the triangle's frame — e1 along the first edge, n the
+    face normal, t across — so a triangle that tilts or moves carries the vertex
+    rigidly: position = bary(a, b, c) + off.x e1 + off.y n + off.z t. The normals are
+    not here: the exporter writes a normal per face corner and splits a vertex whose
+    corners disagree — on the artist's sharp edges, the cuff rolls, the placket's edge
+    and the collar's creases, a thousand of the shell's vertices become two or more with
+    normals up to 170 degrees apart — so one rest normal per vertex (the smooth one, the
+    first cook's) lit those creases flat whenever the cloth was on while the body's own
+    skinning showed them (2026-10-31). The game reads each exported copy's normal off
+    the mesh and carries it in the same frame (ZombieCloth.RenderShell), which keeps
+    the cloth on and the cloth off lit alike. The buttons and the bits of thread (every
+    island but the largest) are rigid: all the vertices of one bind to the single
+    triangle nearest the island's centre, so the island keeps its shape whatever the
+    cloth under it does. The vertices are written main island first, then each rigid
+    island whole, and `rigidIslands` gives each one's [first, count]; the rest positions
+    are what the game binds to the exported vertices by position (the exporter splits
+    vertices on UV seams and sharp edges, so one maps to several); the shell's
+    triangles are not needed, the mesh has them. The arrays are flat triples (x y z,
+    u v w) for a compact file. Logs the binding's figures, the sharp edges, and checks
+    that the rounded numbers rebuild every vertex within a twentieth of a millimetre."""
+    for o in (shell, proxy):
+        if max(abs(x - y) for r0, r1 in zip(o.matrix_world, Matrix.Identity(4)) for x, y in zip(r0, r1)) > 1e-5:
+            fail(o.name, "is not at the origin; the binding would be in another frame than the export")
+    pm = proxy.data
+    PV = np.array([v.co[:] for v in pm.vertices], dtype=np.float64)
+    PT = np.array([list(p.vertices) for p in pm.polygons])
+    if PT.shape[1] != 3:
+        fail(proxy.name, "is not a triangle mesh")
+    tree = BVHTree.FromPolygons([tuple(p) for p in PV], [tuple(int(i) for i in t) for t in PT])
+    sm = shell.data
+    SV = np.array([v.co[:] for v in sm.vertices], dtype=np.float64)
+    sharp = sm.attributes.get("sharp_edge")
+    sharp_edges = [e for e, a in zip(sm.edges, sharp.data) if a.value] if sharp is not None else []
+    log(f"{shell.name}: {len(sharp_edges)} sharp edges on {len({i for e in sharp_edges for i in e.vertices})} vertices, "
+        f"{sum(1 for p in sm.polygons if not p.use_smooth)} flat faces, custom normals {sm.has_custom_normals}: the exporter splits their corners; the game carries each copy's own normal")
+    bm = bmesh.new(); bm.from_mesh(sm)
+    parts = [[v.index for v in part] for part in islands(bm)]
+    bm.free()
+    order = list(parts[0]); rigid = []
+    for part in parts[1:]:
+        rigid.append((len(order), len(part))); order.extend(part)
+    order = np.array(order)
+    n = len(order); main_count = len(parts[0])
+    tri = np.empty(n, dtype=np.int64); closest = np.empty((n, 3))
+    for k in range(main_count):
+        loc, _, index, _ = tree.find_nearest(Vector(SV[order[k]]))
+        tri[k] = index; closest[k] = loc[:]
+    for start, count in rigid:
+        centre = SV[order[start:start + count]].mean(axis=0)
+        loc, _, index, _ = tree.find_nearest(Vector(centre))
+        tri[start:start + count] = index; closest[start:start + count] = loc[:]
+    A, B, C = PV[PT[tri, 0]], PV[PT[tri, 1]], PV[PT[tri, 2]]
+    e1 = B - A; e1 /= np.linalg.norm(e1, axis=1)[:, None]
+    nn = np.cross(e1, C - A); nn /= np.linalg.norm(nn, axis=1)[:, None]
+    tt = np.cross(nn, e1)
+    v0, v1, v2 = B - A, C - A, closest - A
+    d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
+    d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
+    den = d00 * d11 - d01 * d01
+    bv = (d11 * d20 - d01 * d21) / den; bw = (d00 * d21 - d01 * d20) / den
+    bary = np.stack([1 - bv - bw, bv, bw], axis=1)
+    if bary.min() < -1e-4 or bary.max() > 1 + 1e-4:
+        fail(shell.name, f"a closest point lies outside its triangle: barycentric {bary.min():.5f}..{bary.max():.5f}")
+    bary = np.clip(bary, 0, 1); bary /= bary.sum(axis=1)[:, None]
+    X = SV[order]
+    d = X - closest
+    offset = np.stack([(d * e1).sum(1), (d * nn).sum(1), (d * tt).sum(1)], axis=1)
+    bary_r, offset_r = np.round(bary, 6), np.round(offset, 6)
+    rebuilt = bary_r[:, 0:1] * A + bary_r[:, 1:2] * B + bary_r[:, 2:3] * C + offset_r[:, 0:1] * e1 + offset_r[:, 1:2] * nn + offset_r[:, 2:3] * tt
+    position_error = np.linalg.norm(rebuilt - X, axis=1)
+    distance = np.linalg.norm(d, axis=1)
+    farthest = np.argsort(distance[:main_count])[-3:][::-1]
+    # A shell vertex below the lowest corner of its triangle hangs off the proxy's edge
+    # as a lever: the hem, when the outer-layer cut dropped the hem strip, hung 9-33 mm
+    # below (see outer_layer).
+    below = (np.minimum(np.minimum(A[:, 2], B[:, 2]), C[:, 2]) - X[:, 2])[:main_count]
+    log(f"{shell.name} render binding: {n} vertices ({main_count} in the shell, {len(rigid)} rigid islands of {sorted(set(c for _, c in rigid), reverse=True)} vertices) "
+        f"on {len(set(tri.tolist()))} of the proxy's {len(PT)} triangles; offset from the closest point median {np.median(distance) * 1000:.2f} mm, "
+        f"max {distance.max() * 1000:.1f} mm; along the normal {offset[:, 1].min() * 1000:+.1f}..{offset[:, 1].max() * 1000:+.1f} mm "
+        f"({100 * (offset[:, 1] < -0.0005).mean():.0f} % of the vertices more than 0.5 mm inside: the inner layer); "
+        f"rebuilt from the rounded numbers within {position_error.max() * 1000:.4f} mm; "
+        f"shell vertices farthest from the proxy: " + ", ".join(f"{distance[k] * 1000:.1f} mm at {tuple(round(float(c), 3) for c in X[k])}" for k in farthest)
+        + f"; shell vertices below their triangle's lowest corner: {int((below > 0.002).sum())} by more than 2 mm, the lowest {below.max() * 1000:.1f} mm")
+    if position_error.max() > 5e-5:
+        fail(shell.name, "the render binding does not rebuild the shell")
+    return {
+        "vertexCount": int(n),
+        "restPositions": [round(float(c), 6) for p in X for c in (CONVERSION @ Vector(p))],
+        "triangle": [int(t) for t in tri],
+        "barycentric": [round(float(c), 6) for c in bary.ravel()],
+        "offset": [round(float(c), 6) for c in offset.ravel()],
+        "rigidIslands": [[int(start), int(count)] for start, count in rigid],
+    }
+
+
+def shirt_slack(bm, loops):
+    """The per-particle slack of the shirt by SLACK's regions (see there). The collar is
+    the loop with the highest centroid (the front is sewn, so it is a loop of its own),
+    the cuffs the two loops out at the wrists, the hem what is left; the sleeves are the
+    particles whose heaviest bone is an arm's (SLEEVE_BONES) and the armhole seam is the
+    artist's sleeve-against-body seam kept before the grading (`sleeve_seam_segments`).
+    A particle takes the first region that claims it, in SLACK's order — the collar and
+    the cuffs first, since nothing may loosen a pin, the buttoned front before the yoke,
+    the yoke before the armhole band (the shoulder tops are what the shirt hangs from),
+    the armhole band before the sleeve, the hem band before the chest and the back.
+    Logs each region's count and extent."""
     mw = shirt.matrix_world
     collar = max(loops, key=lambda l: sum((mw @ v.co).z for v in l) / len(l))
-    pinned = ring(bm, collar, 1)
+    cuffs = [l for l in loops if l is not collar and abs(sum((mw @ v.co).x for v in l) / len(l)) > 0.3]
+    hems = [l for l in loops if l is not collar and l not in cuffs]
+    if len(cuffs) != 2 or len(hems) != 1:
+        fail(f"shirt: expected the collar, two cuffs and the hem among the loops, found {len(loops)} loops: {len(cuffs)} at the wrists")
+    hem = hems[0]
     collar_z = min((mw @ v.co).z for v in collar)
-    front = {v for v in bm.verts if abs((mw @ v.co).x) < band and (mw @ v.co).y < 0.06 and (mw @ v.co).z < collar_z}
-    armhole = {v for v in bm.verts if v.index in armhole_slack_vertices} - pinned - front
-    log(f"shirt: {len(loops)} loops; collar loop {len(collar)} verts (z from {collar_z:.3f}), pinned with one-ring {len(pinned)}, "
-        f"buttoned front {len(front - pinned)} verts, armhole band {len(armhole)} verts")
-    if len(armhole) == 0:
-        fail("shirt: the armhole band is empty; grade_weight_seams did not run on this proxy")
-    return [0.0 if v in pinned else (0.005 if v in front else (ARMHOLE_SLACK if v in armhole else 0.03)) for v in bm.verts]
+    names = [g.name for g in shirt.vertex_groups]
+    dominant = {i: names[dominant_group(w)] for i, w in vertex_weights(shirt).items() if w}
+    collar_band = set(surface_distances(bm, collar, COLLAR_BAND))
+    cuff_band = set(surface_distances(bm, [v for l in cuffs for v in l], CUFF_BAND))
+    yoke_reach = set(surface_distances(bm, list(collar_band), YOKE_BAND))
+    hem_band = set(surface_distances(bm, hem, HEM_BAND))
+    sleeve = {v for v in bm.verts if dominant.get(v.index, "").startswith(SLEEVE_BONES)}
+    if not sleeve_seam_segments:
+        fail("shirt: the sleeve seam is unknown; grade_weight_seams did not run on this proxy")
+    armhole = {v for v in bm.verts if any(segment_distance(mw @ v.co, a, b) <= ARMHOLE_BAND for a, b in sleeve_seam_segments)}
+    region = {}
+    for v in bm.verts:
+        p = mw @ v.co
+        if v in collar_band:
+            region[v] = "collar"
+        elif v in cuff_band:
+            region[v] = "cuff"
+        elif abs(p.x) < PLACKET_HALF_WIDTH and p.y < PLACKET_FRONT_Y and p.z < collar_z:
+            region[v] = "placket"
+        elif v in yoke_reach and v not in sleeve and (p.y >= TORSO_AXIS_Y or p.z >= SHOULDER_Z):
+            region[v] = "yoke"
+        elif v in armhole:
+            region[v] = "armhole"
+        elif v in sleeve:
+            region[v] = "sleeve"
+        elif v in hem_band:
+            region[v] = "hem"
+        elif p.y < TORSO_AXIS_Y:
+            region[v] = "chest"
+        else:
+            region[v] = "back"
+    log(f"shirt: {len(loops)} loops; collar loop {len(collar)} verts (z from {collar_z:.3f}), cuff loops {[len(l) for l in cuffs]}, hem loop {len(hem)}; "
+        f"{len(sleeve_seam_segments)} sleeve seam edges, {len(sleeve)} sleeve particles")
+    for name in SLACK:
+        chosen = [mw @ v.co for v in bm.verts if region[v] == name]
+        if not chosen:
+            fail(f"shirt: the {name} region is empty")
+        log(f"  shirt {name:8s} {len(chosen):5d} particles, slack {SLACK[name] * 1000:5.1f} mm, x {min(p.x for p in chosen):+.2f}..{max(p.x for p in chosen):+.2f} "
+            f"y {min(p.y for p in chosen):+.2f}..{max(p.y for p in chosen):+.2f} z {min(p.z for p in chosen):.2f}..{max(p.z for p in chosen):.2f}")
+    return [SLACK[region[v]] for v in bm.verts]
 
 
 def trousers_slack(bm, loops):
@@ -2085,14 +2485,18 @@ def trousers_slack(bm, loops):
 
 
 cloth = {
-    "garments": [garment_record(shirt, "shirt", shirt_slack), garment_record(trousers, "trousers", trousers_slack)],
+    "garments": [garment_record(shirt, "shirt", shirt_slack, render=render_binding(shirt_render, shirt)),
+                 garment_record(trousers, "trousers", trousers_slack)],
 }
 
 # ---------------------------------------------------------------- one object
 # One material everywhere, then one object. After the join every polygon must sit on
-# slot 0: the exporters split by material INDEX, not by material.
-meshes = [body, eyes, shoes, belt, shirt, trousers]
-for m in meshes + [shirt_render]:
+# slot 0: the exporters split by material INDEX, not by material. The shirt shell is
+# drawn, so it joins; the shirt proxy only simulates, so it stays out, hidden (the
+# SCENE export skips hidden objects) and in the rig file for inspection.
+shell_positions = [shirt_render.matrix_world @ v.co for v in shirt_render.data.vertices]
+meshes = [body, eyes, shoes, belt, shirt_render, trousers]
+for m in meshes + [shirt]:
     for s in m.material_slots:
         s.material = atlas_mat
 with bpy.context.temp_override(object=body, active_object=body, selected_objects=meshes, selected_editable_objects=meshes):
@@ -2106,14 +2510,42 @@ while len(body.material_slots) > 1:
 body.name = "ZombieMesh"; body.data.name = "ZombieMesh"
 meshes = [body]
 log(f"joined: {len(body.data.vertices)} verts, {len(body.data.polygons)} faces, slots {[s.material.name for s in body.material_slots]}, groups {len(body.vertex_groups)}")
-# The render shell is kept, hidden: the SCENE export skips hidden objects.
-shirt_render.hide_set(True); shirt_render.hide_render = True
-for p in shirt_render.data.polygons:
+shirt.name = "Shirt_Proxy"; shirt.data.name = "Shirt_Proxy"
+shirt.hide_set(True); shirt.hide_render = True
+for p in shirt.data.polygons:
     p.material_index = 0
-while len(shirt_render.material_slots) > 1:
-    shirt_render.active_material_index = len(shirt_render.material_slots) - 1
-    with bpy.context.temp_override(object=shirt_render, active_object=shirt_render):
+while len(shirt.material_slots) > 1:
+    shirt.active_material_index = len(shirt.material_slots) - 1
+    with bpy.context.temp_override(object=shirt, active_object=shirt):
         bpy.ops.object.material_slot_remove()
+
+# The game binds the shell's vertices to the exported ones by position, within 0.2 mm,
+# and hands a vertex two of them claim to the nearer: the artist's shell has a thousand
+# pairs of its own vertices closer than that (thread wound around the buttons, seam
+# strips) and the kept skin and the trousers' waist run under it. What matters is that
+# no OTHER part's vertex sits within the tolerance of a shell vertex, or the shell would
+# drag it along; this counts them, the shell's own near pairs apart, and refuses a
+# coincidence (a part exactly on the shell cannot be told from it).
+joined_tree = KDTree(len(body.data.vertices))
+for v in body.data.vertices:
+    joined_tree.insert(body.matrix_world @ v.co, v.index)
+joined_tree.balance()
+shell_tree = KDTree(len(shell_positions))
+for i, p in enumerate(shell_positions):
+    shell_tree.insert(p, i)
+shell_tree.balance()
+foreign = []; own_pairs = 0; nearest_foreign = math.inf
+for p in shell_positions:
+    own_pairs += len(shell_tree.find_range(p, 0.0002)) - 1
+    # A joined vertex is the shell's own when a shell vertex sits on it exactly.
+    others = [dd for co, _, dd in joined_tree.find_range(p, 0.0002) if shell_tree.find(co)[2] > 1e-7]
+    if others:
+        foreign.append(p); nearest_foreign = min(nearest_foreign, min(others))
+log(f"shell against the rest of the mesh: {len(foreign)} shell vertices have another part's vertex within 0.2 mm"
+    + (f" (nearest {nearest_foreign * 1000:.3f} mm; e.g. {[tuple(round(c, 3) for c in p) for p in foreign[:4]]})" if foreign else "")
+    + f"; {own_pairs // 2} near pairs among the shell's own vertices")
+if nearest_foreign == 0.0:
+    fail("a vertex of another part sits exactly on a shell vertex; the game could not tell them apart")
 
 # ---------------------------------------------------------------- purge + save
 # The artist's materials carry fake users (and their 4K maps with them): only the atlas
@@ -2173,5 +2605,8 @@ for g in cloth["garments"]:
 sidecar = os.path.join(asset_dir, NAME + ".cloth.json")
 with open(sidecar, "w") as f:
     json.dump(cloth, f, sort_keys=True, separators=(",", ":"))
-log(f"sidecar {sidecar}: {os.path.getsize(sidecar)} bytes, garments {[(g['name'], len(g['particles']), len(g['triangles']), g['pinCount']) for g in cloth['garments']]}")
+size = os.path.getsize(sidecar)
+log(f"sidecar {sidecar}: {size} bytes ({size / 1e6:.2f} MB), garments {[(g['name'], len(g['particles']), len(g['triangles']), g['pinCount'], g.get('render', {}).get('vertexCount')) for g in cloth['garments']]}")
+if size > 8e6:
+    log(f"WARNING: the sidecar passes 8 MB ({size / 1e6:.2f} MB); the render binding is most of it")
 print("DONE")

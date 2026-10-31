@@ -325,8 +325,11 @@ final class ZombieRagdollRigTests: XCTestCase {
     /// No point of the capsule's surface reaches more than 5 mm past that
     /// reach. Every point of the shirt's
     /// and the trousers' surfaces (`surfacePoints`) stays 2 mm clear of every
-    /// capsule — under the clothes the export keeps no skin (the prep culls
-    /// it), so there the garment is the bound, and the trousers bound the
+    /// capsule — under the trousers the export keeps no skin (the prep culls
+    /// it), so there the garment is the bound; under the shirt the skin stays
+    /// (the shirt hangs off it since 2026-10-31) and the drawn shell, which
+    /// is not a sidecar particle, counts with it, a few millimetres outside
+    /// the skin — and the trousers bound the
     /// legs and the hips as the shirt the torso and the arms. Each sample is
     /// told which bound it had — own skin, neighbour skin, a garment, or
     /// none — and the shares are printed; a sample with no bound is a cap

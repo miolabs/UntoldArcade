@@ -20,10 +20,11 @@ import UntoldJoltPhysics
 /// sidecar's own particles as the mesh and an override that records what
 /// it is given, so the binding and the write are proven without an engine.
 public protocol ZombieClothBody: AnyObject {
-    /// The rest positions of every vertex of the skinned mesh, in the space
-    /// the skin matrices apply to (the mesh's), and the matrix the mesh is
-    /// drawn with on top of the entity's. Nil when the mesh cannot be read.
-    func meshGeometry() -> (positions: [SIMD3<Float>], localTransform: simd_float4x4)?
+    /// The rest positions and normals of every vertex of the skinned mesh,
+    /// in the space the skin matrices apply to (the mesh's), and the matrix
+    /// the mesh is drawn with on top of the entity's. Nil when the mesh
+    /// cannot be read.
+    func meshGeometry() -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>], localTransform: simd_float4x4)?
     /// This frame's displayed joint matrices, model space, skeleton order.
     func jointModelTransforms() -> [simd_float4x4]?
     /// The entity's model space to the world.
@@ -70,9 +71,9 @@ public final class ZombieClothEntityBody: ZombieClothBody {
         return nil
     }
 
-    public func meshGeometry() -> (positions: [SIMD3<Float>], localTransform: simd_float4x4)? {
+    public func meshGeometry() -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>], localTransform: simd_float4x4)? {
         guard let meshEntity, let geometry = entitySubmeshGeometry(entityId: meshEntity, meshIndex: meshIndex, submeshIndex: 0) else { return nil }
-        return (geometry.positions, geometry.localTransform)
+        return (geometry.positions, geometry.normals, geometry.localTransform)
     }
 
     public func jointModelTransforms() -> [simd_float4x4]? {
@@ -112,24 +113,35 @@ public final class ZombieClothEntityBody: ZombieClothBody {
 }
 
 /// The zombie's shirt as a Jolt soft body skinned to the skeleton, worn
-/// over the powered ragdoll. The artist's shirt is in the exported mesh,
+/// over the powered ragdoll. The artist's shirt — the shell: two layers of
+/// fabric, the folded collar, the buttons — is in the exported mesh,
 /// body-skinned like the rest; the cloth sidecar (`ZombieClothAsset`)
-/// carries the same shirt as a particle proxy. At the reveal every
-/// particle is bound to the exported vertices at its position, the proxy
-/// becomes a soft body whose particles Jolt keeps within their slack of
-/// where the skin puts them (and outside a back-stop behind the skin, the
-/// body), and every frame the particles are read back and written over
-/// the deformation pass's output for the vertices they drive — so the
-/// shirt is the body's own skinning plus whatever the simulation adds:
-/// swing, drape, a ball's dent, a hand dragging it.
+/// carries a particle proxy of it, which is not in the mesh, and the
+/// shell's binding to that proxy: every shell vertex on a proxy triangle,
+/// with its rest offset in the triangle's frame. At the reveal every shell
+/// vertex is bound to the exported vertices at its position, each of
+/// those given its own exported normal in that frame (the exporter splits
+/// a vertex on the artist's sharp edges into copies with their own
+/// normals), the proxy becomes a soft body whose particles Jolt keeps
+/// within their slack of where the skin puts them (and no more than a
+/// millimetre behind it: the back-stop, the body), and every frame the
+/// particles are read back, the triangles' frames rebuilt from them and
+/// the shell's vertices and normals evaluated from the binding
+/// (`RenderShell`) and written over the deformation pass's output — so the
+/// shirt is the artist's shell carried by the simulated proxy: it hangs
+/// from the shoulders, swings, drapes, takes a ball's dent, keeps its
+/// fold, its creases and its buttons. (A garment without a binding — the
+/// trousers, not simulated yet — is drawn as its proxy, the particles
+/// written over their own vertices.)
 ///
 /// The frame runs: the animation composes this frame's pose; the physics
 /// step begins and `willStep` feeds that pose's joints to the skin (the
 /// pose the body is drawn with — the step runs before the game update and
 /// the override is written in it); Jolt steps; the game update sets the
 /// ragdoll's pose on the mesh and last calls `readBack`, which reads the
-/// particles, turns them into mesh space and writes the override the
-/// deformation pass applies after the skinning, before the draws. The body
+/// particles, turns them into mesh space, evaluates the shell and writes
+/// the override the deformation pass applies after the skinning, before
+/// the draws. The body
 /// moves to compute skinning for that (`setEntityDeformation(.lbs)`); it
 /// was vertex-shader skinned before, and that is the price of the override,
 /// paid while a garment is attached: `detach` returns the body to its own
@@ -143,7 +155,7 @@ public final class ZombieClothEntityBody: ZombieClothBody {
 /// the parts have reached the pose, so the shirt does not flail while the
 /// body catches up. A still body (no joint moved, no particle moving) puts
 /// the cloth to sleep after `sleepAfter`: no feed, no override, the last
-/// override stays, and the soft body is put to sleep in Jolt — the step
+/// override stays (the shell as it was last evaluated), and the soft body is put to sleep in Jolt — the step
 /// skips it, which is where the shirt's cost was — on a layer only the
 /// balls meet, until a joint moves or a ball moves the particles: Jolt
 /// wakes the body for the ball, and asleep the cloth reads the positions
@@ -154,8 +166,10 @@ public final class ZombieClothEntityBody: ZombieClothBody {
 /// creeping under the threshold every frame would otherwise drift out from
 /// under its frozen override for good. Beyond `lodDistance` from the player the
 /// override is cleared and the body put to sleep on the inert layer: the
-/// shirt is the body's skinning again and nothing is fed, solved or read;
-/// the return hard skins it. The joints' motion is a frame's: a long frame
+/// shell is drawn by its own skin weights again (the proxy's, which the
+/// prep gives it, so it sits where the hard-skinned simulation would put
+/// it) and nothing is fed, solved, read or evaluated; the return hard
+/// skins it. The joints' motion is a frame's: a long frame
 /// runs as several sub-steps on one displayed pose, and they are measured
 /// against the last frame, not each other. Frame thread only, like
 /// `ZombiePhysics`.
@@ -254,10 +268,161 @@ public final class ZombieCloth: @unchecked Sendable {
         }
     }
 
-    /// A particle binds to the exported vertices within this of its
-    /// position: the exporter splits vertices on UV seams, several per
-    /// particle, and nothing else lies within a fifth of a millimetre.
+    /// A shell vertex (or a particle, for a garment drawn as its proxy)
+    /// binds to the exported vertices within this of its position: the
+    /// exporter splits vertices on UV seams, several per vertex. Where two
+    /// shell vertices lie within it of the same exported vertex — the
+    /// artist's shell has a thousand such pairs, thread wound around the
+    /// buttons and seam strips, the closest a fiftieth of a millimetre
+    /// apart — the nearer takes it; the prep checks that no other part of
+    /// the mesh comes that close to the shell.
     static let bindTolerance: Float = 0.0002
+
+    /// The drawn shell as the sidecar binds it to the proxy
+    /// (`ZombieClothAsset.RenderBinding`), evaluated from the particles each
+    /// frame: first a frame per proxy triangle — `e1` along its first edge,
+    /// `n` its normal, `t` across — then every exported vertex the shell
+    /// drives as its shell vertex's barycentric point on the triangle plus
+    /// that vertex's rest offset in the frame, and its normal as its own
+    /// rest normal in the frame. The frame is orthonormal, so the shell moves
+    /// rigidly with its triangle: the fold keeps its thickness, a button its
+    /// shape (all its vertices ride one triangle), and the shading its
+    /// creases, which the proxy's own normals would flatten — the headset
+    /// showed the single-layer proxy's reverse side dark wherever it creased
+    /// (2026-10-30). The rest normals are the exported mesh's, taken off it
+    /// at the attach and expressed in the triangle's bind-pose frame, not
+    /// one per shell vertex from the sidecar: the exporter writes a normal
+    /// per face corner and splits a vertex whose corners disagree, and on
+    /// the artist's sharp edges — the cuff rolls, the placket's edge, the
+    /// collar's creases — a thousand shell vertices are two or more exported
+    /// ones with normals up to 180° apart (opposite), which the sidecar's
+    /// one smooth normal lit flat whenever the cloth was on while the body's
+    /// own skinning showed the crease (2026-10-31); each copy keeping its own,
+    /// the cloth on and off are lit alike, and at the bind pose the shell
+    /// evaluates to the exported mesh exactly (`ZombieClothTests`). A
+    /// triangle collapsed to a line (it never should be: the proxy's angles
+    /// are 8° and more at rest) keeps its last frame rather than a NaN. The
+    /// vertex pass is split over the cores (`concurrentPerform`, runs of
+    /// 2,048 slots): for the shirt's 29,402 shell vertices — 32,530 driven
+    /// exported copies — the Mac sandbox (M4 Max, release, the idle's awake
+    /// in-range samples, one a second over 35 s) evaluates it in 503 us at
+    /// the median and 1,008 us at most on the cores, against 628 and
+    /// 1,273 us on one thread (2026-10-31): a fifth off, since sixteen runs
+    /// of this size barely outlast the dispatch. It stays split because
+    /// either figure is over 0.6 ms, which the headset's cores, about twice
+    /// slower, would turn into more than a millisecond of the 10 ms frame;
+    /// the read-back it sits inside is 678 us at the median there (772
+    /// one-threaded).
+    final class RenderShell {
+        /// One exported vertex the shell drives: its shell vertex's proxy
+        /// triangle and rest in that triangle's frame, and its own rest
+        /// normal there.
+        private struct Binding {
+            var triangle: Int32
+            var barycentric: SIMD3<Float>
+            var offset: SIMD3<Float>
+            var normal: SIMD3<Float>
+        }
+
+        /// One proxy triangle this frame: its corners and its frame.
+        private struct Frame {
+            var a, b, c, e1, n, t: SIMD3<Float>
+        }
+
+        /// The shell vertices in the binding.
+        let vertexCount: Int
+        /// The exported vertices the shell drives, one slot each, in the
+        /// garment's override order (each shell vertex's copies together).
+        let slotCount: Int
+        /// The rigid islands as `first ..< first + count` runs of shell
+        /// vertices.
+        let rigidIslands: [Range<Int>]
+        private let triangles: [SIMD3<UInt32>]
+        /// Per slot.
+        private let bindings: [Binding]
+        private var frames: [Frame]
+        /// The driven vertices as last evaluated, mesh space, per slot.
+        private(set) var positions: [SIMD3<Float>]
+        private(set) var normals: [SIMD3<Float>]
+
+        /// `binding` must be consistent with `triangles` (the proxy's faces)
+        /// and `slotVertices` index its vertices: `attach` checks the first
+        /// before building one. `restParticles` are the proxy's particles at
+        /// the bind pose, mesh space, whose triangles' frames the exported
+        /// `slotNormals` (mesh space, one per slot) are expressed in; a
+        /// normal of no length (none should be) takes its triangle's.
+        init(_ binding: ZombieClothAsset.RenderBinding, triangles: [SIMD3<UInt32>], restParticles: [SIMD3<Float>],
+             slotVertices: [Int], slotNormals: [SIMD3<Float>])
+        {
+            vertexCount = binding.vertexCount
+            slotCount = slotVertices.count
+            rigidIslands = binding.rigidIslands.map { $0[0] ..< $0[0] + $0[1] }
+            self.triangles = triangles
+            let bary = binding.barycentricVectors, offset = binding.offsetVectors
+            var rest = Array(repeating: Frame(a: .zero, b: .zero, c: .zero, e1: SIMD3(1, 0, 0), n: SIMD3(0, 1, 0), t: SIMD3(0, 0, 1)), count: triangles.count)
+            Self.frames(of: triangles, particles: restParticles, into: &rest)
+            bindings = (0 ..< slotVertices.count).map { s in
+                let v = slotVertices[s]
+                let frame = rest[binding.triangle[v]]
+                let n = slotNormals[s]
+                let length = simd_length(n)
+                let local = length > 1e-6 ? SIMD3(simd_dot(n, frame.e1), simd_dot(n, frame.n), simd_dot(n, frame.t)) / length : SIMD3<Float>(0, 1, 0)
+                return Binding(triangle: Int32(binding.triangle[v]), barycentric: bary[v], offset: offset[v], normal: local)
+            }
+            frames = rest
+            positions = Array(repeating: .zero, count: slotVertices.count)
+            normals = Array(repeating: SIMD3(0, 1, 0), count: slotVertices.count)
+        }
+
+        /// Every triangle's corners and frame from `particles`, into
+        /// `frames`; a collapsed triangle keeps the frame it had.
+        private static func frames(of triangles: [SIMD3<UInt32>], particles: [SIMD3<Float>], into frames: inout [Frame]) {
+            particles.withUnsafeBufferPointer { p in
+                frames.withUnsafeMutableBufferPointer { f in
+                    for k in 0 ..< triangles.count {
+                        let tri = triangles[k]
+                        let a = p[Int(tri.x)], b = p[Int(tri.y)], c = p[Int(tri.z)]
+                        let ab = b - a
+                        let cross = simd_cross(ab, c - a)
+                        let lab = simd_length(ab), lcross = simd_length(cross)
+                        f[k].a = a; f[k].b = b; f[k].c = c
+                        guard lab > 1e-9, lcross > 1e-12 else { continue }
+                        let e1 = ab / lab, n = cross / lcross
+                        f[k].e1 = e1; f[k].n = n; f[k].t = simd_cross(n, e1)
+                    }
+                }
+            }
+        }
+
+        /// The driven vertices from the particles (mesh space), into
+        /// `positions` and `normals`.
+        func evaluate(particles: [SIMD3<Float>]) {
+            Self.frames(of: triangles, particles: particles, into: &frames)
+            let count = slotCount
+            frames.withUnsafeBufferPointer { f in
+                bindings.withUnsafeBufferPointer { bind in
+                    positions.withUnsafeMutableBufferPointer { pos in
+                        normals.withUnsafeMutableBufferPointer { nor in
+                            // Runs of slots across the cores; each writes
+                            // its own range and reads shared, frozen inputs.
+                            let chunk = 2048
+                            let chunks = (count + chunk - 1) / chunk
+                            DispatchQueue.concurrentPerform(iterations: chunks) { i in
+                                let end = min((i + 1) * chunk, count)
+                                for s in i * chunk ..< end {
+                                    let b = bind[s]
+                                    let fr = f[Int(b.triangle)]
+                                    let w = b.barycentric, o = b.offset, r = b.normal
+                                    pos[s] = w.x * fr.a + w.y * fr.b + w.z * fr.c + o.x * fr.e1 + o.y * fr.n + o.z * fr.t
+                                    nor[s] = r.x * fr.e1 + r.y * fr.n + r.z * fr.t
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// One garment's soft body and its binding to the mesh.
     private final class Garment {
@@ -278,9 +443,15 @@ public final class ZombieCloth: @unchecked Sendable {
         let influences: [[JoltSoftBodySkinInfluence]]
         /// The sidecar joint that is the pelvis (the runaway reference).
         let pelvisJoint: Int
-        /// The override entries each particle drives, into the cloth's
-        /// combined arrays.
+        /// The drawn shell bound to this proxy, or nil when the proxy itself
+        /// is in the mesh and drawn (the trousers).
+        let shell: RenderShell?
+        /// The override entries each shell vertex drives (or, with no shell,
+        /// each particle), into the cloth's combined arrays; a shell's slots
+        /// run on from the first range's start in its own order.
         let overrideRanges: [Range<Int>]
+        /// The particles in mesh space this frame (a garment with a shell).
+        var meshPositions: [SIMD3<Float>] = []
         var jointWorld: [simd_float4x4]
         /// The last frame's joints, snapshotted at this frame's first
         /// placement: what the frame's motion is measured against, and the
@@ -295,7 +466,7 @@ public final class ZombieCloth: @unchecked Sendable {
         var previousWorldPositions: [SIMD3<Float>] = []
 
         init(name: String, soft: JoltSoftBody, bindWorld: [SIMD3<Float>], restPositions: [SIMD3<Float>], maxDistance: [Float], skeletonJoints: [Int],
-             inverseBindWorld: [simd_float4x4], influences: [[JoltSoftBodySkinInfluence]], pelvisJoint: Int, overrideRanges: [Range<Int>])
+             inverseBindWorld: [simd_float4x4], influences: [[JoltSoftBodySkinInfluence]], pelvisJoint: Int, shell: RenderShell?, overrideRanges: [Range<Int>])
         {
             self.name = name
             self.soft = soft
@@ -307,6 +478,7 @@ public final class ZombieCloth: @unchecked Sendable {
             self.inverseBindWorld = inverseBindWorld
             self.influences = influences
             self.pelvisJoint = pelvisJoint
+            self.shell = shell
             self.overrideRanges = overrideRanges
             jointWorld = Array(repeating: matrix_identity_float4x4, count: skeletonJoints.count)
             previousJointWorld = jointWorld
@@ -353,16 +525,22 @@ public final class ZombieCloth: @unchecked Sendable {
             SIMD3<Int32>(Int32((p.x / cell).rounded(.down)), Int32((p.y / cell).rounded(.down)), Int32((p.z / cell).rounded(.down)))
         }
 
-        /// The vertices within `distance` of `p`.
-        func vertices(within distance: Float, of p: SIMD3<Float>) -> [Int] {
+        /// The vertices within `distance` of `p`, each with its distance.
+        func matches(within distance: Float, of p: SIMD3<Float>) -> [(index: Int, distance: Float)] {
             let k = key(p)
-            var found: [Int] = []
+            var found: [(index: Int, distance: Float)] = []
             for dx in -1 ... 1 { for dy in -1 ... 1 { for dz in -1 ... 1 {
-                for index in cells[k &+ SIMD3<Int32>(Int32(dx), Int32(dy), Int32(dz))] ?? [] where simd_distance(positions[index], p) <= distance {
-                    found.append(index)
+                for index in cells[k &+ SIMD3<Int32>(Int32(dx), Int32(dy), Int32(dz))] ?? [] {
+                    let d = simd_distance(positions[index], p)
+                    if d <= distance { found.append((index, d)) }
                 }
             } } }
             return found
+        }
+
+        /// The vertices within `distance` of `p`.
+        func vertices(within distance: Float, of p: SIMD3<Float>) -> [Int] {
+            matches(within: distance, of: p).map(\.index)
         }
     }
 
@@ -413,6 +591,9 @@ public final class ZombieCloth: @unchecked Sendable {
 
     private var skinMicroseconds: Double = 0
     private var readBackMicroseconds: Double = 0
+    /// Of the read-back, what the shell's evaluation and its expansion over
+    /// the exported vertices took (`RenderShell.evaluate`).
+    private var bindMicroseconds: Double = 0
     private var worldMicroseconds: Double = 0
     private var willStepEnded: CFTimeInterval = 0
     private var updateBegan: CFTimeInterval = 0
@@ -457,11 +638,12 @@ public final class ZombieCloth: @unchecked Sendable {
 
     /// Binds every configured garment to the body's mesh and puts its soft
     /// body in the world at the bind pose, hard skinned onto this frame's
-    /// pose before anything steps. A garment whose particles do not all sit
-    /// on exported vertices, whose joints the skeleton lacks or whose counts
-    /// disagree with the mesh is left alone — logged once and body-skinned
-    /// as before — rather than driven wrong, and so is every garment when
-    /// the body does not take the override. Frame thread, between steps.
+    /// pose before anything steps. A garment whose shell vertices (or
+    /// particles, drawn as its proxy) do not all sit on exported vertices,
+    /// whose joints the skeleton lacks or whose counts disagree with the
+    /// mesh is left alone — logged once and body-skinned as before — rather
+    /// than driven wrong, and so is every garment when the body does not
+    /// take the override. Frame thread, between steps.
     @discardableResult
     public func attach(body: any ZombieClothBody, physics: ZombiePhysics, jointInfo: SkeletonJointInfo) -> Bool {
         guard configuration.enabled, !isAttached else { return isAttached }
@@ -472,6 +654,10 @@ public final class ZombieCloth: @unchecked Sendable {
         localTransform = geometry.localTransform
         let meshToWorld = body.entityWorld() * localTransform
         let grid = VertexGrid(geometry.positions)
+        guard geometry.normals.count == geometry.positions.count else {
+            print("CoolZombie: cloth: the mesh gives \(geometry.normals.count) normals for \(geometry.positions.count) vertices; the garments stay body-skinned")
+            return false
+        }
         var built: [Garment] = []
         var indices: [UInt32] = []
         for name in configuration.garments {
@@ -479,7 +665,7 @@ public final class ZombieCloth: @unchecked Sendable {
                 print("CoolZombie: cloth: the sidecar has no garment named \(name)")
                 continue
             }
-            if let garment = bind(garment, grid: grid, jointInfo: jointInfo, physics: physics, meshToWorld: meshToWorld, indices: &indices)
+            if let garment = bind(garment, grid: grid, meshNormals: geometry.normals, jointInfo: jointInfo, physics: physics, meshToWorld: meshToWorld, indices: &indices)
             {
                 built.append(garment)
             }
@@ -542,9 +728,10 @@ public final class ZombieCloth: @unchecked Sendable {
     }
 
     /// Fails closed: nil, and one line, for anything that would drive the
-    /// garment wrong — a particle on no exported vertex (a stale sidecar,
-    /// another export), a joint the skeleton lacks, counts that disagree.
-    private func bind(_ garment: ZombieClothAsset.Garment, grid: VertexGrid, jointInfo: SkeletonJointInfo,
+    /// garment wrong — a shell vertex or a particle on no exported vertex (a
+    /// stale sidecar, another export), a joint the skeleton lacks, counts
+    /// that disagree.
+    private func bind(_ garment: ZombieClothAsset.Garment, grid: VertexGrid, meshNormals: [SIMD3<Float>], jointInfo: SkeletonJointInfo,
                       physics: ZombiePhysics, meshToWorld: simd_float4x4, indices: inout [UInt32]) -> Garment?
     {
         let count = garment.particles.count
@@ -563,27 +750,62 @@ public final class ZombieCloth: @unchecked Sendable {
         }
         guard let pelvisJoint = garment.jointPaths.firstIndex(where: { $0.hasSuffix("/pelvis") }) else { return refuse("no pelvis among its joints") }
 
-        // Every particle onto the exported vertices at its position.
-        let positions = garment.positions
-        var garmentIndices: [UInt32] = []
-        var ranges: [Range<Int>] = []
-        ranges.reserveCapacity(count)
-        var unmatched = 0
-        let base = indices.count
-        for p in positions {
-            let matches = grid.vertices(within: Self.bindTolerance, of: p)
-            if matches.isEmpty { unmatched += 1 }
-            let start = base + garmentIndices.count
-            garmentIndices.append(contentsOf: matches.map { UInt32($0) })
-            ranges.append(start ..< base + garmentIndices.count)
-        }
-        guard unmatched == 0 else { return refuse("\(unmatched) of \(count) particles sit on no exported vertex") }
-
         var faces: [SIMD3<UInt32>] = []
         faces.reserveCapacity(garment.triangles.count)
         for t in garment.triangles {
             guard t.count == 3, t.allSatisfy({ $0 >= 0 && $0 < count }) else { return refuse("a triangle indexes outside the particles") }
             faces.append(SIMD3(UInt32(t[0]), UInt32(t[1]), UInt32(t[2])))
+        }
+
+        // What the garment drives, onto the exported vertices at its
+        // position: the shell's vertices when it has a render binding (the
+        // proxy is not in the mesh), else its particles.
+        let positions = garment.positions
+        var garmentIndices: [UInt32] = []
+        var ranges: [Range<Int>] = []
+        let base = indices.count
+        var shell: RenderShell?
+        if let render = garment.render {
+            guard render.isConsistent(triangles: faces.count) else { return refuse("its render binding disagrees with its counts") }
+            let rest = render.restPositionVectors
+            // An exported vertex two shell vertices reach goes to the nearer
+            // (see `bindTolerance`); a shell vertex left with none has no
+            // exported vertex of its own. Each exported vertex keeps its own
+            // normal (the exporter's split copies differ in theirs).
+            var owner: [Int: (vertex: Int, distance: Float)] = [:]
+            for (v, p) in rest.enumerated() {
+                for match in grid.matches(within: Self.bindTolerance, of: p) where owner[match.index].map({ match.distance < $0.distance }) ?? true {
+                    owner[match.index] = (v, match.distance)
+                }
+            }
+            var won = [[Int]](repeating: [], count: rest.count)
+            for (index, claim) in owner { won[claim.vertex].append(index) }
+            var unmatched = 0
+            var slotVertices: [Int] = [], slotNormals: [SIMD3<Float>] = []
+            ranges.reserveCapacity(rest.count)
+            for v in rest.indices {
+                if won[v].isEmpty { unmatched += 1 }
+                let start = base + garmentIndices.count
+                for index in won[v].sorted() {
+                    garmentIndices.append(UInt32(index))
+                    slotVertices.append(v)
+                    slotNormals.append(meshNormals[index])
+                }
+                ranges.append(start ..< base + garmentIndices.count)
+            }
+            guard unmatched == 0 else { return refuse("\(unmatched) of \(rest.count) shell vertices sit on no exported vertex") }
+            shell = RenderShell(render, triangles: faces, restParticles: positions, slotVertices: slotVertices, slotNormals: slotNormals)
+        } else {
+            ranges.reserveCapacity(count)
+            var unmatched = 0
+            for p in positions {
+                let matches = grid.vertices(within: Self.bindTolerance, of: p)
+                if matches.isEmpty { unmatched += 1 }
+                let start = base + garmentIndices.count
+                garmentIndices.append(contentsOf: matches.map { UInt32($0) })
+                ranges.append(start ..< base + garmentIndices.count)
+            }
+            guard unmatched == 0 else { return refuse("\(unmatched) of \(count) particles sit on no exported vertex") }
         }
         var influences: [[JoltSoftBodySkinInfluence]] = []
         influences.reserveCapacity(count)
@@ -635,7 +857,7 @@ public final class ZombieCloth: @unchecked Sendable {
         indices.append(contentsOf: garmentIndices)
         return Garment(
             name: garment.name, soft: soft, bindWorld: bindWorld, restPositions: positions, maxDistance: garment.maxDistance, skeletonJoints: skeletonJoints,
-            inverseBindWorld: bindJointWorld.map(\.inverse), influences: influences, pelvisJoint: pelvisJoint, overrideRanges: ranges
+            inverseBindWorld: bindJointWorld.map(\.inverse), influences: influences, pelvisJoint: pelvisJoint, shell: shell, overrideRanges: ranges
         )
     }
 
@@ -822,8 +1044,9 @@ public final class ZombieCloth: @unchecked Sendable {
     }
 
     /// The end of the game update: the particles off Jolt, into mesh space,
-    /// over the vertices they drive. `playerPosition` sets the range for the
-    /// next frame. Frame thread, between steps.
+    /// the shell evaluated from them, over the vertices they drive.
+    /// `playerPosition` sets the range for the next frame. Frame thread,
+    /// between steps.
     public func readBack(deltaTime: Float, playerPosition: SIMD3<Float>?) {
         guard let body, !garments.isEmpty else { return }
         defer { endFrame() }
@@ -842,8 +1065,12 @@ public final class ZombieCloth: @unchecked Sendable {
         if far != lodActive {
             lodActive = far
             if far {
-                // The body's own skinning shows; the slack is shut for the
-                // return's hard skin, and the body sleeps where it was.
+                // The body's own skinning shows — the shell drawn by its own
+                // weights, the proxy's that the prep gave it, so it sits where
+                // the hard-skinned simulation would put it; the slack is shut
+                // for the return's hard skin, and the body sleeps where it
+                // was. Asleep in range, by contrast, the last override stays:
+                // the shell as it was last evaluated.
                 body.clearOverride()
                 skinMultiplier = 0
             } else {
@@ -855,8 +1082,10 @@ public final class ZombieCloth: @unchecked Sendable {
         defer { applyBodyRest() }
         if far {
             // Nothing is read out of range, so the joints alone say whether
-            // the body is still; nothing is fed either (`willStep`).
+            // the body is still; nothing is fed either (`willStep`), and
+            // nothing is evaluated.
             readBackMicroseconds = 0
+            bindMicroseconds = 0
             accumulateStillness(deltaTime: deltaTime, particlesStill: true)
             return
         }
@@ -869,6 +1098,7 @@ public final class ZombieCloth: @unchecked Sendable {
             let speed = sampleParticleSpeed(deltaTime: deltaTime)
             guard speed >= configuration.particleSpeedThreshold else {
                 readBackMicroseconds = (CACurrentMediaTime() - started) * 1e6
+                bindMicroseconds = 0
                 return
             }
             asleep = false
@@ -972,7 +1202,10 @@ public final class ZombieCloth: @unchecked Sendable {
         return maxSpeed
     }
 
-    /// Reads every garment and fills the override arrays, mesh space; the
+    /// Reads every garment and fills the override arrays, mesh space — a
+    /// garment with a shell evaluates it from the particles (positions only
+    /// are read: the shell's normals come from the binding), one without
+    /// writes its particles and their normals over their own vertices; the
     /// reason, when a particle has run away (nothing is filled then).
     private func expandOverride(toMesh: simd_float4x4, deltaTime: Float) -> String? {
         guard let physics else { return nil }
@@ -984,8 +1217,11 @@ public final class ZombieCloth: @unchecked Sendable {
             SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z)
         ).inverse.transpose
         var maxSpeed: Float = 0
+        var bind: Double = 0
         for garment in garments {
-            let read = physics.backend.readSoftBodyVertices(garment.soft, into: &garment.worldPositions, normals: &garment.worldNormals)
+            let read = garment.shell == nil
+                ? physics.backend.readSoftBodyVertices(garment.soft, into: &garment.worldPositions, normals: &garment.worldNormals)
+                : physics.backend.readSoftBodyVertices(garment.soft, into: &garment.worldPositions)
             guard read == garment.bindWorld.count else { return "\(garment.name) read \(read) of \(garment.bindWorld.count) particles" }
             let pelvis = garment.pelvisWorld
             let hasPrevious = garment.previousWorldPositions.count == read
@@ -999,28 +1235,49 @@ public final class ZombieCloth: @unchecked Sendable {
                 }
             }
             if !hasPrevious { garment.previousWorldPositions = garment.worldPositions }
-            for index in 0 ..< read {
-                let p = garment.worldPositions[index]
-                garment.previousWorldPositions[index] = p
-                let local = toMesh * SIMD4(p, 1)
-                let n = normalMatrix * garment.worldNormals[index]
-                let length = simd_length(n)
-                let normal = length > 1e-6 ? n / length : SIMD3<Float>(0, 1, 0)
-                for slot in garment.overrideRanges[index] {
-                    overridePositions[slot] = SIMD3(local.x, local.y, local.z)
-                    overrideNormals[slot] = normal
+            if let shell = garment.shell {
+                if garment.meshPositions.count != read { garment.meshPositions = Array(repeating: .zero, count: read) }
+                for index in 0 ..< read {
+                    let p = garment.worldPositions[index]
+                    garment.previousWorldPositions[index] = p
+                    let local = toMesh * SIMD4(p, 1)
+                    garment.meshPositions[index] = SIMD3(local.x, local.y, local.z)
+                }
+                let started = CACurrentMediaTime()
+                shell.evaluate(particles: garment.meshPositions)
+                let first = garment.overrideRanges.first?.lowerBound ?? 0
+                for s in 0 ..< shell.slotCount {
+                    overridePositions[first + s] = shell.positions[s]
+                    overrideNormals[first + s] = shell.normals[s]
+                }
+                bind += (CACurrentMediaTime() - started) * 1e6
+            } else {
+                for index in 0 ..< read {
+                    let p = garment.worldPositions[index]
+                    garment.previousWorldPositions[index] = p
+                    let local = toMesh * SIMD4(p, 1)
+                    let n = normalMatrix * garment.worldNormals[index]
+                    let length = simd_length(n)
+                    let normal = length > 1e-6 ? n / length : SIMD3<Float>(0, 1, 0)
+                    for slot in garment.overrideRanges[index] {
+                        overridePositions[slot] = SIMD3(local.x, local.y, local.z)
+                        overrideNormals[slot] = normal
+                    }
                 }
             }
         }
         maxParticleSpeed = maxSpeed
+        bindMicroseconds = bind
         return nil
     }
 
     // MARK: - Diagnostics
 
-    /// One line on the simulation: the garments, their particles and pins,
-    /// the slack in force, the sleep and range state, the microseconds of
-    /// the skin feed and the read-back, the step interval (`willStep`'s end
+    /// One line on the simulation: the garments, their particles and pins
+    /// and the shell vertices they carry, the slack in force, the sleep and
+    /// range state, the microseconds of the skin feed, the read-back and,
+    /// of the read-back, the shell's evaluation (`bind=`), the step interval
+    /// (`willStep`'s end
     /// to the game update's start: Jolt's step and the coordinator's
     /// read-back), the farthest particle from its skinned target (with
     /// where it sits on the garment at rest, model space) and the fastest,
@@ -1057,10 +1314,16 @@ public final class ZombieCloth: @unchecked Sendable {
             farthest = String(format: "%.3fm@(%.2f,%.2f,%.2f)", worst, at.x, at.y, at.z)
         }
         return String(
-            format: "cloth %@: %d particles (%d pins) mult=%.2f %@ skin=%.0fus read=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d joltWakes=%d",
-            names, particles, pins, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
+            format: "cloth %@: %d particles (%d pins)%@ mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d joltWakes=%d",
+            names, particles, pins, shellDescription, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
             lastFrameJointMotion * 1000, hardSkinCount, runawayCount, overrideWriteCount, joltWakeCount
         )
+    }
+
+    /// The shell vertices the garments carry, when any does.
+    private var shellDescription: String {
+        let vertices = garments.reduce(0) { $0 + ($1.shell?.vertexCount ?? 0) }
+        return vertices > 0 ? " \(vertices) shell vertices" : ""
     }
 
     /// Awake or asleep, out of range, and whether Jolt has the bodies
@@ -1083,15 +1346,17 @@ public final class ZombieCloth: @unchecked Sendable {
         let names = garments.map(\.name).joined(separator: "+")
         let particles = garments.reduce(0) { $0 + $1.bindWorld.count }
         return String(
-            format: "cloth %@: %d particles mult=%.2f %@ skin=%.0fus read=%.0fus step=%.0fus hard=%d runaway=%d writes=%d",
-            names, particles, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, worldMicroseconds,
+            format: "cloth %@: %d particles%@ mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus hard=%d runaway=%d writes=%d",
+            names, particles, shellDescription, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds,
             hardSkinCount, runawayCount, overrideWriteCount
         )
     }
 
-    /// The last frame's timings, microseconds (the tests print them).
-    public var timings: (skin: Double, readBack: Double, step: Double) {
-        (skinMicroseconds, readBackMicroseconds, worldMicroseconds)
+    /// The last frame's timings, microseconds (the tests print them): the
+    /// skin feed, the read-back (the shell's evaluation inside it, `bind`)
+    /// and the step interval.
+    public var timings: (skin: Double, readBack: Double, bind: Double, step: Double) {
+        (skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds)
     }
 
     /// The garments by name, for the tests and the report.
@@ -1100,6 +1365,11 @@ public final class ZombieCloth: @unchecked Sendable {
     /// The slack per particle of a garment, as built.
     func maxDistances(ofGarment index: Int) -> [Float] {
         garments.indices.contains(index) ? garments[index].maxDistance : []
+    }
+
+    /// The shell a garment carries, as last evaluated, for the tests.
+    func renderShell(ofGarment index: Int) -> RenderShell? {
+        garments.indices.contains(index) ? garments[index].shell : nil
     }
 
     /// Whether Jolt is simulating a garment's body (false while the cloth

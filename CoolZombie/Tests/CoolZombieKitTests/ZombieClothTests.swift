@@ -4,10 +4,12 @@
 //
 //  The shirt as a skinned soft body against a real Jolt world at the demo's
 //  cadence (100 Hz, three sub-steps), with no engine entity: the bundled
-//  sidecar's particles stand in for the mesh, the model's own skeleton
-//  (read from the bundled .untold, so the ragdoll and the skin share one
-//  bind pose) for the pose and the ragdoll, and a recording body for the
-//  override.
+//  sidecar's shell rest positions stand in for the mesh (one exported
+//  vertex per shell vertex, with the exported normal at it; the proxy is
+//  not in the export) — or the whole export where a test wants every
+//  split copy — the model's own skeleton (read from the bundled .untold,
+//  so the ragdoll and the skin share one bind pose) for the pose and the
+//  ragdoll, and a recording body for the override.
 //
 //  The skin-following tests run the cloth on the default model,
 //  `ragdollAndSkin`, with the powered ragdoll in the world: the rig's
@@ -37,11 +39,13 @@ import XCTest
 final class ZombieClothTests: XCTestCase {
     private let dt: Float = 0.01
 
-    /// The test's body: the shirt's own particles as the mesh (one exported
-    /// vertex per particle), the pose the test sets, and what the cloth
-    /// writes.
+    /// The test's body: the shell's rest positions as the mesh (one exported
+    /// vertex per shell vertex, in the sidecar's order) with the exported
+    /// normal at each — or the whole export — the pose the test sets, and
+    /// what the cloth writes.
     private final class Body: ZombieClothBody {
         var mesh: [SIMD3<Float>]
+        var meshNormals: [SIMD3<Float>]
         var pose: [simd_float4x4]
         var world: simd_float4x4
         var overrideWrites = 0
@@ -55,13 +59,14 @@ final class ZombieClothTests: XCTestCase {
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
 
-        init(mesh: [SIMD3<Float>], pose: [simd_float4x4], world: simd_float4x4) {
+        init(mesh: [SIMD3<Float>], normals: [SIMD3<Float>], pose: [simd_float4x4], world: simd_float4x4) {
             self.mesh = mesh
+            meshNormals = normals
             self.pose = pose
             self.world = world
         }
 
-        func meshGeometry() -> (positions: [SIMD3<Float>], localTransform: simd_float4x4)? { (mesh, matrix_identity_float4x4) }
+        func meshGeometry() -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>], localTransform: simd_float4x4)? { (mesh, meshNormals, matrix_identity_float4x4) }
         func jointModelTransforms() -> [simd_float4x4]? { pose }
         func entityWorld() -> simd_float4x4 { world }
         func beginOverride() -> Bool {
@@ -105,6 +110,137 @@ final class ZombieClothTests: XCTestCase {
         return try? ZombieClothAsset.loadBundled()
     }()
 
+    /// The exported mesh's vertices and normals, read off the asset's vertex
+    /// data the way the model tests read it (pbrStaticV1: the position's three
+    /// floats, then the packed normal), and its triangles off the index data.
+    private static let exported: (positions: [SIMD3<Float>], normals: [SIMD3<Float>], triangles: [SIMD3<Int32>])? = {
+        guard let url = ZombieResources.baseURL?.appendingPathComponent("Models/Zombie/Zombie.untold"),
+              FileManager.default.fileExists(atPath: url.path),
+              let asset = try? NativeFormatLoader().loadAssetSync(from: url),
+              let primitive = asset.nodes.flatMap(\.primitives).first
+        else { return nil }
+        let stride = primitive.vertexLayout.stride
+        var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = []
+        positions.reserveCapacity(primitive.vertexCount); normals.reserveCapacity(primitive.vertexCount)
+        primitive.vertexData.withUnsafeBytes { raw in
+            for v in 0 ..< primitive.vertexCount {
+                let base = raw.baseAddress!.advanced(by: v * stride)
+                let p = base.assumingMemoryBound(to: Float.self)
+                positions.append(SIMD3(p[0], p[1], p[2]))
+                normals.append(UntoldVertexPacking.unpackNormal(base.load(fromByteOffset: 12, as: UInt32.self)))
+            }
+        }
+        var indices: [Int32] = []
+        indices.reserveCapacity(primitive.indexCount)
+        primitive.indexData.withUnsafeBytes { raw in
+            for i in 0 ..< primitive.indexCount {
+                switch primitive.indexFormat {
+                case .uint16: indices.append(Int32(raw.load(fromByteOffset: i * 2, as: UInt16.self)))
+                case .uint32: indices.append(Int32(raw.load(fromByteOffset: i * 4, as: UInt32.self)))
+                }
+            }
+        }
+        let triangles = (0 ..< indices.count / 3).map { SIMD3(indices[3 * $0], indices[3 * $0 + 1], indices[3 * $0 + 2]) }
+        return (positions, normals, triangles)
+    }()
+
+    /// Whether each exported vertex is one of the shell's (within the bind
+    /// tolerance of a shell rest position): the rest of the export is the
+    /// body, the trousers and the shoes, the surface the shirt must stay off.
+    private static let exportedIsShell: [Bool]? = {
+        guard let shell = asset?.garment(named: "shirt")?.render?.restPositionVectors, let exported else { return nil }
+        var grid: [SIMD3<Int32>: [Int]] = [:]
+        for (index, p) in shell.enumerated() {
+            grid[SIMD3<Int32>(Int32((p.x / 0.001).rounded(.down)), Int32((p.y / 0.001).rounded(.down)), Int32((p.z / 0.001).rounded(.down))), default: []].append(index)
+        }
+        return exported.positions.map { exportedIndex(near: $0, within: ZombieCloth.bindTolerance, grid: grid, positions: shell) != nil }
+    }()
+
+    /// The closest point of a triangle to a point (Ericson, Real-Time
+    /// Collision Detection 5.1.5).
+    private static func closestPoint(on a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, to p: SIMD3<Float>) -> SIMD3<Float> {
+        let ab = b - a, ac = c - a, ap = p - a
+        let d1 = simd_dot(ab, ap), d2 = simd_dot(ac, ap)
+        if d1 <= 0, d2 <= 0 { return a }
+        let bp = p - b
+        let d3 = simd_dot(ab, bp), d4 = simd_dot(ac, bp)
+        if d3 >= 0, d4 <= d3 { return b }
+        let vc = d1 * d4 - d3 * d2
+        if vc <= 0, d1 >= 0, d3 <= 0 { return a + ab * (d1 / (d1 - d3)) }
+        let cp = p - c
+        let d5 = simd_dot(ab, cp), d6 = simd_dot(ac, cp)
+        if d6 >= 0, d5 <= d6 { return c }
+        let vb = d5 * d2 - d1 * d6
+        if vb <= 0, d2 >= 0, d6 <= 0 { return a + ac * (d2 / (d2 - d6)) }
+        let va = d3 * d6 - d5 * d4
+        if va <= 0, d4 - d3 >= 0, d5 - d6 >= 0 { return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))) }
+        let denom = 1 / (va + vb + vc)
+        return a + ab * (vb * denom) + ac * (vc * denom)
+    }
+
+    /// The surface under the shirt at the bind pose — every exported
+    /// triangle with no corner on the shell: the body, the trousers, the
+    /// shoes — binned by the centimetre cells its bounds touch.
+    private static let bodyCellSize: Float = 0.01
+    private static let bodyCells: [SIMD3<Int32>: [Int]]? = {
+        guard let exported, let isShell = exportedIsShell else { return nil }
+        var cells: [SIMD3<Int32>: [Int]] = [:]
+        func cell(_ p: SIMD3<Float>) -> SIMD3<Int32> {
+            SIMD3<Int32>(Int32((p.x / bodyCellSize).rounded(.down)), Int32((p.y / bodyCellSize).rounded(.down)), Int32((p.z / bodyCellSize).rounded(.down)))
+        }
+        for (index, tri) in exported.triangles.enumerated() where !isShell[Int(tri.x)] && !isShell[Int(tri.y)] && !isShell[Int(tri.z)] {
+            let a = exported.positions[Int(tri.x)], b = exported.positions[Int(tri.y)], c = exported.positions[Int(tri.z)]
+            let low = cell(simd_min(a, simd_min(b, c))), high = cell(simd_max(a, simd_max(b, c)))
+            for x in low.x ... high.x { for y in low.y ... high.y { for z in low.z ... high.z {
+                cells[SIMD3(x, y, z), default: []].append(index)
+            } } }
+        }
+        return cells
+    }()
+
+    /// How far a mesh-space point is from the surface under the shirt, when
+    /// that is within a centimetre (the cells around the point's own), and
+    /// where the nearest point is; nil when nothing is that close.
+    private static func distanceToBody(_ p: SIMD3<Float>) -> (distance: Float, point: SIMD3<Float>)? {
+        guard let exported, let cells = bodyCells else { return nil }
+        let k = SIMD3<Int32>(Int32((p.x / bodyCellSize).rounded(.down)), Int32((p.y / bodyCellSize).rounded(.down)), Int32((p.z / bodyCellSize).rounded(.down)))
+        var best: (distance: Float, point: SIMD3<Float>) = (.greatestFiniteMagnitude, .zero)
+        for dx in -1 ... 1 { for dy in -1 ... 1 { for dz in -1 ... 1 {
+            for index in cells[k &+ SIMD3<Int32>(Int32(dx), Int32(dy), Int32(dz))] ?? [] {
+                let tri = exported.triangles[index]
+                let q = closestPoint(on: exported.positions[Int(tri.x)], exported.positions[Int(tri.y)], exported.positions[Int(tri.z)], to: p)
+                let d = simd_distance(p, q)
+                if d < best.distance { best = (d, q) }
+            }
+        } } }
+        return best.distance <= bodyCellSize ? best : nil
+    }
+
+    /// The exported vertices hashed into millimetre cells: the index of one
+    /// within `distance` of a point, if any.
+    private static func exportedIndex(near p: SIMD3<Float>, within distance: Float, grid: [SIMD3<Int32>: [Int]], positions: [SIMD3<Float>]) -> Int? {
+        let k = SIMD3<Int32>(Int32((p.x / 0.001).rounded(.down)), Int32((p.y / 0.001).rounded(.down)), Int32((p.z / 0.001).rounded(.down)))
+        for dx in -1 ... 1 { for dy in -1 ... 1 { for dz in -1 ... 1 {
+            for index in grid[k &+ SIMD3<Int32>(Int32(dx), Int32(dy), Int32(dz))] ?? [] where simd_distance(positions[index], p) <= distance { return index }
+        } } }
+        return nil
+    }
+
+    /// The exported normal at each shell vertex's rest position (the first
+    /// exported copy within the bind tolerance; on a sharp edge the copies
+    /// differ, and one of them stands for the vertex here), so the recording
+    /// body gives the cloth what the entity gives it: positions and normals.
+    private static let shellNormals: [SIMD3<Float>]? = {
+        guard let shell = asset?.garment(named: "shirt")?.render?.restPositionVectors, let exported else { return nil }
+        var grid: [SIMD3<Int32>: [Int]] = [:]
+        for (index, p) in exported.positions.enumerated() {
+            grid[SIMD3<Int32>(Int32((p.x / 0.001).rounded(.down)), Int32((p.y / 0.001).rounded(.down)), Int32((p.z / 0.001).rounded(.down))), default: []].append(index)
+        }
+        return shell.map { p in
+            exportedIndex(near: p, within: ZombieCloth.bindTolerance, grid: grid, positions: exported.positions).map { exported.normals[$0] } ?? SIMD3(0, 1, 0)
+        }
+    }()
+
     private static func translation(_ t: SIMD3<Float>) -> simd_float4x4 {
         var m = matrix_identity_float4x4
         m.columns.3 = SIMD4(t, 1)
@@ -130,7 +266,8 @@ final class ZombieClothTests: XCTestCase {
 
         init(dt: Float, asset: ZombieClothAsset, joints: SkeletonJointInfo, configuration: ZombieCloth.Configuration = ZombieCloth.Configuration(),
              world: simd_float4x4 = ZombieClothTests.standing, ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil,
-             acceptsOverride: Bool = true, pose: [simd_float4x4]? = nil, collisionSteps: Int32 = 3)
+             normals: [SIMD3<Float>]? = nil, acceptsOverride: Bool = true, pose: [simd_float4x4]? = nil, collisionSteps: Int32 = 3,
+             gravity: SIMD3<Float> = SIMD3(0, -9.8, 0))
         {
             self.dt = dt
             self.joints = joints
@@ -146,9 +283,19 @@ final class ZombieClothTests: XCTestCase {
             backend.configure(PhysicsWorldConfiguration())
             physics = ZombiePhysics(backend: backend, configuration: ZombiePhysics.Configuration())
             physics.applyLayers()
+            if gravity != SIMD3(0, -9.8, 0) {
+                // The layers' configuration with another gravity (a control
+                // without one): the test backend is told directly, as
+                // `applyLayers` tells it.
+                var config = PhysicsCoordinator.shared.worldConfiguration()
+                config.gravity = gravity
+                backend.configure(config)
+            }
             physics.setObstacles(obstacles, floor: 0)
             backend.step(deltaTime: dt)
-            body = Body(mesh: mesh ?? shirt.positions, pose: pose ?? joints.bindModelTransforms, world: world)
+            let positions = mesh ?? shirt.render?.restPositionVectors ?? shirt.positions
+            body = Body(mesh: positions, normals: normals ?? ZombieClothTests.shellNormals ?? Array(repeating: SIMD3(0, 1, 0), count: positions.count),
+                        pose: pose ?? joints.bindModelTransforms, world: world)
             body.acceptsOverride = acceptsOverride
             if ragdoll {
                 physics.attachRagdoll(entity: 1, joints: joints)
@@ -196,6 +343,76 @@ final class ZombieClothTests: XCTestCase {
         var particles: [SIMD3<Float>] { cloth.particleWorldPositions(ofGarment: 0) }
         var targets: [SIMD3<Float>] { cloth.skinnedTargets(ofGarment: 0) }
 
+        /// The override's slot for an exported vertex (here, a shell vertex).
+        var slotOfVertex: [Int: Int] {
+            Dictionary(uniqueKeysWithValues: body.indices.enumerated().map { (Int($1), $0) })
+        }
+
+        /// A proxy triangle's frame from its corners: `e1` along the first
+        /// edge, `n` the face normal, `t` across.
+        static func frame(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>) -> (e1: SIMD3<Float>, n: SIMD3<Float>, t: SIMD3<Float>) {
+            let e1 = simd_normalize(b - a), n = simd_normalize(simd_cross(e1, c - a))
+            return (e1, n, simd_cross(n, e1))
+        }
+
+        /// The shell as the sidecar's binding says, from world-space
+        /// particles, in the test's own words: the triangle's frame from its
+        /// corners, the vertex its barycentric point plus its rest offset in
+        /// that frame, the normal the body's own (the exported one at the
+        /// vertex) taken into the triangle's bind-pose frame and out through
+        /// the frame now. World space.
+        func shell(from particles: [SIMD3<Float>]) -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>]) {
+            let render = shirt.render!
+            let bary = render.barycentricVectors, offset = render.offsetVectors
+            let rest = shirt.positions
+            var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = []
+            positions.reserveCapacity(render.vertexCount); normals.reserveCapacity(render.vertexCount)
+            for v in 0 ..< render.vertexCount {
+                let t = shirt.triangles[render.triangle[v]]
+                let a = particles[t[0]], b = particles[t[1]], c = particles[t[2]]
+                let now = Self.frame(a, b, c), bind = Self.frame(rest[t[0]], rest[t[1]], rest[t[2]])
+                let w = bary[v], o = offset[v], m = body.meshNormals[v]
+                let r = SIMD3(simd_dot(m, bind.e1), simd_dot(m, bind.n), simd_dot(m, bind.t))
+                positions.append(w.x * a + w.y * b + w.z * c + o.x * now.e1 + o.y * now.n + o.z * now.t)
+                normals.append(r.x * now.e1 + r.y * now.n + r.z * now.t)
+            }
+            return (positions, normals)
+        }
+
+        /// Where the skin's normal points at each particle for the joints
+        /// last fed — the unit normals of the triangles around it summed, from
+        /// the skinned targets, as Jolt computes it (`SkinVertices`) — which
+        /// is what Jolt places the back-stop behind.
+        func targetNormals() -> [SIMD3<Float>] {
+            let t = targets
+            var sum = [SIMD3<Float>](repeating: .zero, count: t.count)
+            for tri in shirt.triangles {
+                let c = simd_cross(t[tri[1]] - t[tri[0]], t[tri[2]] - t[tri[0]])
+                guard simd_length(c) > 1e-12 else { continue }
+                for i in tri { sum[i] += simd_normalize(c) }
+            }
+            return sum.map { simd_length($0) > 1e-12 ? simd_normalize($0) : SIMD3(0, 1, 0) }
+        }
+
+        /// The farthest any particle with a back-stop sits BEHIND its skinned
+        /// target along the skin's normal there: the skin the prep keeps under
+        /// the shirt is 2 mm behind the target (the push-out), so more than
+        /// that is the proxy inside the body. The particles whose faces point
+        /// at the body have no stop and are left out.
+        func inwardExcursion() -> Float { worstInward().depth }
+
+        /// The particle `inwardExcursion` reads: its index and its depth.
+        func worstInward() -> (index: Int, depth: Float) {
+            let p = particles, t = targets, n = targetNormals()
+            let bodyFacing = Set(shirt.bodyFacingParticles)
+            var worst = (index: 0, depth: -Float.greatestFiniteMagnitude)
+            for index in p.indices where shirt.maxDistance[index] > 0 && !bodyFacing.contains(index) {
+                let depth = simd_dot(t[index] - p[index], n[index])
+                if depth > worst.depth { worst = (index, depth) }
+            }
+            return worst
+        }
+
         /// The worst particle: how far beyond its slack it sits from its
         /// skinned target (negative inside), and the worst pin's distance.
         func excess() -> (free: Float, pins: Float, finite: Bool) {
@@ -212,12 +429,12 @@ final class ZombieClothTests: XCTestCase {
     }
 
     private func makeHarness(configuration: ZombieCloth.Configuration = ZombieCloth.Configuration(), world: simd_float4x4 = ZombieClothTests.standing,
-                             ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil, pose: [simd_float4x4]? = nil,
-                             collisionSteps: Int32 = 3) throws -> Harness
+                             ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil, normals: [SIMD3<Float>]? = nil,
+                             pose: [simd_float4x4]? = nil, collisionSteps: Int32 = 3, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0)) throws -> Harness
     {
         guard let asset = Self.asset, let joints = Self.skeleton else { throw XCTSkip("Models/Zombie is not bundled") }
-        let harness = Harness(dt: dt, asset: asset, joints: joints, configuration: configuration, world: world, ragdoll: ragdoll, obstacles: obstacles, mesh: mesh, pose: pose,
-                              collisionSteps: collisionSteps)
+        let harness = Harness(dt: dt, asset: asset, joints: joints, configuration: configuration, world: world, ragdoll: ragdoll, obstacles: obstacles, mesh: mesh,
+                              normals: normals, pose: pose, collisionSteps: collisionSteps, gravity: gravity)
         XCTAssertTrue(harness.attached, "the shirt attached")
         return harness
     }
@@ -231,32 +448,47 @@ final class ZombieClothTests: XCTestCase {
 
     // MARK: - Binding and the override
 
-    func testAttachBindsEveryParticleAndWritesAnOverrideCoveringThem() throws {
+    /// The override covers the shell's exported vertices — one per shell
+    /// vertex in this mesh, 29,402 of them, not the proxy's 3,995 — and what
+    /// it writes is the shell evaluated from the particles by the sidecar's
+    /// binding, not the particles themselves: back in the world each vertex
+    /// is its triangle's barycentric point plus its rest offset in the
+    /// triangle's frame (the inner layer a millimetre behind the proxy, the
+    /// buttons a centimetre in front), and its normal the vertex's own
+    /// exported normal turned with the frame, unit.
+    func testAttachBindsTheShellAndWritesAnOverrideCoveringIt() throws {
         let h = try makeHarness(configuration: skinOnly)
+        let render = try XCTUnwrap(h.shirt.render, "the shirt has a render binding")
         XCTAssertEqual(h.cloth.garmentNames, ["shirt"])
         XCTAssertEqual(h.body.begins, 1, "the body moved to compute skinning once")
         XCTAssertEqual(h.cloth.hardSkinCount, 1, "the attach hard skinned")
         XCTAssertEqual(h.physics.backend.bodyCount, 1 + 20 + 1, "the floor slab, twenty parts and the shirt")
         h.frame()
         XCTAssertEqual(h.body.overrideWrites, 1)
-        XCTAssertEqual(h.body.indices.count, h.shirt.particles.count, "one exported vertex per particle in this mesh")
-        XCTAssertEqual(Set(h.body.indices), Set(0 ..< UInt32(h.shirt.particles.count)), "every particle drives its vertex")
+        XCTAssertEqual(h.body.indices.count, render.vertexCount, "one exported vertex per shell vertex in this mesh")
+        XCTAssertNotEqual(h.body.indices.count, h.shirt.particles.count, "the proxy is not what is drawn")
+        XCTAssertEqual(Set(h.body.indices), Set(0 ..< UInt32(render.vertexCount)), "every shell vertex drives its vertex")
         XCTAssertEqual(h.body.positions.count, h.body.indices.count)
         XCTAssertEqual(h.body.normals.count, h.body.indices.count)
-        // The override is the particles in mesh space: back through the
-        // entity's transform they are Jolt's positions; the normals are unit.
-        let particles = h.particles
-        let mesh = h.shirt.positions
-        var worstBack: Float = 0, worstFromRest: Float = 0, worstNormal: Float = 0
+        let expected = h.shell(from: h.particles)
+        let mesh = h.body.mesh, offsets = render.offsetVectors
+        var worstBack: Float = 0, worstFromRest: Float = 0, worstNormal: Float = 0, worstNormalAngle: Float = 0, offsetSeen: Float = 0
         for (slot, index) in h.body.indices.enumerated() {
-            let p = h.body.positions[slot]
+            let p = h.body.positions[slot], n = h.body.normals[slot]
             XCTAssertTrue(p.x.isFinite && p.y.isFinite && p.z.isFinite, "override position \(slot) is a number")
             let world = h.body.world * SIMD4(p, 1)
-            worstBack = max(worstBack, simd_distance(SIMD3(world.x, world.y, world.z), particles[Int(index)]))
+            worstBack = max(worstBack, simd_distance(SIMD3(world.x, world.y, world.z), expected.positions[Int(index)]))
             worstFromRest = max(worstFromRest, simd_distance(p, mesh[Int(index)]))
-            worstNormal = max(worstNormal, abs(simd_length(h.body.normals[slot]) - 1))
+            worstNormal = max(worstNormal, abs(simd_length(n) - 1))
+            let rotation = simd_float3x3(SIMD3(h.body.world.columns.0.x, h.body.world.columns.0.y, h.body.world.columns.0.z),
+                                         SIMD3(h.body.world.columns.1.x, h.body.world.columns.1.y, h.body.world.columns.1.z),
+                                         SIMD3(h.body.world.columns.2.x, h.body.world.columns.2.y, h.body.world.columns.2.z))
+            worstNormalAngle = max(worstNormalAngle, acos(min(1, simd_dot(simd_normalize(rotation * n), simd_normalize(expected.normals[Int(index)])))) * 180 / .pi)
+            offsetSeen = max(offsetSeen, simd_length(offsets[Int(index)]))
         }
-        XCTAssertLessThan(worstBack, 1e-4, "the override is the particles in mesh space (off by \(worstBack) m)")
+        XCTAssertLessThan(worstBack, 1e-4, "the override is the shell evaluated from the particles (off by \(worstBack) m)")
+        XCTAssertLessThan(worstNormalAngle, 0.5, "and its normals are the binding's (off by \(worstNormalAngle) degrees)")
+        XCTAssertGreaterThan(offsetSeen, 0.005, "the shell has vertices off the proxy (the inner layer, the buttons): the binding is not the particles")
         XCTAssertLessThan(worstFromRest, 0.05, "on the bind pose the shirt is where the artist put it (off by \(worstFromRest) m)")
         XCTAssertLessThan(worstNormal, 1e-3, "unit normals")
         let excess = h.excess()
@@ -264,14 +496,230 @@ final class ZombieClothTests: XCTestCase {
         print("cloth attach: \(h.cloth.report)")
     }
 
-    /// A particle off the mesh by a millimetre, a joint the skeleton lacks:
-    /// nothing is built, nothing is written, the body is left as it was.
+    /// At the bind pose the shell evaluates to the exported mesh itself. With
+    /// the whole export as the body (71k vertices, the shell's among them),
+    /// every exported vertex the cloth drives comes back at its exported
+    /// position within a tenth of a millimetre and with its own exported
+    /// normal within a tenth of a degree — the copies the exporter split on
+    /// the artist's sharp edges included, which share a position and differ
+    /// in normal by 5° to 180° (179.9° at the widest, a cuff roll; a
+    /// thousand of them: the cuff rolls, the placket's edge, the collar's
+    /// creases), so the cloth on draws the creases the cloth off draws; the
+    /// sidecar's one normal per shell vertex lit them flat (2026-10-31).
+    /// Then one frame, hard skinned on the bind pose: the override written
+    /// is that mesh within a millimetre.
+    func testAtTheBindPoseTheShellIsTheExportedMeshSplitCopiesIncluded() throws {
+        guard let exported = Self.exported else { throw XCTSkip("Models/Zombie is not bundled") }
+        let h = try makeHarness(configuration: skinOnly, mesh: exported.positions, normals: exported.normals)
+        let render = try XCTUnwrap(h.shirt.render)
+        let shell = try XCTUnwrap(h.cloth.renderShell(ofGarment: 0))
+        h.frame()
+        let indices = h.body.indices.map { Int($0) }
+        XCTAssertEqual(indices.count, shell.slotCount)
+        XCTAssertGreaterThan(indices.count, render.vertexCount, "the exporter split some shell vertices into copies")
+        XCTAssertLessThan(indices.count, exported.positions.count, "the override covers the shell, not the body")
+        func angle(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+            acos(min(1, max(-1, simd_dot(simd_normalize(a), simd_normalize(b))))) * 180 / .pi
+        }
+        var worstWritten: Float = 0, worstWrittenNormal: Float = 0
+        for (slot, index) in indices.enumerated() {
+            worstWritten = max(worstWritten, simd_distance(h.body.positions[slot], exported.positions[index]))
+            worstWrittenNormal = max(worstWrittenNormal, angle(h.body.normals[slot], exported.normals[index]))
+        }
+        shell.evaluate(particles: h.shirt.positions)
+        var worstPosition: Float = 0, worstNormal: Float = 0
+        for (slot, index) in indices.enumerated() {
+            worstPosition = max(worstPosition, simd_distance(shell.positions[slot], exported.positions[index]))
+            worstNormal = max(worstNormal, angle(shell.normals[slot], exported.normals[index]))
+        }
+        // The split copies: driven vertices that share a position with another
+        // and point another way.
+        var grid: [SIMD3<Int32>: [Int]] = [:]
+        for index in indices {
+            let p = exported.positions[index]
+            grid[SIMD3<Int32>(Int32((p.x / 0.001).rounded(.down)), Int32((p.y / 0.001).rounded(.down)), Int32((p.z / 0.001).rounded(.down))), default: []].append(index)
+        }
+        var split = 0, widest: Float = 0, widestAt = SIMD3<Float>.zero
+        for index in indices {
+            let p = exported.positions[index]
+            let k = SIMD3<Int32>(Int32((p.x / 0.001).rounded(.down)), Int32((p.y / 0.001).rounded(.down)), Int32((p.z / 0.001).rounded(.down)))
+            var apart: Float = 0
+            for dx in -1 ... 1 { for dy in -1 ... 1 { for dz in -1 ... 1 {
+                for other in grid[k &+ SIMD3<Int32>(Int32(dx), Int32(dy), Int32(dz))] ?? [] where other != index && simd_distance(exported.positions[other], p) <= ZombieCloth.bindTolerance {
+                    apart = max(apart, angle(exported.normals[other], exported.normals[index]))
+                }
+            } } }
+            if apart > 5 { split += 1; if apart > widest { widest = apart; widestAt = p } }
+        }
+        print(String(format: "cloth at the bind pose: %d exported shell vertices driven for %d shell vertices, %d of them split copies with normals up to %.1f° apart (the widest pair at (%.2f,%.2f,%.2f)); the shell evaluates to the export within %.4f mm and %.3f°, the first frame's override within %.3f mm and %.2f°",
+                     indices.count, render.vertexCount, split, widest, widestAt.x, widestAt.y, widestAt.z, worstPosition * 1000, worstNormal, worstWritten * 1000, worstWrittenNormal))
+        XCTAssertGreaterThan(split, 1000, "the sharp edges' split copies were not found")
+        XCTAssertLessThan(worstPosition, 1e-4, "a driven vertex evaluates \(worstPosition) m off its exported position at the bind pose")
+        XCTAssertLessThan(worstNormal, 0.1, "a driven vertex's normal evaluates \(worstNormal)° off its exported normal at the bind pose")
+        XCTAssertLessThan(worstWritten, 1e-3, "the first frame's override is \(worstWritten) m off the export")
+        XCTAssertLessThan(worstWrittenNormal, 1, "the first frame's normals are \(worstWrittenNormal)° off the export")
+    }
+
+    /// The shell sits with the proxy: every shell vertex, rebuilt from the
+    /// simulated particles, lies within its triangle's slack of where it
+    /// would be rebuilt from the skinned targets — the particles stray no
+    /// farther than their slack, the frame turns the rest offset by at most
+    /// twice its length — on the idle, two seconds in.
+    func testTheIdleShellSitsWithinSlackAndOffsetOfItsSkinnedTargets() throws {
+        let h = try makeHarness()
+        h.frames(200)
+        let render = try XCTUnwrap(h.shirt.render)
+        let fromParticles = h.shell(from: h.particles), fromTargets = h.shell(from: h.targets)
+        let offsets = render.offsetVectors
+        var worst: Float = 0, worstMargin: Float = 0, worstAt = 0
+        for v in 0 ..< render.vertexCount {
+            let t = h.shirt.triangles[render.triangle[v]]
+            let slack = t.map { h.shirt.maxDistance[$0] }.max()!
+            let d = simd_distance(fromParticles.positions[v], fromTargets.positions[v])
+            let margin = d - (slack + 2 * simd_length(offsets[v]) + 0.005)
+            if margin > worstMargin { worstMargin = margin; worstAt = v }
+            worst = max(worst, d)
+        }
+        print(String(format: "cloth shell on the idle: farthest shell vertex %.3f m from its skinned rebuild; worst over slack + offset %+.4f m at shell vertex %d", worst, worstMargin, worstAt))
+        XCTAssertLessThanOrEqual(worstMargin, 0, "shell vertex \(worstAt) sits \(worstMargin) m beyond its triangle's slack and its offset")
+    }
+
+    /// The slack schedule hangs the shirt from its shoulders instead of
+    /// pasting it on as a second skin: the collar band and the cuffs are
+    /// hard skinned, the yoke held to a centimetre, the chest 8 cm, the back
+    /// 10, the hem band 12. After two seconds of gravity on the idle the
+    /// chest and the back sag below their skinned targets by a centimetre
+    /// or more somewhere, the sag grows down the shirt — the hem band's
+    /// mean sag is more than the yoke's, which is held to its centimetre —
+    /// and it is gravity's: the same two seconds without gravity sag under
+    /// two millimetres (the control). Everything stays within its slack, the
+    /// collar band and the cuffs stay on the skin, and the proxy stays off
+    /// the body kept under the shirt: no particle with a back-stop comes
+    /// within a millimetre of the surface under the shirt — the body, the
+    /// trousers and the shoes of the export, which stands in this bind pose
+    /// — where the push-out left the proxy 2 mm off it at rest (2.0 mm
+    /// after the two seconds, at a sleeve particle over the forearm; the
+    /// stop starts 1 mm behind the skinned position, so a millimetre is
+    /// what it promises). How far a particle sits behind its skinned
+    /// position along the skin's normal, which is what Jolt's stop
+    /// measures, is printed and bounded at 5 mm rather than the stop's one:
+    /// Jolt applies the stop before the edge constraints in every
+    /// iteration, so the edges have the last word, and the plane through
+    /// the target is not the curved forearm — at the right cuff, where the
+    /// hand part rests 3 cm off its joint and pushes the sleeve above the
+    /// pinned cuff band, a particle 3.4 mm off the body reads 3.1 mm behind
+    /// its target (2026-10-31). And the buttons stay rigid: every vertex of one
+    /// rides the single proxy triangle nearest its centre, so the island
+    /// turns as that triangle's frame turns, which the test takes from the
+    /// particles itself and applies to the island's rest shape: within a
+    /// tenth of a millimetre of what the game wrote. The sag's bound sits
+    /// half a millimetre under the measured 1.05 cm, and that is a margin
+    /// only because the harness is deterministic: a fixed 10 ms step from
+    /// the bind pose with nothing random in it, the same calls in the same
+    /// order on one build, which is Jolt's condition for the same result
+    /// (`Docs/Architecture.md`, deterministic simulation), and every suite
+    /// prints the same figures to the last digit (0.0105 m, 3.14 mm and
+    /// 2.04 mm in each of the runs of 2026-10-31); the sag is printed to a
+    /// tenth of a millimetre so the margin can be read off the log.
+    func testTheShirtHangsFromTheShouldersAndTheButtonsStayRigid() throws {
+        let h = try makeHarness()
+        h.frames(200)
+        let p = h.particles, t = h.targets
+        var sag: Float = -1, sagAt = SIMD3<Float>.zero, excess: Float = -1, pinned: Float = 0, chestBack = 0, pins = 0
+        var sagSum: [Float: Float] = [:], sagCount: [Float: Int] = [:]
+        for index in p.indices {
+            let slack = h.shirt.maxDistance[index]
+            let d = simd_distance(p[index], t[index])
+            let drop = t[index].y - p[index].y
+            sagSum[slack, default: 0] += drop
+            sagCount[slack, default: 0] += 1
+            if slack == 0 {
+                pins += 1; pinned = max(pinned, d)
+            } else if slack == 0.08 || slack == 0.10 {
+                chestBack += 1
+                excess = max(excess, d - slack)
+                if drop > sag { sag = drop; sagAt = h.shirt.positions[index] }
+            }
+        }
+        XCTAssertGreaterThan(chestBack, 500, "the chest and the back were not found")
+        XCTAssertGreaterThan(pins, 300, "the collar band and the cuffs were not found")
+        func mean(_ slack: Float) -> Float { (sagSum[slack] ?? 0) / Float(max(sagCount[slack] ?? 1, 1)) }
+        let regions = [(Float(0.01), "yoke"), (0.06, "armhole"), (0.08, "chest"), (0.10, "back"), (0.12, "hem")]
+        let means = regions.map { String(format: "%@ %.1f mm", $0.1, mean($0.0) * 1000) }.joined(separator: ", ")
+        let worstInward = h.worstInward(), inward = worstInward.depth
+        // The buttons and the bits: each island carried by its triangle's
+        // rotation (the frame now against the frame at rest, both from the
+        // particles), applied to its rest shape about its centroid; mesh space.
+        let shell = try XCTUnwrap(h.cloth.renderShell(ofGarment: 0))
+        let render = try XCTUnwrap(h.shirt.render)
+        let slot = h.slotOfVertex, rest = h.body.mesh, restParticles = h.shirt.positions
+        let toMesh = h.body.world.inverse
+        let meshParticles = p.map { q -> SIMD3<Float> in let m = toMesh * SIMD4(q, 1); return SIMD3(m.x, m.y, m.z) }
+        // The particle farthest behind its target: where it is on the shirt
+        // and how far it and its target really are from the surface under
+        // the shirt (this is the bind pose, where the export stands).
+        let inwardAt = h.shirt.positions[worstInward.index]
+        let inwardBody = Self.distanceToBody(meshParticles[worstInward.index]), inwardTargetBody = Self.distanceToBody(inwardAt)
+        print(String(format: "cloth hang 2 s, farthest behind the skin: particle %d (slack %.3f) at rest (%.2f,%.2f,%.2f), %.2f mm behind its target along the skin's normal, dropped %.1f mm; now %.2f mm from the surface under the shirt, its target %.2f mm",
+                     worstInward.index, h.shirt.maxDistance[worstInward.index], inwardAt.x, inwardAt.y, inwardAt.z, inward * 1000, (t[worstInward.index].y - p[worstInward.index].y) * 1000,
+                     (inwardBody?.distance ?? .nan) * 1000, (inwardTargetBody?.distance ?? .nan) * 1000))
+        // The clearance itself: the nearest any particle with a back-stop
+        // comes to the surface under the shirt, and where.
+        let bodyFacing = Set(h.shirt.bodyFacingParticles)
+        var clearance: Float = .greatestFiniteMagnitude, clearanceAt = 0, restClearance: Float = .greatestFiniteMagnitude
+        for index in p.indices where h.shirt.maxDistance[index] > 0 && !bodyFacing.contains(index) {
+            if let near = Self.distanceToBody(meshParticles[index]), near.distance < clearance { clearance = near.distance; clearanceAt = index }
+            if let near = Self.distanceToBody(h.shirt.positions[index]) { restClearance = min(restClearance, near.distance) }
+        }
+        let clearanceRest = h.shirt.positions[clearanceAt]
+        print(String(format: "cloth hang 2 s, clearance: the nearest particle to the surface under the shirt is %d (slack %.3f) at rest (%.2f,%.2f,%.2f), %.2f mm off it (%.2f mm at rest); %.2f mm behind its target along the skin's normal",
+                     clearanceAt, h.shirt.maxDistance[clearanceAt], clearanceRest.x, clearanceRest.y, clearanceRest.z, clearance * 1000, restClearance * 1000,
+                     simd_dot(t[clearanceAt] - p[clearanceAt], h.targetNormals()[clearanceAt]) * 1000))
+        var worstRigid: Float = 0, islands = 0
+        for island in shell.rigidIslands {
+            islands += 1
+            let tri = h.shirt.triangles[render.triangle[island.lowerBound]]
+            let now = Harness.frame(meshParticles[tri[0]], meshParticles[tri[1]], meshParticles[tri[2]])
+            let bind = Harness.frame(restParticles[tri[0]], restParticles[tri[1]], restParticles[tri[2]])
+            let rotation = simd_float3x3(now.e1, now.n, now.t) * simd_float3x3(bind.e1, bind.n, bind.t).transpose
+            let vertices = Array(island)
+            let restCentroid = vertices.reduce(SIMD3<Float>.zero) { $0 + rest[$1] } / Float(vertices.count)
+            let nowCentroid = vertices.reduce(SIMD3<Float>.zero) { $0 + h.body.positions[slot[$1]!] } / Float(vertices.count)
+            for v in vertices {
+                let carried = nowCentroid + rotation * (rest[v] - restCentroid)
+                worstRigid = max(worstRigid, simd_distance(carried, h.body.positions[slot[v]!]))
+            }
+        }
+        print(String(format: "cloth hang 2 s: chest and back sag up to %.4f m at rest (%.2f,%.2f,%.2f), mean sag by region %@, worst excess %+.4f m; %d pins within %.5f m; farthest behind the skin %.2f mm; %d rigid islands carried by their triangles within %.5f m; %@",
+                     sag, sagAt.x, sagAt.y, sagAt.z, means, excess, pins, pinned, inward * 1000, islands, worstRigid, h.cloth.report))
+        XCTAssertGreaterThanOrEqual(sag, 0.01, "the chest and the back sag only \(sag) m: the shirt does not hang")
+        XCTAssertGreaterThan(mean(0.12), mean(0.01) + 0.005, "the hem band sags \(mean(0.12)) m on average against the yoke's \(mean(0.01)): the sag does not grow down the shirt")
+        XCTAssertLessThan(excess, 0.005, "a chest or back particle strayed \(excess) m past its slack")
+        XCTAssertLessThan(pinned, 1e-3, "a collar or cuff particle is \(pinned) m off the skin")
+        XCTAssertGreaterThan(clearance, 0.001, "particle \(clearanceAt) sits \(clearance) m from the surface under the shirt: into the skin")
+        XCTAssertLessThan(inward, 0.005, "a particle sits \(inward) m behind its skinned position along the skin's normal")
+        XCTAssertEqual(islands, 21, "seven buttons and fourteen bits of thread")
+        XCTAssertLessThan(worstRigid, 1e-4, "a button or a bit is \(worstRigid) m off where its triangle's rotation carries it")
+
+        let control = try makeHarness(gravity: .zero)
+        control.frames(200)
+        let cp = control.particles, ct = control.targets
+        var controlSag: Float = -1
+        for index in cp.indices where control.shirt.maxDistance[index] == 0.08 || control.shirt.maxDistance[index] == 0.10 {
+            controlSag = max(controlSag, ct[index].y - cp[index].y)
+        }
+        print(String(format: "cloth hang 2 s without gravity: chest and back sag up to %.4f m; %@", controlSag, control.cloth.report))
+        XCTAssertLessThan(controlSag, 0.002, "without gravity the chest and the back sag \(controlSag) m: the sag above is not gravity's")
+    }
+
+    /// A shell vertex off the mesh by a millimetre, a joint the skeleton
+    /// lacks: nothing is built, nothing is written, the body is left as it was.
     func testAStaleSidecarLeavesTheGarmentBodySkinned() throws {
         guard let asset = Self.asset, let joints = Self.skeleton else { throw XCTSkip("Models/Zombie is not bundled") }
-        var mesh = asset.garment(named: "shirt")!.positions
+        var mesh = asset.garment(named: "shirt")!.render!.restPositionVectors
         mesh[7].y += 0.001
         let moved = Harness(dt: dt, asset: asset, joints: joints, mesh: mesh)
-        XCTAssertFalse(moved.attached, "a particle on no exported vertex refuses the garment")
+        XCTAssertFalse(moved.attached, "a shell vertex on no exported vertex refuses the garment")
         XCTAssertFalse(moved.cloth.isAttached)
         XCTAssertEqual(moved.body.begins, 0, "the body was not moved to compute skinning")
         XCTAssertEqual(moved.physics.backend.bodyCount, 1 + 20, "no soft body was added")
@@ -491,7 +939,7 @@ final class ZombieClothTests: XCTestCase {
         // The override moved with it: in mesh space it is still the shirt.
         var worstFromRest: Float = 0
         for (slot, index) in h.body.indices.enumerated() {
-            worstFromRest = max(worstFromRest, simd_distance(h.body.positions[slot], h.shirt.positions[Int(index)]))
+            worstFromRest = max(worstFromRest, simd_distance(h.body.positions[slot], h.body.mesh[Int(index)]))
         }
         XCTAssertLessThan(worstFromRest, 0.01, "the override stayed on the shirt (off by \(worstFromRest) m)")
         XCTAssertEqual(h.cloth.runawayCount, 0)
@@ -951,13 +1399,29 @@ final class ZombieClothTests: XCTestCase {
     /// Mac readout's `target<=0.139m@(-0.18,1.25,-0.15)`; in this pose, with
     /// the fitted capsules, 16.3 cm). The lever is the weights: graded across
     /// the seams over 16 passes it was 9.4 cm, and with two hundred more over
-    /// the 12 cm around the armhole (`grade_weight_seams`) it is 5.2 cm, at
-    /// the yoke (2026-10-30). That is pinned here with the figure printed:
-    /// the farthest particle under 7 cm from its target and no more than 4 cm
-    /// past its slack. The capsules play no part: on the skin alone, with no
+    /// the 12 cm around the armhole (`grade_weight_seams`) it was 5.2 cm, at
+    /// the yoke, on the 3 cm of slack the shirt then had (2026-10-30); on
+    /// the schedule the armhole band's farthest particle rests 6.7 cm from
+    /// its target and the worst anywhere 2.7 cm past its slack
+    /// (2026-10-31). That is pinned here with the figures printed:
+    /// the armhole band's farthest particle (the band has the schedule's
+    /// 6 cm) under 7 cm from its target and no particle more than 4 cm past
+    /// its slack — the shirt's farthest particle overall is printed too, but
+    /// with the chest, the back and the hem band on 8 to 12 cm of slack a
+    /// hanging particle legitimately rests 10 cm from its target (the hem
+    /// band's, 2026-10-31), which is the slack doing its work, not the
+    /// armhole. The capsules play no part: on the skin alone, with no
     /// part in the world to push anything, the figure is the same to a
     /// millimetre (9.44 against 9.43 cm before the deeper blur), and the test
-    /// runs both models and holds them within a centimetre of each other. What
+    /// runs both models and holds them within a centimetre of each other. The
+    /// back-stop yields here the way the slack does: Jolt applies the edge
+    /// constraints after the skin constraints in every iteration, so where
+    /// the stretched skin's targets conflict with the rest lengths the stiff
+    /// edges have the last word and a particle can end up behind its target
+    /// (1.9 cm in this pose, on the back; 3 mm on the idle, at the cuff,
+    /// where the particle is still 3.4 mm off the body — the hang test
+    /// measures that clearance itself) — printed, and bounded like the
+    /// excess past the slack. What
     /// remains is the targets': the sleeve's underside hangs between an arm
     /// that moved 40 cm and a flank that did not, the skinning stretches those
     /// edges and the cloth will not, so the particle rests short of a target
@@ -965,6 +1429,15 @@ final class ZombieClothTests: XCTestCase {
     /// blur turns back up (6.7 cm at 300 passes over 11 cm, 7.1 at 400 over
     /// 12), and 13 cm or more puts arm weight within 20 cm of the pelvis; the
     /// 4 cm asked of this round is not reached by the sidecar's weights.
+    /// The armhole bound sits 3 mm over the measured 6.70 cm (6.67 on the
+    /// skin alone), and that is a margin only because the harness is
+    /// deterministic: a fixed 10 ms step on one pose with nothing random in
+    /// it, the same calls in the same order on one build, which is Jolt's
+    /// condition for the same result (`Docs/Architecture.md`, deterministic
+    /// simulation), and every suite prints the same 0.0670 / 0.0667 m and
+    /// 18.55 / 18.68 mm to the last digit (each of the runs of 2026-10-31);
+    /// the armhole figure is printed to a tenth of a millimetre so the
+    /// margin can be read off the log.
     func testTheArmsForwardIdleKeepsTheArmholeNearItsTarget() throws {
         guard let pose = try clipPose(ZombieResources.waitingClip, at: 1.0) else { throw XCTSkip("the idle clip is not bundled") }
         guard let joints = Self.skeleton, let hand = joints.jointPaths.firstIndex(of: "/root/pelvis/spine_01/spine_02/spine_03/clavicle_l/upperarm_l/lowerarm_l/hand_l"),
@@ -981,12 +1454,13 @@ final class ZombieClothTests: XCTestCase {
             let h = try makeHarness(configuration: configuration, pose: pose)
             h.frames(200)
             let p = h.particles, t = h.targets
-            var worst: Float = 0, worstIndex = 0
+            var worst: Float = 0, worstIndex = 0, worstArmhole: Float = 0, worstArmholeIndex = 0
             for index in p.indices {
                 let d = simd_distance(p[index], t[index])
                 if d > worst { worst = d; worstIndex = index }
+                if h.shirt.maxDistance[index] == 0.06, d > worstArmhole { worstArmhole = d; worstArmholeIndex = index }
             }
-            let worstAt = h.shirt.positions[worstIndex], worstSlack = h.shirt.maxDistance[worstIndex]
+            let worstAt = h.shirt.positions[worstIndex], worstSlack = h.shirt.maxDistance[worstIndex], armholeAt = h.shirt.positions[worstArmholeIndex]
             // Where the worst particle's target lies against the ragdoll: inside
             // a capsule, the skin itself is where the cloth cannot go.
             let rig = try XCTUnwrap(h.physics.rig)
@@ -999,25 +1473,29 @@ final class ZombieClothTests: XCTestCase {
             let a = origin + rotation.act(capsule.from), axis = rotation.act(capsule.to - capsule.from)
             let s = min(max(simd_dot(t[worstIndex] - a, axis) / max(simd_length_squared(axis), 1e-9), 0), 1)
             let targetDepth = simd_distance(t[worstIndex], a + axis * s) - capsule.radius
-            let excess = h.excess()
-            print(String(format: "cloth arms-forward idle, %@: hands rise %.2f m; farthest particle %.3f m from its target (slack %.3f) at rest (%.2f,%.2f,%.2f), its target %+.3f m from the %@ capsule's surface; worst excess %.3f m, pins %.4f m; %@",
-                         label, handRise, worst, worstSlack, worstAt.x, worstAt.y, worstAt.z, targetDepth, rig.partNames[nearest], excess.free, excess.pins, h.cloth.report))
+            let excess = h.excess(), worstInward = h.worstInward(), inward = worstInward.depth, inwardAt = h.shirt.positions[worstInward.index]
+            print(String(format: "cloth arms-forward idle, %@: hands rise %.2f m; farthest particle %.3f m from its target (slack %.3f) at rest (%.2f,%.2f,%.2f), its target %+.3f m from the %@ capsule's surface; armhole band farthest %.4f m at rest (%.2f,%.2f,%.2f); worst excess %.3f m, pins %.4f m, farthest behind the skin %.2f mm (slack %.3f, at rest (%.2f,%.2f,%.2f)); %@",
+                         label, handRise, worst, worstSlack, worstAt.x, worstAt.y, worstAt.z, targetDepth, rig.partNames[nearest], worstArmhole, armholeAt.x, armholeAt.y, armholeAt.z, excess.free, excess.pins, inward * 1000,
+                         h.shirt.maxDistance[worstInward.index], inwardAt.x, inwardAt.y, inwardAt.z, h.cloth.report))
             XCTAssertTrue(excess.finite)
             XCTAssertEqual(h.cloth.runawayCount, 0)
-            XCTAssertLessThan(worst, 0.07, "\(label): a particle sits \(worst) m from its target in the arms-forward idle, at \(worstAt) on the shirt")
+            XCTAssertLessThan(worstArmhole, 0.07, "\(label): an armhole-band particle sits \(worstArmhole) m from its target in the arms-forward idle, at \(armholeAt) on the shirt")
             XCTAssertLessThan(excess.free, 0.04, "\(label): a particle strayed \(excess.free) m past its slack in the arms-forward idle")
-            farthest[label] = worst
+            XCTAssertLessThan(inward, 0.04, "\(label): a particle sits \(inward) m behind its skinned position in the arms-forward idle")
+            farthest[label] = worstArmhole
         }
-        XCTAssertEqual(farthest["skin only"] ?? 0, farthest["ragdoll and skin"] ?? 1, accuracy: 0.01, "the capsules change the arms-forward figure: \(farthest)")
+        XCTAssertEqual(farthest["skin only"] ?? 0, farthest["ragdoll and skin"] ?? 1, accuracy: 0.01, "the capsules change the arms-forward armhole figure: \(farthest)")
     }
 
     // MARK: - Cost
 
-    /// The skin feed and the read-back per frame over 300 frames of sway,
-    /// and the step interval, printed for the headset budget.
+    /// The skin feed, the read-back and, inside it, the shell's evaluation
+    /// per frame over 300 frames of sway, and the step interval, printed for
+    /// the headset budget (a debug build: the release figures are the Mac
+    /// sandbox's, in the README).
     func testTimingsOverThreeHundredFrames() throws {
         let h = try makeHarness()
-        var skin: [Double] = [], read: [Double] = [], step: [Double] = []
+        var skin: [Double] = [], read: [Double] = [], bind: [Double] = [], step: [Double] = []
         for _ in 0 ..< 300 {
             let t = h.time + h.dt
             h.body.pose = h.pose(offset: SIMD3(0.1 * sin(2 * Float.pi * t), 0, 0))
@@ -1025,13 +1503,14 @@ final class ZombieClothTests: XCTestCase {
             let timings = h.cloth.timings
             skin.append(timings.skin)
             read.append(timings.readBack)
+            bind.append(timings.bind)
             step.append(timings.step)
         }
         func stats(_ values: [Double]) -> String {
             let sorted = values.sorted()
             return String(format: "mean %.0f us, median %.0f us, max %.0f us", values.reduce(0, +) / Double(values.count), sorted[sorted.count / 2], sorted.last ?? 0)
         }
-        print("cloth timing (300 frames, 100 Hz, 3 sub-steps, \(h.cloth.configuration.iterationsPerStep) iterations, \(h.shirt.particles.count) particles): skin \(stats(skin)); read-back \(stats(read)); step \(stats(step))")
+        print("cloth timing (300 frames, 100 Hz, 3 sub-steps, \(h.cloth.configuration.iterationsPerStep) iterations, \(h.shirt.particles.count) particles, \(h.shirt.render?.vertexCount ?? 0) shell vertices): skin \(stats(skin)); read-back \(stats(read)); bind \(stats(bind)); step \(stats(step))")
         XCTAssertEqual(h.body.overrideWrites, 300)
     }
 

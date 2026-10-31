@@ -106,9 +106,11 @@ final class ZombieModelTests: XCTestCase {
         // skinned node, so a body split per material would be animated several times.
         XCTAssertEqual(primitives.count, 1, "body, clothes and eyes joined, one atlas material")
         let vertices = primitives.map(\.vertexCount).reduce(0, +)
-        // 41,700 with the simulation proxies as the clothes (2026-10-29; 44,431 with
-        // the fused clothes, 49,177 before the prep culled the skin under them).
-        XCTAssertEqual(vertices, 41700, accuracy: 2500)
+        // 71,328 with the artist's shirt shell drawn (29,402 vertices before the
+        // exporter's UV-seam splits) and the skin under it kept, 2026-10-31; 41,714
+        // with the shirt proxy drawn and the skin under it culled (2026-10-29), 44,431
+        // with the fused clothes, 49,177 before the prep culled the skin under them.
+        XCTAssertEqual(vertices, 71328, accuracy: 2500)
     }
 
     /// The one material reads the three atlas maps the prep bakes (face, body, the old

@@ -84,7 +84,7 @@ database rebuilds from whatever is loaded. The layout is:
 ```
 Sources/CoolZombieKit/Resources/
   Models/Zombie/Zombie.untold                 the zombie: skeleton + one skinned mesh
-  Models/Zombie/Zombie.cloth.json             the cloth sidecar: shirt and trousers proxies
+  Models/Zombie/Zombie.cloth.json             the cloth sidecar: shirt and trousers proxies, the shirt shell's binding
   Models/Zombie/Textures/Zombie_BaseColor.png 4K atlas: face, body, shoes, shirt + trousers tiles
   Models/Zombie/Textures/Zombie_Roughness.png
   Models/Zombie/Textures/Zombie_Normal.png
@@ -125,11 +125,19 @@ artist's cloth setup left as vertex groups (`skin`, `body`, `hair`,
 25 cm away goes (the automatic weights left a little of the pelvis on the
 wrists, which hang beside the hips in the bind pose, and with the arm
 raised that little was a 15 cm fin on the cuff), four influences at most,
-renormalised. The simulation pins its particles to these weights, so the
-sidecar carries the same numbers the skin draws.
+renormalised; and the shirt's arm weights go from its hips — nothing of
+an upper arm or a clavicle within 23 cm of the pelvis, tapered off over
+the 6 cm beyond — since the automatic weights left 2–6 % of the upper arms
+on the flanks down to the waist, where the elbows hang in the bind pose,
+too close for the 25 cm rule to reach, and the drawn shell, which samples
+the proxy's weights between its vertices, showed 34 of them inside the
+20 cm `ZombieSkinTests` holds the export to (2026-10-31). The simulation
+pins its particles to these weights, so the sidecar carries the same
+numbers the skin draws.
 
-Then the garments become **simulation proxies**, which is also what the
-game draws until the render shell is bound to them. The trousers' two
+Then the garments become **simulation proxies**. The trousers' proxy is
+also what the game draws for now; the shirt's only simulates — the game
+draws the artist's shell, bound to it (below). The trousers' two
 panels are sewn (a merge by distance of 0.5 mm over the boundary vertices
 only: 266 seam vertices, leaving one piece with three openings, the waist
 and two hems), every vertex inside the body or within 2 mm of it is pushed
@@ -139,20 +147,31 @@ hips), and the piece is decimated to 2,999 vertices and 5,912 triangles
 face is outer when its normal points away from the nearest body point,
 voted per smooth region rather than per face because under the arm a
 sleeve faces the torso and a rolled cuff faces every way; the rims, the
-buttons and the bits of thread go. The shirt is buttoned: its two front
+buttons and the bits of thread go. The artist's hem is a doubled strip of
+its own, the lowest 1.5–4 cm of the shirt, butted against the shell's
+bottom edge: its top rim sits on the shell's bottom rim, both voted inner
+by a hair, so the strip's outer face (voted outer, clearly) was cut off
+from the rest and dropped, the proxy's hem stopped 9–33 mm above the drawn
+hem and the shell's hem strip rode the boundary triangles as a 3 cm lever
+on the hem band's 12 cm of slack; the strip is now sewn back onto the main
+piece where their boundaries meet (70 vertices within 0.3 mm, the stitch
+the trousers' side seams use, and one 4 mm sliver of a hole between the two
+edges filled), so the proxy reaches the drawn hem and no shell vertex
+hangs more than 8.7 mm below its triangle's lowest corner (2026-10-31). The
+shirt is buttoned: its two front
 panels overlap by 14 mm at the placket, the left one in front, with the
 seven buttons in the overlap, but the panels are separate surfaces, so the
 outer layer has a slit from the hem to the collar, and a proxy with that
 slit would gape in the simulation and show the culled chest. The script
 sews it: the hidden panel is trimmed of the faces along its edge until it
-no longer reaches over the panel in front (74 faces), and its edge is
+no longer reaches over the panel in front (77 faces), and its edge is
 welded onto the front panel's edge bottom to top (80 vertices moved
 1.4 to 17.5 mm, median 6.5), up to z 1.417 m where the two edges
 part into the collar's notch, which stays open; the front panel's placket
 hangs below the hem as a tab and stays part of the hem. That leaves one
 surface with four boundary loops — the collar, the hem and the two cuffs,
-the openings a buttoned shirt has — decimated to 3,995 vertices and 7,854
-triangles (median edge 17.4 mm). The decimation is the script's own
+the openings a buttoned shirt has — decimated to 3,995 vertices and 7,852
+triangles (median edge 17.5 mm). The decimation is the script's own
 shortest-edge-first collapse: a vertex on a boundary or a UV seam only
 slides along it, no face may get worse than it was, no edge ends up shorter
 than 8.5 mm or longer than 39 mm, no angle below 8°, and the UVs ride
@@ -170,25 +189,69 @@ spine_01 to spine_02 at the waist and from the upper arm to the forearm at
 the elbow, so skinned with the arms held forward the armhole edges
 stretched to twenty times their length and the cloth, which keeps its rest
 lengths, sat 13 cm from its skinned target under each arm whatever the
-solver did. Every vertex within 6 cm of such a seam (3,055 of the shirt's
+solver did. Every vertex within 6 cm of such a seam (3,013 of the shirt's
 3,995) has its weights blurred over its one-ring sixteen times — a blur of
 about 5 cm, kept local on purpose: run to convergence the band becomes one
 harmonic blend of every bone around the yoke and the upper arm's weight
-reaches the shoulder blade — and the 2,142 within 12 cm of the armhole seam
+reaches the shoulder blade — and the 2,118 within 12 cm of the armhole seam
 two hundred times more, since the arms-forward idle is what the grading is
 for: the farthest the cloth sits from its skinned target there was 16.3 cm
-with the artist's weights, 9.4 after the sixteen passes and is 5.2 with the
-two hundred (`ZombieClothTests` measures it; wider or deeper the figure turns
-back up, 6.7 cm at 300 passes over 11 cm, and a band of 13 cm or more
+with the artist's weights, 9.4 after the sixteen passes and 5.2 with the
+two hundred, measured when the shirt had 3 cm of slack everywhere and 5
+around the armhole; on the schedule below (the armhole band 6 cm) the
+band's farthest particle rests 6.7 cm from its target and the worst
+particle anywhere 2.7 cm past its slack (`ZombieClothTests` bounds them at
+7 and 4 cm; wider or deeper the blur the figure turns back up, 6.7 cm at
+300 passes over 11 cm under the old slack, and a band of 13 cm or more
 carries arm weight to within 20 cm of the pelvis, which `ZombieSkinTests`
 forbids). Then the traces under 3 % go (two per cent of the upper arm had
 reached the waist) and the influences are capped at four again; the worst
 jump between an edge's two weight vectors falls from 1.89 to 0.68, at the
-waist, and the edges jumping more than 0.5 from 762 to 9. The positions
-never move: the particles stay the exported vertices. The full shirt shell with
-its buttons stays in the rig `.blend` as `Shirt_Render`, hidden and not
-exported, for the render-binding phase. The five belt loops of the new
-trousers stay undecimated and join the shoes as rigid skin.
+waist, and the edges jumping more than 0.5 from 762 to 8. The positions
+never move: the particles stay the proxy's own. The five belt loops of the
+new trousers stay undecimated and join the shoes as rigid skin.
+
+The shirt the game draws is the artist's **shell** (`Shirt_Render`: both
+layers of fabric, the folded collar, the seven buttons and the fourteen bits
+of thread — 29,402 vertices in 22 islands), not the proxy: the headset showed
+the drawn proxy as a sawtooth collar of 2 cm triangles, a buttonless front
+welded into one seam and dark flaps wherever the single layer creased, since
+the engine lights a back face with its front normal (2026-10-30). The shell
+takes the proxy's graded weights, interpolated from the nearest proxy face
+the way the shoes take the body's (the inner layer from the same face as the
+outer, a button from the placket's) and capped at four influences again, so
+body-skinned — the cloth off, the player out of range — it sits where the
+hard-skinned simulation would put it and nothing jumps at a switch; the
+grading itself was tuned on the proxy's 17 mm edges (its pass counts are a
+blur width in edges) and is not rerun on the shell's 8 mm ones. Then the
+script writes the shell's **render binding** into the sidecar
+(`render_binding`): for every shell vertex the proxy triangle nearest to it
+at the bind pose (by point-to-triangle distance: the inner layer binds to
+the same outer-proxy triangle as the outer, a millimetre farther), the
+barycentric coordinates of the closest point, and the vertex's rest offset
+in that triangle's frame — `e1` along the first edge, `n` the face normal,
+`t` across — so a simulated triangle that tilts or moves carries the vertex
+rigidly (position = bary(a, b, c) + off·(e1, n, t)); the buttons and the
+bits are rigid, every vertex of one bound to the single triangle nearest
+the island's centre. The normals are not in the binding: the exporter
+writes a normal per face corner and splits a vertex whose corners disagree,
+and the shell has 1,120 sharp edges — the cuff rolls, the placket's edge,
+the collar's creases — on which a thousand of its vertices become two or
+more exported copies with normals up to 180° apart; one rest normal per
+shell vertex (the smooth one, the first cook's) lit those creases flat
+whenever the cloth was on while the body's own skinning showed them, so the
+game reads each exported copy's normal off the mesh at the attach and
+carries it in the same frame (`RenderShell`, below), and the cloth on and
+off are lit alike. The shell's rest positions go in with it, since the game
+binds them to the exported vertices by position; the shell's triangles do
+not (the mesh has them). The binding covers 6,020 of the proxy's 7,852
+triangles; the offsets are 1 mm at the median (the inner layer) and 20 mm
+at most (the placket's hidden panel, which the proxy trims), no vertex of
+the shell proper hangs more than 8.7 mm below its triangle's lowest corner
+(the hem strip's bottom edge between proxy vertices; 33 mm when the strip
+was dropped), and the rounded numbers rebuild every shell vertex within
+0.003 mm. The proxy itself stays in the rig `.blend` as `Shirt_Proxy`,
+hidden and not exported: it lives in the sidecar only.
 
 The textures go into one 4K atlas of 2048 tiles, as before: face, body and
 the old clothes (worn by the shoes) a tile each; the fourth tile holds the
@@ -196,13 +259,25 @@ shirt and the trousers as two 1024 quarter tiles (the shirt's 2048 maps
 halved, the trousers' 4096 maps quartered — base colour, roughness and
 normal; the artist's metallic, height and emissive maps are not used), and
 two quarters stay free. The script bakes the shape keys that give the face
-its zombie look, removes the skin the clothes cover (a ray from each body
-face along its normal that meets the shirt proxy, the trousers proxy or the
+its zombie look, removes the skin under the trousers and the shoes (a ray
+from each body face along its normal that meets the trousers proxy or the
 shoes within 4 cm; a one-face ring stays under every edge, the hands and
-wrists are never culled — 4,156 of the body's faces go) and joins body,
-eyes, shoes, belt loops and the two proxies into one mesh of 41.7k exported
-vertices and 72k triangles with one opaque material (the alpha-masked hair
-cards and the cornea shell are dropped). One mesh, one material is not a
+wrists are never culled — 2,711 of the body's faces go, 25,782 stay) and
+keeps the skin under the shirt: the shirt is simulated cloth that hangs off
+the body, swings and is dented, so where it leaves the torso the torso must
+be there, and where the body presses into the cloth the back-stop pushes
+each particle back to a millimetre behind its skinned position in every
+solver iteration, which the push-out put 2 mm off the skin, so the proxy
+and the shell's outer layer on it stay off the body (on the idle, two
+seconds in, the nearest particle to the surface under the shirt is 2.0 mm
+off it; `ZombieClothTests` holds every one to a millimetre). It then joins body, eyes, shoes, belt loops, the shirt
+shell and the trousers proxy into one mesh of 63.7k vertices, 71,328 once
+the exporter has split them on the UV seams, and 126k triangles with one opaque
+material (the alpha-masked hair cards and the cornea shell are dropped), and
+checks that no vertex of another part sits within 0.2 mm of a shell vertex,
+the tolerance the game binds with (none does; the shell's own 1,097 pairs
+closer than that — thread wound around the buttons, seam strips — the game
+settles by the nearer vertex). One mesh, one material is not a
 choice of taste: the engine binds the animation per skinned mesh node, and
 the exporter splits a multi-material object into one node per material, so
 a split body would be animated once per part.
@@ -219,27 +294,55 @@ exported mesh by position, since the exporter splits a vertex on UV seams),
 the triangles wound consistently and, on the whole, counter-clockwise seen
 from outside — the rolled cuffs and the inside of the collar wrap back
 towards the arm and the neck, so the particles whose normal points at the
-body are listed (152 of the shirt's, 3 of the trousers') for the
+body are listed (148 of the shirt's, 3 of the trousers') for the
 game to put their back-stop on the body side — the joints they hang on as
 the engine names them (`/root/pelvis/spine_01`), up to four influences per
 particle summing to one, how far each particle may stray from its skinned
-position (0 pins it: the shirt's collar loop and its one-ring, 100
-particles, the trousers' waist and its two-ring, 167; 5 mm down the
-shirt's buttoned front, where the buttons hold the panels to the chest;
-5 cm within 8 cm of the shirt's armhole seam — the edges whose particles
-follow an arm bone on one side and a torso bone on the other, 1,321
-particles, where the graded skin still stretches the edges most and the
-cloth needs room to keep its lengths; 2 cm at the trousers' hems, 3 cm
-everywhere else, the cuffs included: they had a centimetre, to ride the
-forearm, but the ragdoll's forearm and hand parts hang 1-3 cm off the pose
-at rest from their joint limits and pushed them 2 cm past it every
-frame), a 3 mm back-stop, the dominant joint, and the bind-pose joint
-matrices.
+position (`maxDistance`; 0 pins it), the back-stop — 1 mm: Jolt's stop is a
+plane that starts that far *behind* the skinned position and pushes a
+particle back out of it, so with the proxy 2 mm off the skin a millimetre
+keeps it, and the shell's outer layer on it, off the body; the first cook
+with the skin kept under the shirt set 5 mm in the belief that a deeper
+stop held the cloth farther out, which let the proxy sink 3 mm into the
+skin and, not short of the buttoned front's 5 mm slack, switched that
+band's stop off altogether (Jolt disables a stop that does not undercut
+the slack; 2026-10-31) — the dominant joint, the bind-pose joint matrices
+and, for the shirt, the render binding above.
+The shirt's slack is a **schedule** (`shirt_slack`), since a shirt hangs
+from its shoulders and the headset showed one 3 cm everywhere as a second
+skin: the collar band — the collar, its stand and its points, every particle
+within 8 cm along the surface of the collar loop, 267 — and the cuffs —
+within 6 cm of the cuff loops, 128 — are hard skinned (0), so the folded
+collar follows the body as one thick piece and the rolled cuffs ride the
+forearm's animation without fighting the hand parts' tracking error; the
+yoke (the back and the shoulder tops within 12 cm below the collar band, not
+the chest; 345) is held to 1 cm, which is what the shirt hangs from; the
+chest has 8 cm (499), the back 10 (565), the hem band (the lowest 12 cm of
+the body panels, 430) 12; the sleeves 5 (895) and the armhole band 6 (781:
+within 6 cm of the seam between the sleeves and the body panel as the
+artist's weights draw it before the grading, two chains of 125 and 85 edges
+that meander from the shoulder down the flank, since the stretch the band is
+for happens where the weights hand over); the buttoned front keeps its 5 mm
+(85), where the buttons hold the panels to the chest. Distances along the
+surface are Dijkstra over the proxy's edges. The trousers keep their waist
+and its two-ring pinned (167), 2 cm at the hems, 3 cm elsewhere.
 `ZombieClothAsset.swift` decodes it; `ZombieClothAssetTests.swift` holds it
-to the export (every particle on an exported vertex within 0.2 mm, one piece
-per garment with its openings traced as closed boundary cycles — four for
-the shirt, three for the trousers — edges between 8 and 40 mm, consistent
-winding, no hand in the weights, the bind matrices equal to the model's).
+to the export (every shell vertex and every trousers particle on an exported
+vertex within 0.2 mm, and no exported vertex on the shirt proxy that is not
+on the shell too — the particles are a subset of the shell's outer layer by
+construction, the decimation moving none of its survivors, so 3,944 of them
+do coincide with shell vertices; the binding rebuilding the shell at the
+bind pose within 0.1 mm, no vertex of the shell proper more than a
+centimetre below its triangle's lowest corner nor 25 mm from it, every
+button and bit on one triangle — the normals are the export's, and
+`ZombieClothTests` holds the shell as the game evaluates it at the bind pose
+to the exported mesh, every driven copy within 0.1 mm and 0.1° of its own
+exported position and normal, the sharp edges' split copies included; the
+slack histogram within a quarter of the cook's counts and each region where
+its name says; one piece per garment with its openings traced as closed
+boundary cycles — four for the shirt, three for the trousers — edges between
+8 and 40 mm, consistent winding, no hand in the weights, the bind matrices
+equal to the model's).
 
 The script writes the rig `.blend` the retarget tools take as `BLEND` and
 exports through the Untold add-on:
@@ -515,7 +618,8 @@ wrist, the heel to the ball) and the pelvis the hips. The numbers are
 pasted into the rig's table and `ZombieRagdollRigTests` holds every
 capsule to the export: no point of its surface more than 5 mm out of the
 skin where the export keeps skin (its own bones', and the neighbouring
-parts' where the caps enter them; under the clothes the prep culls it),
+parts' where the caps enter them; under the trousers and the shoes the
+prep culls it, under the shirt it stays),
 every point of the shirt's and the trousers' surfaces 2 mm clear, at least
 95 % of each capsule's surface samples with skin or a garment around them,
 and every joint within a tenth of a metre of its capsule's line. The torso
@@ -540,29 +644,49 @@ The floor slab stays on the common layer, so the feet keep it either way.
 
 ### Cloth: the shirt as a skinned soft body
 
-The artist's shirt is in the exported mesh, skinned to the body like the
-rest, and the cloth sidecar (`Zombie.cloth.json`, above) carries the same
-shirt as a particle proxy. `ZombieCloth` turns the proxy into a Jolt soft
-body skinned to the skeleton and worn over the ragdoll: at the reveal every
-particle is bound to the exported vertices at its position (within a fifth
-of a millimetre; the exporter splits a vertex on UV seams, so one particle
-drives several), the body is built at the bind pose and hard skinned onto
-the frame's pose before anything steps, and from then on Jolt keeps each
-particle within its slack of where the skin puts it (3 cm on the whole,
-5 mm down the buttoned front, 5 cm around the armholes, pinned at the
-collar) and
-outside a back-stop 3 mm behind the skin — the body underneath — while the
-triangles' stretch, shear and bend constraints make it cloth. The frame
-runs: the animation composes the pose; the physics step begins and the
-cloth's `willStep` hook feeds that pose's joints to the skin (the pose the
-body is drawn with); Jolt steps; the game update puts the ragdoll's pose on
-the mesh and, last, the cloth reads the particles back, turns them into
-mesh space and writes them over the deformation pass's output for the
-vertices they drive (`setEntityDeformationOverride`), applied after the
-skinning and before the draws. The body moves to compute skinning for that
-(`setEntityDeformation(.lbs)`): the price of the override. A particle
-found off the sidecar, a joint the skeleton lacks or counts that disagree
-leave the garment body-skinned, logged once — nothing is driven wrong.
+The artist's shirt — the shell: two layers of fabric, the folded collar,
+the buttons — is in the exported mesh, skinned to the body like the rest,
+and the cloth sidecar (`Zombie.cloth.json`, above) carries a particle proxy
+of it, which is not in the mesh, and the shell's binding to that proxy.
+`ZombieCloth` turns the proxy into a Jolt soft body skinned to the skeleton
+and worn over the ragdoll: at the reveal every shell vertex is bound to the
+exported vertices at its position (within a fifth of a millimetre; the
+exporter splits a vertex on UV seams, so one drives several; an exported
+vertex two shell vertices reach goes to the nearer), the body is built at
+the bind pose and hard skinned onto the frame's pose before anything steps,
+and from then on Jolt keeps each particle within its slack of where the
+skin puts it — the schedule above: the collar band and the cuffs pinned,
+the yoke a centimetre, the chest 8, the back 10, the hem band 12, the
+sleeves 5, the armhole band 6, 5 mm down the buttoned front — and, in
+every solver iteration, no more than a millimetre behind it (the
+back-stop: the push-out left the proxy 2 mm off the body, which is kept
+under the shirt; Jolt applies the edge constraints after the stop, so they
+have the last word, and on the idle they leave the worst particle 3 mm
+behind its target at the cuff while it stays 3.4 mm off the body), while
+the triangles' stretch, shear and bend constraints make it cloth. The frame runs: the
+animation composes the pose; the physics step begins and the cloth's
+`willStep` hook feeds that pose's joints to the skin (the pose the body is
+drawn with); Jolt steps; the game update puts the ragdoll's pose on the
+mesh and, last, the cloth reads the particles back (positions only), turns
+them into mesh space, rebuilds every proxy triangle's frame from them and
+evaluates the shell (`RenderShell`: each exported vertex the shell drives
+its shell vertex's barycentric point plus that vertex's rest offset in the
+frame, and its normal its own exported normal — read off the mesh at the
+attach, when every shell vertex is matched to its exported copies — in the
+frame, so the fold keeps its thickness, the creases on the artist's sharp
+edges keep the split normals the exporter gave them, and a button rides
+one triangle whole), and writes the shell's vertices and normals over the
+deformation pass's output (`setEntityDeformationOverride`), applied after
+the skinning and before the draws. The vertex pass runs over the cores
+(`DispatchQueue.concurrentPerform`, runs of 2,048 driven vertices); the
+figures, one thread's and the cores', are below. The body moves to compute skinning
+for that
+(`setEntityDeformation(.lbs)`): the price of the override. A shell vertex
+found off the mesh, a joint the skeleton lacks or counts that disagree
+leave the garment body-skinned, logged once — nothing is driven wrong. (A
+garment without a binding — the trousers, not simulated yet — would be
+drawn as its proxy, the particles and their normals written over their own
+vertices.)
 
 Whenever the body is put somewhere rather than moved — the ragdoll
 re-seated on a pelvis jump or a stand-up (`ZombiePhysics.didReseat`), a
@@ -582,9 +706,12 @@ well, since nothing moves a sleeping shirt's particles any more and a body
 creeping under the millimetre every frame would otherwise walk out from
 under its frozen override for good (0.4 mm a frame wakes it on the third;
 `ZombieClothTests` pins it). Beyond 4 m
-from the player the override is cleared, so the shirt is the body's own
-skinning again (within 3.5 m: half a metre of hysteresis, so a player at
-the line does not flip it), and the return hard skins it onto the pose. A
+from the player the override is cleared, so the shell is drawn by its own
+skin weights again — the proxy's, which the prep gives it, so it sits where
+the hard-skinned simulation would put it and nothing jumps at the line
+(within 3.5 m: half a metre of hysteresis, so a player at the line does not
+flip it) — and the return hard skins it onto the pose; asleep in range, by
+contrast, the last override stays, the shell as it was last evaluated. A
 particle that is not a number or 2 m from the pelvis hard skins the body
 (counted in the report).
 
@@ -626,7 +753,8 @@ vertex-shader skinning (`ZombieCloth.detach` removes the deformation
 component the attach added, `removeEntityDeformation`), so it is the
 launch's `-cloth off` and the footnote's frame line reads the compute
 path's GPU price against it — the per-eye cost of compute skinning the
-41,700-vertex body, not yet measured on the device. The device defaults are two
+71,300-vertex body (the shell drawn, the skin under it kept), not yet
+measured on the device. The device defaults are two
 iterations and two Jolt sub-steps per 10 ms frame (a 5 ms sub-step keeps
 the 60 Hz motors' 8 ms bound; the Mac keeps three at 60 Hz) with Jolt's
 own thread count. Measured on the Mac (M4 Max, release, 60 Hz, 35 s runs,
@@ -661,8 +789,8 @@ tracking at the device's 5 ms (their 13–14 cm chase worsts cannot be told
 from motor lag); the device's own cadence, two 5 ms sub-steps at 100 Hz,
 is held to the slack and to the parts' rest errors by `ZombieClothTests`
 (`testTheDeviceTwoSubStepsKeepTheShirtWithinItsSlack`): at two
-sub-steps the idle shirt sits 3.0 mm inside its slack and the sway
-18 mm past it against the 20 mm bound (11 mm at three), the hands
+sub-steps the idle shirt strays 1.1 mm past its slack (the bound is 5)
+and the sway 1.6 mm against the 20 mm bound (0.5 mm at three), the hands
 resting 3.2 cm off their joints at either. The skin-only chase's first
 median hides one 47 ms sample at a reset (its mean is 3.8 ms, the next
 largest sample 13 ms; the second run's largest is 4.0 ms), where every
@@ -700,13 +828,17 @@ and holds the default to 5 mm; sized for the old mannequin, the spine
 capsules reached 7 cm through the back of this shirt and pushed the
 back's particles 5 cm past their slack, jittering against the skin). The
 shirt's weights are graded across its seams and the sidecar opens the
-slack to 5 cm around the armhole (Assets, above), for the arms-forward
+slack to 6 cm around the armhole (Assets, above), for the arms-forward
 idle, where the artist's weights stretched the armhole edges twenty-fold
 in the skinning and the cloth, holding its rest lengths, sat 13-14 cm
 from its skinned target under each arm — the report's `target<=` figure,
-with where it sits; in that pose the farthest particle is now 5.2 cm off,
-at the yoke (16.3 with the artist's weights, 9.4 with the seams graded
-over 16 passes alone; `ZombieClothTests` pins it). The capsules play no
+with where it sits; in that pose the armhole band's farthest particle is
+now 6.7 cm off its target on its 6 cm of slack and no particle more than
+2.7 cm past its slack (16.3 cm from the target with the artist's weights,
+9.4 with the seams graded over 16 passes alone, 5.2 with the two hundred
+on the old 3 cm of slack; `ZombieClothTests` pins them at 7 and 4 cm; the
+report's own figure in that pose is the hem band's 10.8 cm, a hanging
+particle on 12 cm of slack). The capsules play no
 part in it: on the skin alone, with no part in the world, the figure is
 the same to a millimetre. What remains is the skinned targets': the
 sleeve's underside hangs between an arm that moved 40 cm and a flank that
@@ -716,6 +848,28 @@ turns the figure back up and 13 cm or more puts arm weight on the hips, so
 closer would take other targets (hand-painted armpit weights, or a
 skinning that does not stretch), not the sidecar's blur; the 4 cm this
 round aimed at was not reached.
+
+The shell's binding, measured the same way on 2026-10-31 (two iterations,
+the Mac's three sub-steps, the schedule's sidecar, 35 s runs sampled once
+a second; the figures are the awake, in-range samples' medians with the
+largest sample in brackets): the shirt's 29,402 shell vertices drive
+32,530 exported copies (the split copies on the sharp edges). On the idle,
+14 of the 33 samples awake and in range (the inspection spends the rest
+with the player more than 4 m off), the skin feed takes 89 us, the
+read-back 678 (1,220) us with the shell's evaluation 503 (1,008) us
+inside it, and the step 1,476 (1,698) us — where the table's row at two
+iterations and three sub-steps had it; the worst target is 8.8 cm, the hem
+band's hanging particle on its 12 cm of slack (with the schedule the idle's
+worst is the hem's, not the armpit's 5.2 cm of the table's rows). On the
+chase, 23 of 34 samples awake and in range, eight balls: the skin feed
+96 us, the read-back 675 (918) us, the shell 541 (720) us, the step
+2,257 (3,389) us, the worst target 12.5 cm, again at the hem, at a
+knockdown. One thread evaluates the shell in 628 (1,273) us on the same
+idle (its read-back 772 (1,553) us, its step 1,373 (2,512) us), so the
+cores take a fifth off; both figures are over 0.6 ms, which the headset's
+cores, about twice slower, would make more than a millisecond of the
+10 ms frame, so the pass stays split. Not a runaway, not a wake Jolt gave
+a resting body and not an error line in any of the three runs.
 
 The package depends on the miolabs fork of the plugin at its
 `feature/zombie_cloth` branch (the character controller, the ragdoll, the
