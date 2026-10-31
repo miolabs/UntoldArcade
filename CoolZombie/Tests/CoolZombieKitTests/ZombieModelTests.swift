@@ -16,7 +16,7 @@ import XCTest
 
 /// The cooked zombie (`Models/Zombie/Zombie.untold`, from `Tools/blender/prep_zombie.py`)
 /// as the demo needs it: the mannequin joint paths the game, the foot IK and the ragdoll
-/// address, a body of about 1.75 m, and the three skinned meshes.
+/// address, a body of about 1.75 m, one skinned mesh under one atlas material.
 final class ZombieModelTests: XCTestCase {
     /// The bundled model, or the one `COOLZOMBIE_MODEL` points at (to check an
     /// export before it goes into the bundle).
@@ -106,9 +106,29 @@ final class ZombieModelTests: XCTestCase {
         // skinned node, so a body split per material would be animated several times.
         XCTAssertEqual(primitives.count, 1, "body, clothes and eyes joined, one atlas material")
         let vertices = primitives.map(\.vertexCount).reduce(0, +)
-        // 44,431 after the prep culls the skin under the clothes (2026-10-27;
-        // 49,177 with it).
-        XCTAssertEqual(vertices, 44431, accuracy: 2500)
+        // 71,328 with the artist's shirt shell drawn (29,402 vertices before the
+        // exporter's UV-seam splits) and the skin under it kept, 2026-10-31; 41,714
+        // with the shirt proxy drawn and the skin under it culled (2026-10-29), 44,431
+        // with the fused clothes, 49,177 before the prep culled the skin under them.
+        XCTAssertEqual(vertices, 71328, accuracy: 2500)
+    }
+
+    /// The one material reads the three atlas maps the prep bakes (face, body, the old
+    /// clothes tile for the shoes, and the shirt and trousers quarters in the fourth
+    /// tile), and the files sit beside the model where the texture paths resolve.
+    func testTheMaterialReadsTheAtlas() throws {
+        guard let asset = try loadAsset(), let url = Self.modelURL else { throw XCTSkip("Models/Zombie is not bundled") }
+        let primitive = try XCTUnwrap(asset.nodes.flatMap(\.primitives).first)
+        let material = try XCTUnwrap(primitive.material, "the body has no material")
+        let textures = url.deletingLastPathComponent().appendingPathComponent("Textures")
+        for (slot, name) in [(material.baseColorTexture, "Zombie_BaseColor"), (material.roughnessTexture, "Zombie_Roughness"), (material.normalTexture, "Zombie_Normal")] {
+            let reference = try XCTUnwrap(slot, "\(name): the material has no such texture")
+            let file = reference.sourceURL?.lastPathComponent ?? reference.name ?? ""
+            XCTAssertTrue(file.hasPrefix(name), "\(name): the material reads \(file)")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: textures.appendingPathComponent("\(name).png").path), "\(name).png is not beside the model")
+        }
+        XCTAssertTrue(material.baseColorTexture?.isSRGB ?? false, "the base colour is sRGB")
+        XCTAssertFalse(material.normalTexture?.isSRGB ?? true, "the normal map is linear")
     }
 
     /// Every mesh that draws is skinned to the skeleton. An exporter that

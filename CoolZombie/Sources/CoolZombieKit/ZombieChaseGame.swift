@@ -137,6 +137,9 @@ public final class ZombieChaseGame: @unchecked Sendable {
         /// A knockdown's first beat: how long the struck chain staggers,
         /// the legs still stepping, before the whole body lets go.
         public var staggerDuration: Float = 0.6
+        /// The shirt as a skinned soft body over the ragdoll (`ZombieCloth`);
+        /// `cloth.enabled` false leaves it body-skinned.
+        public var cloth = ZombieCloth.Configuration()
 
         public init() {}
     }
@@ -230,6 +233,17 @@ public final class ZombieChaseGame: @unchecked Sendable {
     private var stagger: (parts: [Int], clock: Float, direction: simd_float3)?
     private var downedClock: Float = 0
     private var partWeights: [Float] = []
+    /// The shirt's simulation, when configured and the sidecar is bundled:
+    /// attached at the reveal, over the placed ragdoll, fed and read back
+    /// every frame around the game's own update. Frame thread, like the
+    /// cloth itself: the host reads its state and counters there.
+    public private(set) var cloth: ZombieCloth?
+    /// The sidecar, loaded once for every cloth built from it; nil until a
+    /// configuration with the cloth on asks for it.
+    private var clothAsset: ZombieClothAsset?
+    /// A new cloth configuration from the host (`setCloth`), applied on the
+    /// game thread.
+    private var clothRequest: ZombieCloth.Configuration?
     /// The body stays hidden from the mesh load until the first frame has
     /// posed it and placed the ragdoll on it.
     private var revealPending = false
@@ -264,6 +278,21 @@ public final class ZombieChaseGame: @unchecked Sendable {
         appliedFloorLevel = configuration.floorY
         spawnStorage = simd_float3(0, configuration.floorY, -configuration.spawnDistance)
         navigator = ZombieChaseGame.makeNavigator(configuration.obstacles, around: .zero, reach: configuration.spawnDistance)
+        if configuration.cloth.enabled, let asset = loadClothAsset() {
+            cloth = ZombieCloth(asset: asset, configuration: configuration.cloth)
+        }
+    }
+
+    /// The bundled sidecar, once; nil, and one line, when it cannot be
+    /// read (the garments then stay body-skinned).
+    private func loadClothAsset() -> ZombieClothAsset? {
+        if let clothAsset { return clothAsset }
+        do {
+            clothAsset = try ZombieClothAsset.loadBundled()
+        } catch {
+            print("CoolZombie: the cloth sidecar could not be loaded — \(error); the garments stay body-skinned")
+        }
+        return clothAsset
     }
 
     /// Measured floor height in world space. The world origin's height is
@@ -442,11 +471,43 @@ public final class ZombieChaseGame: @unchecked Sendable {
         return origin + d * along
     }
 
+    /// Replaces the shirt's simulation with the host's choice (the control
+    /// window's Cloth and Cloth quality pickers, the sandbox's dropdown):
+    /// the garments come off — the body's own skinning shows again — and,
+    /// unless the cloth is off, go back on with the new configuration,
+    /// rebuilt in Jolt (a change of iterations is a new body). Applied on
+    /// the game thread, at once on a revealed body; a cloth asked for
+    /// before the reveal goes on at it. Off takes the body back to its own
+    /// vertex-shader skinning (`ZombieCloth.detach` removes the deformation
+    /// component the attach added), so it is the launch's `-cloth off`, and
+    /// the footnote's frame line reads the compute path's price against it;
+    /// the next attach moves the body to compute skinning again.
+    public func setCloth(_ configuration: ZombieCloth.Configuration) {
+        lock.withLock { clothRequest = configuration }
+    }
+
+    /// The cloth's one-line report (`ZombieCloth.report`) while the shirt
+    /// simulates; nil otherwise. It skins every particle on the CPU, so for
+    /// a once-a-second print; a per-frame readout takes `clothSummary`.
+    /// Game thread.
+    public var clothReport: String? {
+        guard let cloth, cloth.isAttached else { return nil }
+        return cloth.report
+    }
+
+    /// The cloth's short line (`ZombieCloth.summary`): the state, the
+    /// timings and the counters, cheap enough for every frame. Game thread.
+    public var clothSummary: String? {
+        guard let cloth, cloth.isAttached else { return nil }
+        return cloth.summary
+    }
+
     /// Releases what the chase holds in the physics world. Call from the
     /// game thread once frames have stopped (the immersive space closed).
     public func shutdown() {
         hitSubscription?.cancel()
         hitSubscription = nil
+        cloth?.detach()
         physics?.removeCharacter()
         physics?.removeRagdoll()
         props.removeAll()
@@ -709,6 +770,29 @@ public final class ZombieChaseGame: @unchecked Sendable {
         }
     }
 
+    /// A placement from the frame (a Reset, the spawn moved under a waiting
+    /// body): the body back to the spawn and the shirt with it, at rest. A
+    /// bind-pose inspection ends here the way a request ends it — the feet
+    /// plant again, the held pose goes, and the cloth's slack stops waiting
+    /// on the parts — or the shirt would ride the skin until the T-pose was
+    /// entered and left once more. The mesh-load completion places the body
+    /// through `placeAtSpawn` directly: off the frame thread, before the
+    /// cloth exists.
+    private func respawn() {
+        let wasBindPose = phase == .bindPose
+        if wasBindPose {
+            setFootIKEnabled(entityId: zombie, enabled: true)
+            clearPhysicsPose(entityId: zombie)
+        }
+        placeAtSpawn()
+        // After the jump, so the hard skin lands on the new place.
+        if wasBindPose {
+            cloth?.setInspectionBindPose(false)
+        } else {
+            cloth?.requestHardSkin()
+        }
+    }
+
     /// Hands the character to motion matching: from here on the goal
     /// drives every clip choice.
     private func startHunting() {
@@ -720,6 +804,16 @@ public final class ZombieChaseGame: @unchecked Sendable {
     /// `playerPosition` is the player's head in world space (nil while
     /// tracking is not available — the zombie just waits).
     public func update(deltaTime: Float, playerPosition: simd_float3?) {
+        cloth?.beginUpdate()
+        step(deltaTime: deltaTime, playerPosition: playerPosition)
+        // The shirt last: this frame's pose is on the mesh, the particles
+        // go over it.
+        cloth?.readBack(deltaTime: deltaTime, playerPosition: playerPosition)
+    }
+
+    /// The frame's chase: the requests, the floor, the controller, the
+    /// ragdoll, the hits, the phase and its goal.
+    private func step(deltaTime: Float, playerPosition: simd_float3?) {
         armClock += min(max(deltaTime, 0), 0.1)
         // The environment can only be swapped once the renderer has built
         // its IBL resources, which on visionOS happens after scene setup —
@@ -745,6 +839,9 @@ public final class ZombieChaseGame: @unchecked Sendable {
                 // `updateDisplayWeights`'s call from the first frame on.
                 partWeights = Array(repeating: 1, count: physics.rig?.partCount ?? 0)
             }
+        }
+        if let request = lock.withLock({ defer { clothRequest = nil }; return clothRequest }) {
+            applyCloth(request)
         }
         for request in lock.withLock({ defer { throwRequests.removeAll() }; return throwRequests }) {
             let ball = props.throwBall(from: request.origin, velocity: request.velocity)
@@ -774,12 +871,12 @@ public final class ZombieChaseGame: @unchecked Sendable {
             let before = spawnPosition
             refreshSpawn()
             if lock.withLock({ phaseStorage }) == .waiting, simd_distance(before, spawnPosition) > 0.3 {
-                placeAtSpawn()
+                respawn()
             }
         }
 
         if lock.withLock({ defer { resetPending = false }; return resetPending }) {
-            placeAtSpawn()
+            respawn()
         }
         let provoked = lock.withLock { defer { provokePending = false }; return provokePending }
         let request = lock.withLock { defer { inspectionRequest = nil }; return inspectionRequest }
@@ -852,12 +949,14 @@ public final class ZombieChaseGame: @unchecked Sendable {
         {
             physics.track(jointModelTransforms: animated, entityWorld: entityWorld())
         }
-        // The first composed pose, with the parts placed on it: show the body.
+        // The first composed pose, with the parts placed on it: show the body,
+        // and the shirt goes on over the parts.
         if revealPending, getAnimatedJointModelTransforms(entityId: zombie) != nil,
            physics?.hasRagdoll != true || physics?.isPlaced == true
         {
             revealPending = false
             setZombieVisible(true)
+            attachCloth()
             if freezePending {
                 freezePending = false
                 pauseAnimationComponent(entityId: zombie, isPaused: true)
@@ -913,6 +1012,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
                 // Back to the clips: the feet plant again, the held pose goes.
                 setFootIKEnabled(entityId: zombie, enabled: true)
                 clearPhysicsPose(entityId: zombie)
+                cloth?.setInspectionBindPose(false)
             }
             freezePending = false
             let wasDowned = phase == .downed
@@ -955,6 +1055,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
                 setPoseLayerWeight(entityId: zombie, weight: 0, halflife: 0.05)
                 setReachIKTarget(entityId: zombie, worldPosition: nil, weight: 0, halflife: 0.05)
                 armPosture = .clip
+                cloth?.setInspectionBindPose(true)
                 phase = .bindPose
             case .chase:
                 if inspecting {
@@ -1244,6 +1345,34 @@ public final class ZombieChaseGame: @unchecked Sendable {
             physics.standUp(jointModelTransforms: animated, entityWorld: entityWorld())
         }
         for index in partWeights.indices { partWeights[index] = 1 }
+    }
+
+    /// The shirt onto the revealed body: bound to the mesh, built in the
+    /// physics world over the placed ragdoll. The re-seats reach it through
+    /// `ZombiePhysics.didReseat`. A shirt put on during the bind-pose
+    /// inspection waits for the parts like one that was there when it
+    /// began.
+    private func attachCloth() {
+        guard let cloth, !cloth.isAttached, let physics, let jointInfo else { return }
+        if cloth.attach(entityId: zombie, physics: physics, jointInfo: jointInfo) {
+            if lock.withLock({ phaseStorage }) == .bindPose { cloth.setInspectionBindPose(true) }
+            print("CoolZombie: \(cloth.report)")
+        }
+    }
+
+    /// The host's new cloth configuration (`setCloth`): the old garments
+    /// off, the new ones on, now if the body is revealed. Game thread.
+    private func applyCloth(_ configuration: ZombieCloth.Configuration) {
+        cloth?.detach()
+        cloth = nil
+        guard configuration.enabled else {
+            print("CoolZombie: cloth off; the garments are body-skinned")
+            return
+        }
+        // The loader says why when it cannot.
+        guard let asset = loadClothAsset() else { return }
+        cloth = ZombieCloth(asset: asset, configuration: configuration)
+        if !revealPending { attachCloth() }
     }
 
     /// Stops a reaction or a stagger short: the parts go back to tracking.

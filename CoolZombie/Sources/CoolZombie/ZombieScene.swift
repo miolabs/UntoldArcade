@@ -86,6 +86,47 @@
             }
         }
 
+        /// The shirt's simulation, switched live like the headset's picker:
+        /// off (body-skinned), on its skin alone, meeting the world (the
+        /// balls and the floor; the default) or the ragdoll's parts too.
+        /// The iterations stay the launch argument's (`-clothIterations`).
+        enum ClothChoice: String, CaseIterable, Identifiable {
+            case off, skinOnly, skinAndWorld, ragdollAndSkin
+
+            var id: String { rawValue }
+
+            var title: String {
+                switch self {
+                case .off: return "Off"
+                case .skinOnly: return "Skin only"
+                case .skinAndWorld: return "World"
+                case .ragdollAndSkin: return "Ragdoll too"
+                }
+            }
+
+            init(_ configuration: ZombieCloth.Configuration) {
+                guard configuration.enabled else { self = .off; return }
+                switch configuration.collisionModel {
+                case .skinOnly: self = .skinOnly
+                case .skinAndWorld: self = .skinAndWorld
+                case .ragdollAndSkin: self = .ragdollAndSkin
+                }
+            }
+
+            /// `configuration` with this choice applied.
+            func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
+                var result = configuration
+                result.enabled = self != .off
+                switch self {
+                case .off: break
+                case .skinOnly: result.collisionModel = .skinOnly
+                case .skinAndWorld: result.collisionModel = .skinAndWorld
+                case .ragdollAndSkin: result.collisionModel = .ragdollAndSkin
+                }
+                return result
+            }
+        }
+
         /// How high the cube sits: near the floor, or at chest height as a
         /// stand-in for a person — the arms reach for it either way.
         enum TargetHeight: String, CaseIterable, Identifiable {
@@ -123,6 +164,9 @@
         private(set) var layout: Layout = .open
         private(set) var targetMode: TargetMode = .orbit
         private(set) var targetHeight: TargetHeight = .low
+        /// The cloth configuration in force (the dropdown's choice on top
+        /// of the launch arguments).
+        private(set) var clothConfiguration: ZombieCloth.Configuration
         private var targetKeyWasDown = false
         private var provoked = false
         private var clipKeyWasDown = false
@@ -132,10 +176,18 @@
         private var throwInterval: Float = 0
         private var throwClock: Float = 0
         private var throwCount = 0
+        /// `-resetEvery <seconds>`: back to the spawn point every so often,
+        /// for scripted runs — a fallen zombie stands up, a standing one
+        /// jumps, and whatever rides the body (the ragdoll, the shirt) is
+        /// re-seated.
+        private var resetInterval: Float = 0
+        private var resetClock: Float = 0
         private var layoutKeyWasDown = false
         private var targetAngle: Float = 0
         private var debugLog = false
         private var debugClock: Float = 0
+        private var clothClock: Float = 0
+        private var clothWrites = 0
     private var autoInspection: ZombieChaseGame.InspectionMode?
     private var autoInspected = false
     private var trackClock: Float = 0
@@ -160,6 +212,10 @@
                     print("CoolZombie: could not load the room \(arguments[index + 1]) — \(error)")
                 }
             }
+            // The shirt's simulation: `-cloth off|skin|ragdoll` and
+            // `-clothIterations <n>`, as on the headset.
+            configuration.cloth.apply(launchArguments: arguments)
+            clothConfiguration = configuration.cloth
             roomObstacles = room
             let walls = room.filter { ZombieRoom.isWall($0) }
             if !walls.isEmpty {
@@ -170,8 +226,22 @@
             game = ZombieChaseGame(configuration: configuration)
             // The physics world (the layouts' boxes, the zombie's character
             // controller) has to be installed before the first simulated
-            // frame; the registry keeps the first backend for good.
-            if let physics = ZombiePhysics.install() {
+            // frame; the registry keeps the first backend for good. The
+            // world's step is the Mac's (three sub-steps at 60 Hz, Jolt's
+            // own thread count) unless `-collisionSteps <n>` stands in for
+            // the headset's two or `-workerThreads <n>` is measured.
+            var physicsConfiguration = ZombiePhysics.Configuration()
+            if let index = arguments.firstIndex(of: "-collisionSteps"), index + 1 < arguments.count,
+               let steps = Int32(arguments[index + 1]), steps > 0
+            {
+                physicsConfiguration.collisionSteps = steps
+            }
+            if let index = arguments.firstIndex(of: "-workerThreads"), index + 1 < arguments.count,
+               let threads = Int32(arguments[index + 1]), threads >= 0
+            {
+                physicsConfiguration.workerThreads = threads
+            }
+            if let physics = ZombiePhysics.install(configuration: physicsConfiguration) {
                 game.attachPhysics(physics)
             }
             configureEngine()
@@ -206,6 +276,11 @@
                let interval = Float(arguments[index + 1]), interval > 0
             {
                 throwInterval = interval
+            }
+            if let index = arguments.firstIndex(of: "-resetEvery"), index + 1 < arguments.count,
+               let interval = Float(arguments[index + 1]), interval > 0
+            {
+                resetInterval = interval
             }
             if arguments.contains("-play") {
                 gameMode = true
@@ -302,6 +377,15 @@
 
         func setTargetHeight(_ height: TargetHeight) {
             targetHeight = height
+        }
+
+        var clothChoice: ClothChoice { ClothChoice(clothConfiguration) }
+
+        /// The dropdown's cloth choice: the game swaps the shirt's
+        /// simulation on its thread.
+        func setClothChoice(_ choice: ClothChoice) {
+            clothConfiguration = choice.apply(to: clothConfiguration)
+            game.setCloth(clothConfiguration)
         }
 
         private func cycleTargetMode() {
@@ -438,6 +522,14 @@
                     game.throwBall(from: origin, toward: game.chestPosition, speed: throwCount % 2 == 1 ? 4 : 8)
                 }
             }
+            if resetInterval > 0, game.isReady {
+                resetClock += deltaTime
+                if resetClock >= resetInterval {
+                    resetClock = 0
+                    print("CoolZombie: scripted reset (\(String(describing: game.phase)))")
+                    reset()
+                }
+            }
             game.update(deltaTime: deltaTime, playerPosition: getPosition(entityId: target))
 
             // The tracking readouts ask the skeleton, which the entity lacks
@@ -446,6 +538,18 @@
             if debugLog, game.isReady {
                 debugClock += deltaTime
                 trackClock += deltaTime
+                clothClock += deltaTime
+                if clothClock >= 1, let cloth = game.cloth, cloth.isAttached {
+                    clothClock = 0
+                    print("CoolZombie: \(cloth.report)")
+                    // The wiring's own check: awake and in range, the shirt
+                    // is written every frame, so a count that stood still
+                    // for a second means the game stopped calling the cloth.
+                    if !cloth.isAsleep, !cloth.isBeyondRange, cloth.overrideWriteCount == clothWrites {
+                        print("CoolZombie: cloth WARNING: no override written in the last second while awake and in range")
+                    }
+                    clothWrites = cloth.overrideWriteCount
+                }
                 if trackClock >= 0.5, game.phase != .downed, let error = game.trackingError {
                     trackClock = 0
                     let arm = game.trackingErrors.filter { ["spine_03", "clavicle_l", "upperarm_l", "lowerarm_l", "hand_l"].contains($0.part) }
