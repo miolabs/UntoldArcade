@@ -69,7 +69,7 @@ clips loaded):
   seconds, so `swift run CoolZombie -layout wall -play -debugLog` shows in
   its console whether the zombie goes around the wall, and adding
   `-target behindWall` whether it ends up with its hands on it;
-  `-cloth off|skin|ragdoll` and `-clothIterations <n>` pick the shirt's
+  `-cloth off|skin|world|ragdoll` and `-clothIterations <n>` pick the shirt's
   simulation and `-collisionSteps <n>` / `-workerThreads <n>` the Jolt
   world's sub-steps and threads (see Physics; the Cloth dropdown switches
   the shirt's model live), `-resetEvery <seconds>` resets the zombie
@@ -181,9 +181,28 @@ four again (a vertex made by splitting a long edge inherits the groups of
 both ends) and every vertex, edge midpoint and face centre of both proxies
 is pushed to 2 mm off the body: a 40 mm chord over a thigh sags into the
 skin even when its ends stand off it (1072 edge and face middles lifted on
-the trousers before the decimation, more after). The shirt's skin weights
-are then graded across the seams between the bones' regions: the artist's
-automatic weights handed the shirt from the upper arm (0.98) to the spine
+the trousers before the decimation, more after). The shirt proxy then
+takes the **body's** weights, interpolated from the nearest skin face
+(`transfer_weights`, as the shoes take them): skinned by its own, the
+artist's automatic ones, its reference left the body as soon as the pose
+left the bind pose — arms raised forward and the spine flexed, the skinned
+proxy sat up to 43 mm inside the skin at the upper arms, 27 at the chest
+and 17 at the yoke, and the headset drew the skin over the shirt there
+(2026-10-31); skinned by the body's weights off the same joints, each
+particle's reference is the skin under it, 2 mm off, in every pose alike,
+and the back-stop below is the body's surface. They are not graded: the
+seam grading (`grade_weight_seams`, kept in the script for the record)
+blurred the weights across the bones' regions to keep the skinned edges
+from stretching, and blurred weights are not the skin's — graded, the
+chase pose put 20–41 % of the yoke's, chest's and upper arms' particles
+inside the body, the deepest 36 mm; ungraded, the body's weights leave 4 %
+of the armpit's a few millimetres in (12 mm at worst) and nothing else.
+The slack absorbs what the grading used to: the skinned edges at the
+armpit reach 2.4 times their rest length at the 99th percentile and 9.8 at
+worst in that pose (1.85 and 3.9 graded), and the cloth, which keeps its
+rest lengths, settles between its targets there within the armhole band's
+6 cm. The grading was written against the artist's weights: those
+handed the shirt from the upper arm (0.98) to the spine
 (0.73) across single centimetre edges at the armhole, and as sharply from
 spine_01 to spine_02 at the waist and from the upper arm to the forearm at
 the elbow, so skinned with the arms held forward the armhole edges
@@ -198,10 +217,13 @@ two hundred times more, since the arms-forward idle is what the grading is
 for: the farthest the cloth sits from its skinned target there was 16.3 cm
 with the artist's weights, 9.4 after the sixteen passes and 5.2 with the
 two hundred, measured when the shirt had 3 cm of slack everywhere and 5
-around the armhole; on the schedule below (the armhole band 6 cm) the
-band's farthest particle rests 6.7 cm from its target and the worst
-particle anywhere 2.7 cm past its slack (`ZombieClothTests` bounds them at
-7 and 4 cm; wider or deeper the blur the figure turns back up, 6.7 cm at
+around the armhole; on the schedule below the band's farthest particle
+rested 6.7 cm from its target graded, and rests 15.5 cm with the body's
+weights, which is why the band's slack is 15 cm now (`ZombieClothTests`
+holds the band within a centimetre of its slack and every particle within
+a centimetre and a half of its own — the cloth settles farther the looser
+the regions around it, and the slack is set where that settling has all
+but stopped; wider or deeper the blur the figure turned back up, 6.7 cm at
 300 passes over 11 cm under the old slack, and a band of 13 cm or more
 carries arm weight to within 20 cm of the pelvis, which `ZombieSkinTests`
 forbids). Then the traces under 3 % go (two per cent of the upper arm had
@@ -315,14 +337,21 @@ within 8 cm along the surface of the collar loop, 267 — and the cuffs —
 within 6 cm of the cuff loops, 128 — are hard skinned (0), so the folded
 collar follows the body as one thick piece and the rolled cuffs ride the
 forearm's animation without fighting the hand parts' tracking error; the
-yoke (the back and the shoulder tops within 12 cm below the collar band, not
-the chest; 345) is held to 1 cm, which is what the shirt hangs from; the
-chest has 8 cm (499), the back 10 (565), the hem band (the lowest 12 cm of
-the body panels, 430) 12; the sleeves 5 (895) and the armhole band 6 (781:
-within 6 cm of the seam between the sleeves and the body panel as the
-artist's weights draw it before the grading, two chains of 125 and 85 edges
-that meander from the shoulder down the flank, since the stretch the band is
-for happens where the weights hand over); the buttoned front keeps its 5 mm
+yoke (the back and the shoulder tops within 10 cm below the collar band, not
+the chest) is held to 7 cm, which keeps it on the shoulders the shirt
+hangs from (1 cm over 12 cm until 2026-10-31: with the arms forward the
+shoulder blades spread under the skin and the yoke's lateral edge sat
+4.4-6.3 cm from its targets, the figure moving with the slack around it,
+a fight on anything tighter; the collar band's pins are the anchor); the
+chest has 9 cm, the back 10, the hem band (the lowest 12 cm of the body
+panels) 12; the sleeves 11 (up to 10.7 cm off their targets under the
+raised arms) and the armhole band 15
+(within 10 cm of the seam between the sleeves and the body panel as the
+artist's weights draw it, read before the proxy takes the body's weights,
+since a tailor's seam is the garment's and the body's weights hand the
+deltoid's skin over up at the shoulder top; the 15 cm covers the armpit's
+stretch with the arms forward, 15.5 cm, all but a centimetre, where on 6 cm
+the clamp fought every pass by 5.5); the buttoned front keeps its 5 mm
 (85), where the buttons hold the panels to the chest. Distances along the
 surface are Dijkstra over the proxy's edges. The trousers keep their waist
 and its two-ring pinned (167), 2 cm at the hems, 3 cm elsewhere.
@@ -656,14 +685,26 @@ vertex two shell vertices reach goes to the nearer), the body is built at
 the bind pose and hard skinned onto the frame's pose before anything steps,
 and from then on Jolt keeps each particle within its slack of where the
 skin puts it — the schedule above: the collar band and the cuffs pinned,
-the yoke a centimetre, the chest 8, the back 10, the hem band 12, the
-sleeves 5, the armhole band 6, 5 mm down the buttoned front — and, in
+the yoke 7 cm, the chest 9, the back 10, the hem band 12, the
+sleeves 11, the armhole band 15, 5 mm down the buttoned front — and, in
 every solver iteration, no more than a millimetre behind it (the
 back-stop: the push-out left the proxy 2 mm off the body, which is kept
 under the shirt; Jolt applies the edge constraints after the stop, so they
 have the last word, and on the idle they leave the worst particle 3 mm
 behind its target at the cuff while it stays 3.4 mm off the body), while
-the triangles' stretch, shear and bend constraints make it cloth. The frame runs: the
+the triangles' stretch, shear and bend constraints make it cloth. Their
+compliances read against the particle's 50 mg: Jolt divides a violation
+by the two particles' inverse masses (20,000 1/kg each) plus the
+compliance over the solver step squared, so at the 1.4 ms solver step
+anything below about 1e-3 m/N is rigid — the first cook's 5e-4 bend made
+the shirt a stiff shell that folded in sharp plastic creases and, solved
+in two passes, jittered. The edges stay rigid (cloth's weight stretches it
+microns), the shear is 0.1 m/N and the bends 0.5 (a pass gives back a
+little under half of a shear violation and an eighth of a bend one, so the
+shirt drapes in folds broader than the proxy's triangles), and the solver
+runs four iterations — Jolt's small steps, a constraint pass each on a
+quarter of the sub-step — where two left every constraint fighting the
+next. The frame runs: the
 animation composes the pose; the physics step begins and the cloth's
 `willStep` hook feeds that pose's joints to the skin (the pose the body is
 drawn with); Jolt steps; the game update puts the ragdoll's pose on the
@@ -736,19 +777,28 @@ millimetre a frame (half that at 100 Hz), so the joint half of the sleep
 rule passes most frames; it is the particles, moving with the skin at
 0.2–0.5 m/s, that keep the cloth awake during it (see the measurements
 below).
-The cloth is on a collision layer of its own: the ragdoll's parts push it
-(one way, the cloth never pushes them), the balls dent it, the floor stops
-it, the controller walks through it (the pair is closed both ways), and the
-room's boxes meet it only while the body is down, like the ragdoll.
-`-cloth off|skin|ragdoll` picks the model on both hosts — off leaves the
+The cloth is on a collision layer of its own: the balls dent it, the floor
+stops it, the controller walks through it (the pair is closed both ways),
+the room's boxes meet it only while the body is down, like the ragdoll —
+and the ragdoll's parts do not meet it. The body the shirt collides with
+is its skin, through the back-stop: the proxy carries the body's own
+weights (below), so its reference is the skin in every pose. The capsules
+are a ragdoll's, not a body's — fitted to this body, the pelvis still
+stands 47 mm outside the skin, the lower spine 67 mm, the yoke 28 mm
+(measured on the rig, 2026-10-31) — and a shirt that met them was pushed
+out into a ridge at the waist and squeezed between them and the skin
+stop: the fold line and much of the jitter the headset showed. `-cloth
+off|skin|world|ragdoll` picks the model on both hosts — off leaves the
 shirt body-skinned, `skin` hangs it on its skin alone on a layer nothing
-meets (the A/B), `ragdoll` (the default) collides as above — and
-`-clothIterations <n>` sets the solver's iterations: two by default (the
-fit tests run at two), three for the A/B. The same choices switch live:
-the Mac's Cloth dropdown, and on the headset the control window's *Cloth*
-(Off / Skin only / Ragdoll and skin) and *Cloth quality* (1, 2 or 3
-iterations) pickers, each change taking the shirt off and putting it back
-on rebuilt (`ZombieChaseGame.setCloth`). Off returns the body to its own
+meets (what every collision costs and adds), `world` (the default)
+collides as above, `ragdoll` keeps the parts as colliders too (one way,
+on a layer of its own) for the A/B — and `-clothIterations <n>` sets the
+solver's iterations: four by default (the fit tests run at four), one to
+six for the A/B. The same choices switch live: the Mac's Cloth dropdown,
+and on the headset the control window's *Cloth* (Off / Skin only / World
+/ Ragdoll too) and *Cloth iterations* (1, 2, 3, 4 or 6) pickers, each
+change taking the shirt off and putting it back on rebuilt
+(`ZombieChaseGame.setCloth`). Off returns the body to its own
 vertex-shader skinning (`ZombieCloth.detach` removes the deformation
 component the attach added, `removeEntityDeformation`), so it is the
 launch's `-cloth off` and the footnote's frame line reads the compute
@@ -827,16 +877,14 @@ slack in every region (`ZombieClothTests` prints the figure per region for both 
 and holds the default to 5 mm; sized for the old mannequin, the spine
 capsules reached 7 cm through the back of this shirt and pushed the
 back's particles 5 cm past their slack, jittering against the skin). The
-shirt's weights are graded across its seams and the sidecar opens the
-slack to 6 cm around the armhole (Assets, above), for the arms-forward
-idle, where the artist's weights stretched the armhole edges twenty-fold
-in the skinning and the cloth, holding its rest lengths, sat 13-14 cm
+shirt carries the body's weights and the sidecar opens the slack to 15 cm
+around the armhole (Assets, above), for the arms-forward idle, where the
+skinning stretches the armhole edges (2.4 times at the 99th percentile,
+9.8 at worst) and the cloth, holding its rest lengths, sits up to 15.5 cm
 from its skinned target under each arm — the report's `target<=` figure,
-with where it sits; in that pose the armhole band's farthest particle is
-now 6.7 cm off its target on its 6 cm of slack and no particle more than
-2.7 cm past its slack (16.3 cm from the target with the artist's weights,
-9.4 with the seams graded over 16 passes alone, 5.2 with the two hundred
-on the old 3 cm of slack; `ZombieClothTests` pins them at 7 and 4 cm; the
+with where it sits; `ZombieClothTests` holds the band within a centimetre of its
+slack and every particle within a centimetre and a half of its own (the artist's weights had
+the band 16.3 cm off, the graded ones 6.7 on 6 cm with 2.7 cm of fight; the
 report's own figure in that pose is the hem band's 10.8 cm, a hanging
 particle on 12 cm of slack). The capsules play no
 part in it: on the skin alone, with no part in the world, the figure is

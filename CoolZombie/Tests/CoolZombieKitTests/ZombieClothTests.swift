@@ -11,12 +11,13 @@
 //  so the ragdoll and the skin share one bind pose) for the pose and the
 //  ragdoll, and a recording body for the override.
 //
-//  The skin-following tests run the cloth on the default model,
-//  `ragdollAndSkin`, with the powered ragdoll in the world: the rig's
-//  capsules are fitted to this body (ZombieRagdollRig.specs) and sit a
-//  particle's radius inside the shirt and the trousers, so they leave the
-//  resting shirt alone where the parts sit on the pose;
-//  `testTheCapsuleFitOnTheDefaultModel` measures both models per region
+//  The skin-following tests run the cloth with the powered ragdoll in
+//  the world under each model: the default, `skinAndWorld`, never meets
+//  the parts (the shirt's body is its skin), `ragdollAndSkin` does, for
+//  the A/B — the rig's capsules are fitted to this body
+//  (ZombieRagdollRig.specs), but stand centimetres outside the skin at
+//  the torso, which is why they are no longer the shirt's colliders;
+//  `testTheCapsuleFitOnTheDefaultModel` measures the models per region
 //  and holds the default to the slack. (Sized for the old mannequin, the
 //  spine capsules reached 7 cm through the back of this shirt and pushed
 //  the particles there 5 cm past their slack, jittering against the skin.)
@@ -446,6 +447,13 @@ final class ZombieClothTests: XCTestCase {
         return configuration
     }
 
+    /// The cloth meeting the ragdoll's parts too (the A/B model).
+    private var ragdollAndSkin: ZombieCloth.Configuration {
+        var configuration = ZombieCloth.Configuration()
+        configuration.collisionModel = .ragdollAndSkin
+        return configuration
+    }
+
     // MARK: - Binding and the override
 
     /// The override covers the shell's exported vertices — one per shell
@@ -586,7 +594,7 @@ final class ZombieClothTests: XCTestCase {
 
     /// The slack schedule hangs the shirt from its shoulders instead of
     /// pasting it on as a second skin: the collar band and the cuffs are
-    /// hard skinned, the yoke held to a centimetre, the chest 8 cm, the back
+    /// hard skinned, the yoke held to 7 cm, the chest 9 cm, the back
     /// 10, the hem band 12. After two seconds of gravity on the idle the
     /// chest and the back sag below their skinned targets by a centimetre
     /// or more somewhere, the sag grows down the shirt — the hem band's
@@ -635,7 +643,7 @@ final class ZombieClothTests: XCTestCase {
             sagCount[slack, default: 0] += 1
             if slack == 0 {
                 pins += 1; pinned = max(pinned, d)
-            } else if slack == 0.08 || slack == 0.10 {
+            } else if slack == 0.09 || slack == 0.10 {
                 chestBack += 1
                 excess = max(excess, d - slack)
                 if drop > sag { sag = drop; sagAt = h.shirt.positions[index] }
@@ -644,7 +652,7 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertGreaterThan(chestBack, 500, "the chest and the back were not found")
         XCTAssertGreaterThan(pins, 300, "the collar band and the cuffs were not found")
         func mean(_ slack: Float) -> Float { (sagSum[slack] ?? 0) / Float(max(sagCount[slack] ?? 1, 1)) }
-        let regions = [(Float(0.01), "yoke"), (0.06, "armhole"), (0.08, "chest"), (0.10, "back"), (0.12, "hem")]
+        let regions = [(Float(0.07), "yoke"), (0.15, "armhole"), (0.09, "chest"), (0.10, "back"), (0.12, "hem")]
         let means = regions.map { String(format: "%@ %.1f mm", $0.1, mean($0.0) * 1000) }.joined(separator: ", ")
         let worstInward = h.worstInward(), inward = worstInward.depth
         // The buttons and the bits: each island carried by its triangle's
@@ -692,8 +700,11 @@ final class ZombieClothTests: XCTestCase {
         }
         print(String(format: "cloth hang 2 s: chest and back sag up to %.4f m at rest (%.2f,%.2f,%.2f), mean sag by region %@, worst excess %+.4f m; %d pins within %.5f m; farthest behind the skin %.2f mm; %d rigid islands carried by their triangles within %.5f m; %@",
                      sag, sagAt.x, sagAt.y, sagAt.z, means, excess, pins, pinned, inward * 1000, islands, worstRigid, h.cloth.report))
-        XCTAssertGreaterThanOrEqual(sag, 0.01, "the chest and the back sag only \(sag) m: the shirt does not hang")
-        XCTAssertGreaterThan(mean(0.12), mean(0.01) + 0.005, "the hem band sags \(mean(0.12)) m on average against the yoke's \(mean(0.01)): the sag does not grow down the shirt")
+        // Solved to rest lengths (four iterations), the chest falls only as
+        // far as the fabric between it and the yoke allows, 9 mm; two
+        // under-converged iterations stretched it past a centimetre.
+        XCTAssertGreaterThanOrEqual(sag, 0.005, "the chest and the back sag only \(sag) m: the shirt does not hang")
+        XCTAssertGreaterThan(mean(0.12), mean(0.07) + 0.005, "the hem band sags \(mean(0.12)) m on average against the yoke's \(mean(0.07)): the sag does not grow down the shirt")
         XCTAssertLessThan(excess, 0.005, "a chest or back particle strayed \(excess) m past its slack")
         XCTAssertLessThan(pinned, 1e-3, "a collar or cuff particle is \(pinned) m off the skin")
         XCTAssertGreaterThan(clearance, 0.001, "particle \(clearanceAt) sits \(clearance) m from the surface under the shirt: into the skin")
@@ -837,7 +848,7 @@ final class ZombieClothTests: XCTestCase {
     /// spine capsules, which pushed the back 5 cm past its slack. The lag is
     /// printed with the figure.
     func testASwayingBodyKeepsTheShirtWithinItsSlack() throws {
-        for (label, configuration, lagBound) in [("skin only", skinOnly, false), ("ragdoll and skin", ZombieCloth.Configuration(), true)] {
+        for (label, configuration, lagBound) in [("skin only", skinOnly, false), ("world", ZombieCloth.Configuration(), false), ("ragdoll and skin", ragdollAndSkin, true)] {
             let h = try makeHarness(configuration: configuration)
             var worstFree: Float = -1, worstPins: Float = 0, worstLag: Float = 0
             var laggingPart = ""
@@ -1141,7 +1152,10 @@ final class ZombieClothTests: XCTestCase {
     /// has the fit) — so the rule as configured sleeps the shirt on its
     /// skin alone, out of range, or once the parts themselves sleep.
     func testTheSleepHoldsOverThePoweredRagdoll() throws {
-        var configuration = ZombieCloth.Configuration()
+        // On the model that meets the parts: the default never does, awake
+        // or asleep, so only this one can tell that the resting layer
+        // closes them out.
+        var configuration = ragdollAndSkin
         configuration.particleSpeedThreshold = .greatestFiniteMagnitude
         let h = try makeHarness(configuration: configuration)
         h.frames(250)
@@ -1450,7 +1464,7 @@ final class ZombieClothTests: XCTestCase {
                      joints.bindModelTransforms[hand].columns.3.x, joints.bindModelTransforms[hand].columns.3.y, joints.bindModelTransforms[hand].columns.3.z))
         XCTAssertGreaterThan(handRise, 0.1, "the idle holds the hands up by \(handRise) m")
         var farthest: [String: Float] = [:]
-        for (label, configuration) in [("skin only", skinOnly), ("ragdoll and skin", ZombieCloth.Configuration())] {
+        for (label, configuration) in [("skin only", skinOnly), ("world", ZombieCloth.Configuration()), ("ragdoll and skin", ragdollAndSkin)] {
             let h = try makeHarness(configuration: configuration, pose: pose)
             h.frames(200)
             let p = h.particles, t = h.targets
@@ -1458,7 +1472,7 @@ final class ZombieClothTests: XCTestCase {
             for index in p.indices {
                 let d = simd_distance(p[index], t[index])
                 if d > worst { worst = d; worstIndex = index }
-                if h.shirt.maxDistance[index] == 0.06, d > worstArmhole { worstArmhole = d; worstArmholeIndex = index }
+                if h.shirt.maxDistance[index] == 0.15, d > worstArmhole { worstArmhole = d; worstArmholeIndex = index }
             }
             let worstAt = h.shirt.positions[worstIndex], worstSlack = h.shirt.maxDistance[worstIndex], armholeAt = h.shirt.positions[worstArmholeIndex]
             // Where the worst particle's target lies against the ragdoll: inside
@@ -1474,13 +1488,31 @@ final class ZombieClothTests: XCTestCase {
             let s = min(max(simd_dot(t[worstIndex] - a, axis) / max(simd_length_squared(axis), 1e-9), 0), 1)
             let targetDepth = simd_distance(t[worstIndex], a + axis * s) - capsule.radius
             let excess = h.excess(), worstInward = h.worstInward(), inward = worstInward.depth, inwardAt = h.shirt.positions[worstInward.index]
+            // The particles farthest past their own slack, with the region's slack and
+            // where they sit on the shirt: what the schedule has to cover.
+            let beyond = p.indices.filter { h.shirt.maxDistance[$0] > 0 }.map { ($0, simd_distance(p[$0], t[$0]) - h.shirt.maxDistance[$0]) }
+                .sorted { $0.1 > $1.1 }.prefix(6)
+            print("cloth arms-forward idle, \(label): past their slack " + beyond.map { String(format: "%+.3f (slack %.3f at %.2f,%.2f,%.2f)", $0.1, h.shirt.maxDistance[$0.0], h.shirt.positions[$0.0].x, h.shirt.positions[$0.0].y, h.shirt.positions[$0.0].z) }.joined(separator: "; "))
             print(String(format: "cloth arms-forward idle, %@: hands rise %.2f m; farthest particle %.3f m from its target (slack %.3f) at rest (%.2f,%.2f,%.2f), its target %+.3f m from the %@ capsule's surface; armhole band farthest %.4f m at rest (%.2f,%.2f,%.2f); worst excess %.3f m, pins %.4f m, farthest behind the skin %.2f mm (slack %.3f, at rest (%.2f,%.2f,%.2f)); %@",
                          label, handRise, worst, worstSlack, worstAt.x, worstAt.y, worstAt.z, targetDepth, rig.partNames[nearest], worstArmhole, armholeAt.x, armholeAt.y, armholeAt.z, excess.free, excess.pins, inward * 1000,
                          h.shirt.maxDistance[worstInward.index], inwardAt.x, inwardAt.y, inwardAt.z, h.cloth.report))
             XCTAssertTrue(excess.finite)
             XCTAssertEqual(h.cloth.runawayCount, 0)
-            XCTAssertLessThan(worstArmhole, 0.07, "\(label): an armhole-band particle sits \(worstArmhole) m from its target in the arms-forward idle, at \(armholeAt) on the shirt")
-            XCTAssertLessThan(excess.free, 0.04, "\(label): a particle strayed \(excess.free) m past its slack in the arms-forward idle")
+            // The schedule covers the armpit's stretch all but a centimetre: a
+            // particle past its slack is one the clamp pulls back every pass
+            // while the edges pull it out — the fight the headset showed at
+            // 5.5 cm. The cloth settles farther the looser the region around
+            // it (the band's farthest particle went 11.5, 13.0, 14.0, 15.5 cm
+            // as the band widened and the sleeves and the yoke opened), so the
+            // slack is set where that settling has all but stopped, and the
+            // centimetre of touch left under the arm is below what shows.
+            XCTAssertLessThan(worstArmhole, 0.16, "\(label): an armhole-band particle sits \(worstArmhole) m from its target in the arms-forward idle, at \(armholeAt) on the shirt: the band's slack does not cover the stretch")
+            // The model that meets the parts is the A/B: the capsules stand outside the
+            // skin at the chest and push the buttoned front 5 cm off its 5 mm, which is
+            // the fight it is kept to show; the figure is printed above.
+            if label != "ragdoll and skin" {
+                XCTAssertLessThan(excess.free, 0.015, "\(label): a particle strayed \(excess.free) m past its slack in the arms-forward idle")
+            }
             XCTAssertLessThan(inward, 0.04, "\(label): a particle sits \(inward) m behind its skinned position in the arms-forward idle")
             farthest[label] = worstArmhole
         }
@@ -1524,8 +1556,8 @@ final class ZombieClothTests: XCTestCase {
         var configuration = defaults
         configuration.apply(launchArguments: [])
         XCTAssertTrue(configuration.enabled)
-        XCTAssertEqual(configuration.collisionModel, .ragdollAndSkin)
-        XCTAssertEqual(configuration.iterationsPerStep, 2, "the default is two iterations")
+        XCTAssertEqual(configuration.collisionModel, .skinAndWorld, "the default meets the world, not the ragdoll's parts")
+        XCTAssertEqual(configuration.iterationsPerStep, 4, "the default is four iterations")
         configuration.apply(launchArguments: ["-play", "-cloth", "off"])
         XCTAssertFalse(configuration.enabled)
         configuration = defaults
@@ -1536,13 +1568,15 @@ final class ZombieClothTests: XCTestCase {
         configuration.apply(launchArguments: ["-cloth", "ragdoll"])
         XCTAssertEqual(configuration.collisionModel, .ragdollAndSkin)
         XCTAssertEqual(configuration.iterationsPerStep, 3, "the model alone changed")
+        configuration.apply(launchArguments: ["-cloth", "world"])
+        XCTAssertEqual(configuration.collisionModel, .skinAndWorld)
         configuration = defaults
         configuration.apply(launchArguments: ["-cloth", "wool", "-clothIterations", "0"])
         XCTAssertTrue(configuration.enabled, "an unknown model changes nothing")
-        XCTAssertEqual(configuration.collisionModel, .ragdollAndSkin)
-        XCTAssertEqual(configuration.iterationsPerStep, 2, "zero iterations is not a count")
+        XCTAssertEqual(configuration.collisionModel, .skinAndWorld)
+        XCTAssertEqual(configuration.iterationsPerStep, 4, "zero iterations is not a count")
         configuration.apply(launchArguments: ["-clothIterations", "many", "-cloth"])
-        XCTAssertEqual(configuration.iterationsPerStep, 2, "nor is a word")
+        XCTAssertEqual(configuration.iterationsPerStep, 4, "nor is a word")
         XCTAssertTrue(configuration.enabled, "a flag with no value is ignored")
     }
 }

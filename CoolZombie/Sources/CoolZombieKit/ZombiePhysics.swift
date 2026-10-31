@@ -58,11 +58,19 @@ public final class ZombiePhysics: @unchecked Sendable {
         /// controller and the balls always meet them. The floor slab stays on
         /// layer 0, so the feet keep the floor either way.
         public var roomLayer: UInt32 = 4
-        /// The cloth (`ZombieCloth`): the shirt meets the floor, the balls
-        /// and the ragdoll's parts, never the character controller (it
-        /// walks through the shirt it wears), and the room only when the
-        /// body is down, like the ragdoll.
+        /// The cloth (`ZombieCloth`): the shirt meets the floor and the
+        /// balls, never the character controller (it walks through the
+        /// shirt it wears) nor the ragdoll's parts — the body it collides
+        /// with is its skin, through the back-stop; the capsules are a
+        /// ragdoll's and stand centimetres outside the skin at the torso,
+        /// so a shirt that met them was pushed into a ridge at the waist
+        /// (2026-10-31) — and the room only when the body is down, like the
+        /// ragdoll.
         public var clothLayer: UInt32 = 5
+        /// The cloth's under `ZombieCloth.Configuration.CollisionModel
+        /// .ragdollAndSkin`: as `clothLayer`, and the ragdoll's parts push
+        /// it too (one way). Kept for the A/B against the skin alone.
+        public var clothWithRagdollLayer: UInt32 = 8
         /// A layer nothing meets, in either direction: the cloth's when it
         /// is to collide with nothing at all and hang on its skin alone
         /// (`ZombieCloth.Configuration.CollisionModel.skinOnly`), and the
@@ -222,8 +230,8 @@ public final class ZombiePhysics: @unchecked Sendable {
         config.collisionLayerMatrix = Self.layerMatrix(
             characterLayer: configuration.characterLayer, ragdollLayer: configuration.ragdollLayer,
             ballLayer: configuration.ballLayer, roomLayer: configuration.roomLayer,
-            clothLayer: configuration.clothLayer, inertLayer: configuration.inertLayer,
-            restingClothLayer: configuration.restingClothLayer, ragdollMeetsRoom: isDown
+            clothLayer: configuration.clothLayer, clothWithRagdollLayer: configuration.clothWithRagdollLayer,
+            inertLayer: configuration.inertLayer, restingClothLayer: configuration.restingClothLayer, ragdollMeetsRoom: isDown
         )
         // The coordinator keeps the configuration and hands it to the
         // registry's backend; a backend built without the registry (the
@@ -236,14 +244,16 @@ public final class ZombiePhysics: @unchecked Sendable {
 
     /// The character never meets the ragdoll (the same body twice), the
     /// balls (the parts take those) nor the cloth (the controller walks
-    /// through the shirt the body wears); the ragdoll and the cloth meet
-    /// the room only when `ragdollMeetsRoom` (the body is down); the
-    /// resting cloth meets the balls and nothing else; the inert layer
-    /// meets nothing; everything else meets everything. The bridge opens a
-    /// pair when either side's mask says so, so a closed pair is cleared on
-    /// both sides.
+    /// through the shirt the body wears); the cloth never meets the
+    /// ragdoll's parts (its body is its skin), the cloth that is to meet
+    /// them does; the ragdoll and both cloths meet the room only when
+    /// `ragdollMeetsRoom` (the body is down); the resting cloth meets the
+    /// balls and nothing else; the inert layer meets nothing; everything
+    /// else meets everything. The bridge opens a pair when either side's
+    /// mask says so, so a closed pair is cleared on both sides.
     static func layerMatrix(characterLayer: UInt32, ragdollLayer: UInt32, ballLayer: UInt32, roomLayer: UInt32,
-                            clothLayer: UInt32, inertLayer: UInt32, restingClothLayer: UInt32, ragdollMeetsRoom: Bool) -> [UInt32]
+                            clothLayer: UInt32, clothWithRagdollLayer: UInt32, inertLayer: UInt32, restingClothLayer: UInt32,
+                            ragdollMeetsRoom: Bool) -> [UInt32]
     {
         var masks = Array(repeating: UInt32.max, count: 32)
         func close(_ a: UInt32, _ b: UInt32) {
@@ -253,9 +263,12 @@ public final class ZombiePhysics: @unchecked Sendable {
         close(characterLayer, ragdollLayer)
         close(characterLayer, ballLayer)
         close(characterLayer, clothLayer)
+        close(characterLayer, clothWithRagdollLayer)
+        close(ragdollLayer, clothLayer)
         if !ragdollMeetsRoom {
             close(ragdollLayer, roomLayer)
             close(clothLayer, roomLayer)
+            close(clothWithRagdollLayer, roomLayer)
         }
         for layer in UInt32(0) ..< 32 where layer != ballLayer { close(restingClothLayer, layer) }
         masks[Int(inertLayer)] = 0

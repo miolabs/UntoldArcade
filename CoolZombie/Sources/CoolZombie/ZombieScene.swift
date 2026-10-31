@@ -87,11 +87,11 @@
         }
 
         /// The shirt's simulation, switched live like the headset's picker:
-        /// off (body-skinned), on its skin alone, or colliding with the
-        /// parts, the balls and the floor. The iterations stay the launch
-        /// argument's (`-clothIterations`).
+        /// off (body-skinned), on its skin alone, meeting the world (the
+        /// balls and the floor; the default) or the ragdoll's parts too.
+        /// The iterations stay the launch argument's (`-clothIterations`).
         enum ClothChoice: String, CaseIterable, Identifiable {
-            case off, skinOnly, ragdollAndSkin
+            case off, skinOnly, skinAndWorld, ragdollAndSkin
 
             var id: String { rawValue }
 
@@ -99,19 +99,30 @@
                 switch self {
                 case .off: return "Off"
                 case .skinOnly: return "Skin only"
-                case .ragdollAndSkin: return "Ragdoll and skin"
+                case .skinAndWorld: return "World"
+                case .ragdollAndSkin: return "Ragdoll too"
                 }
             }
 
             init(_ configuration: ZombieCloth.Configuration) {
-                self = !configuration.enabled ? .off : (configuration.collisionModel == .skinOnly ? .skinOnly : .ragdollAndSkin)
+                guard configuration.enabled else { self = .off; return }
+                switch configuration.collisionModel {
+                case .skinOnly: self = .skinOnly
+                case .skinAndWorld: self = .skinAndWorld
+                case .ragdollAndSkin: self = .ragdollAndSkin
+                }
             }
 
             /// `configuration` with this choice applied.
             func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
                 var result = configuration
                 result.enabled = self != .off
-                if self != .off { result.collisionModel = self == .skinOnly ? .skinOnly : .ragdollAndSkin }
+                switch self {
+                case .off: break
+                case .skinOnly: result.collisionModel = .skinOnly
+                case .skinAndWorld: result.collisionModel = .skinAndWorld
+                case .ragdollAndSkin: result.collisionModel = .ragdollAndSkin
+                }
                 return result
             }
         }

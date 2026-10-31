@@ -175,13 +175,24 @@ public final class ZombieClothEntityBody: ZombieClothBody {
 /// `ZombiePhysics`.
 public final class ZombieCloth: @unchecked Sendable {
     public struct Configuration: Sendable {
-        /// What the cloth collides with. `ragdollAndSkin` puts it on the
-        /// cloth layer: the ragdoll's parts push it (one way), the balls
-        /// dent it, the floor and the fallen body's furniture stop it.
-        /// `skinOnly` puts it on a layer nothing meets: the skin's slack and
-        /// back-stop alone shape it — the A/B that tells what the collisions
-        /// cost and what they add.
+        /// What the cloth collides with, besides the skin it is skinned to
+        /// (the back-stop and the slack shape it in every model). The body
+        /// is the skin: the proxy carries the body's own weights, so its
+        /// reference sits 2 mm off the skin in every pose, and the back-stop
+        /// is the body's surface. `skinAndWorld` — the default — puts it on
+        /// the cloth layer: the balls dent it, the floor and the fallen
+        /// body's furniture stop it, and the ragdoll's parts are NOT
+        /// colliders: the capsules are a ragdoll's, not a body's — the
+        /// pelvis stands 47 mm outside the skin, the lower spine 67 mm, the
+        /// yoke 28 mm (measured 2026-10-31) — so a shirt that met them was
+        /// pushed out into a ridge at the waist and squeezed between them
+        /// and the skin stop, which was the fold line and much of the
+        /// jitter the headset showed. `ragdollAndSkin` keeps them as
+        /// colliders (one way), for the A/B. `skinOnly` puts it on a layer
+        /// nothing meets: the skin alone shapes it — what every collision
+        /// costs and adds.
         public enum CollisionModel: String, Sendable {
+            case skinAndWorld
             case ragdollAndSkin
             case skinOnly
         }
@@ -191,21 +202,35 @@ public final class ZombieCloth: @unchecked Sendable {
         /// The sidecar garments to simulate. The trousers are in the sidecar
         /// too and come in a later phase.
         public var garments: [String] = ["shirt"]
-        public var collisionModel: CollisionModel = .ragdollAndSkin
-        /// Jolt solver iterations per step (Jolt runs them inside each of
-        /// the world's sub-steps). Two keep the shirt within its slack at
-        /// the demo's cadence — the fit tests run at this default — and
-        /// are what the headset's frame affords; three for the Mac's A/B
-        /// (`-clothIterations 3`, the quality picker on the device).
-        public var iterationsPerStep: UInt32 = 2
+        public var collisionModel: CollisionModel = .skinAndWorld
+        /// Jolt solver iterations per step: Jolt divides each of the world's
+        /// sub-steps by this count and runs one constraint pass per piece
+        /// (small steps, not repeated passes), so four quarter the solver's
+        /// time step against two and settle the cloth where two left every
+        /// constraint fighting the next — the plastic, jittering shirt the
+        /// headset showed at two (2026-10-31). The fit tests run at this
+        /// default; the quality picker and `-clothIterations` go from one
+        /// to six for the A/B.
+        public var iterationsPerStep: UInt32 = 4
         /// Per particle, in kilograms: 50 mg makes the 4,000-particle shirt
         /// 0.2 kg.
         public var particleMass: Float = 0.00005
         /// Inverse stiffness of the edges, the shear and the (distance)
-        /// bends, in m/N.
+        /// bends, in m/N. Jolt's constraint divides a violation by the two
+        /// particles' inverse masses plus the compliance over the solver
+        /// step squared, so what a compliance means depends on the mass:
+        /// at 50 mg a particle (20,000 1/kg) and a 1.4 ms solver step
+        /// (5.5 ms sub-step, four iterations), anything below about 1e-3
+        /// is rigid — the first cook's 5e-4 bend made the shirt a stiff
+        /// shell that folded in sharp plastic creases. The edges stay
+        /// rigid, as cloth is (its weight stretches it microns); a shear
+        /// pass gives back a little under half of a violation and a bend
+        /// pass about an eighth, so the shirt folds and drapes, but on the
+        /// proxy's 1-4 cm triangles the folds stay broad rather than
+        /// crumpled.
         public var stretchCompliance: Float = 1e-6
-        public var shearCompliance: Float = 1e-5
-        public var bendCompliance: Float = 5e-4
+        public var shearCompliance: Float = 0.1
+        public var bendCompliance: Float = 0.5
         /// Collision radius of a particle.
         public var vertexRadius: Float = 0.01
         public var linearDamping: Float = 2.5
@@ -246,18 +271,20 @@ public final class ZombieCloth: @unchecked Sendable {
         public init() {}
 
         /// The hosts' launch arguments, the same on the Mac and the headset:
-        /// `-cloth off|skin|ragdoll` picks the model (off leaves the shirt
-        /// body-skinned, skin hangs it on the skin alone on a layer nothing
-        /// meets, ragdoll — the default — collides), `-clothIterations <n>`
-        /// the solver's iterations. Anything else stays as it was; an
-        /// unknown model is named once.
+        /// `-cloth off|skin|world|ragdoll` picks the model (off leaves the
+        /// shirt body-skinned, skin hangs it on the skin alone on a layer
+        /// nothing meets, world — the default — meets the balls, the floor
+        /// and the fallen body's furniture, ragdoll the parts too),
+        /// `-clothIterations <n>` the solver's iterations. Anything else
+        /// stays as it was; an unknown model is named once.
         public mutating func apply(launchArguments arguments: [String]) {
             if let index = arguments.firstIndex(of: "-cloth"), index + 1 < arguments.count {
                 switch arguments[index + 1] {
                 case "off": enabled = false
                 case "skin": collisionModel = .skinOnly
+                case "world": collisionModel = .skinAndWorld
                 case "ragdoll": collisionModel = .ragdollAndSkin
-                default: print("CoolZombie: unknown -cloth \(arguments[index + 1]); off, skin or ragdoll")
+                default: print("CoolZombie: unknown -cloth \(arguments[index + 1]); off, skin, world or ragdoll")
                 }
             }
             if let index = arguments.firstIndex(of: "-clothIterations"), index + 1 < arguments.count,
@@ -835,7 +862,7 @@ public final class ZombieCloth: @unchecked Sendable {
         )
         descriptor.bendType = .distance
         descriptor.position = origin
-        descriptor.layer = configuration.collisionModel == .skinOnly ? physics.configuration.inertLayer : physics.configuration.clothLayer
+        descriptor.layer = awakeLayer(physics)
         descriptor.iterations = configuration.iterationsPerStep
         descriptor.linearDamping = configuration.linearDamping
         descriptor.vertexRadius = configuration.vertexRadius
@@ -1165,7 +1192,7 @@ public final class ZombieCloth: @unchecked Sendable {
         if lodActive || configuration.collisionModel == .skinOnly {
             layer = physics.configuration.inertLayer
         } else {
-            layer = asleep ? physics.configuration.restingClothLayer : physics.configuration.clothLayer
+            layer = asleep ? physics.configuration.restingClothLayer : awakeLayer(physics)
         }
         if layer != bodyLayer {
             bodyLayer = layer
@@ -1176,6 +1203,17 @@ public final class ZombieCloth: @unchecked Sendable {
         }
         for garment in garments { physics.backend.setSoftBodyActive(garment.soft, !resting) }
         bodyPutToRest = resting
+    }
+
+    /// The layer the awake, in-range cloth is on under the configuration's
+    /// model: the cloth layer (the world, not the parts), the one that
+    /// meets the parts too, or the inert one.
+    private func awakeLayer(_ physics: ZombiePhysics) -> UInt32 {
+        switch configuration.collisionModel {
+        case .skinAndWorld: return physics.configuration.clothLayer
+        case .ragdollAndSkin: return physics.configuration.clothWithRagdollLayer
+        case .skinOnly: return physics.configuration.inertLayer
+        }
     }
 
     /// The fastest particle since the last read, from the positions alone

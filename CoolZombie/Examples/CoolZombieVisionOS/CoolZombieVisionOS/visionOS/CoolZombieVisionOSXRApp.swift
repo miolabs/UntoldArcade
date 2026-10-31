@@ -237,11 +237,13 @@ final class ZombieXRHolder: @unchecked Sendable {
     private var clothConfigurationStorage: ZombieCloth.Configuration = {
         var configuration = ZombieCloth.Configuration()
         configuration.apply(launchArguments: ProcessInfo.processInfo.arguments)
-        // The quality picker offers one to three iterations; a launch
+        // The iterations picker offers one to four and six; a launch
         // argument outside them would show as a choice the shirt is not
         // running (and one it could not pick again), so the device holds
-        // to the three.
-        configuration.iterationsPerStep = min(max(configuration.iterationsPerStep, 1), 3)
+        // to the offered counts.
+        if ClothQualityChoice(rawValue: configuration.iterationsPerStep) == nil {
+            configuration.iterationsPerStep = ClothQualityChoice.four.rawValue
+        }
         return configuration
     }()
 
@@ -352,29 +354,43 @@ enum PacingChoice: String, CaseIterable, Identifiable {
 enum ClothChoice: String, CaseIterable, Identifiable {
     case off = "Off"
     case skinOnly = "Skin only"
-    case ragdollAndSkin = "Ragdoll and skin"
+    case skinAndWorld = "World"
+    case ragdollAndSkin = "Ragdoll too"
     var id: String { rawValue }
 
     init(_ configuration: ZombieCloth.Configuration) {
-        self = !configuration.enabled ? .off : (configuration.collisionModel == .skinOnly ? .skinOnly : .ragdollAndSkin)
+        guard configuration.enabled else { self = .off; return }
+        switch configuration.collisionModel {
+        case .skinOnly: self = .skinOnly
+        case .skinAndWorld: self = .skinAndWorld
+        case .ragdollAndSkin: self = .ragdollAndSkin
+        }
     }
 
     func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
         var result = configuration
         result.enabled = self != .off
-        if self != .off { result.collisionModel = self == .skinOnly ? .skinOnly : .ragdollAndSkin }
+        switch self {
+        case .off: break
+        case .skinOnly: result.collisionModel = .skinOnly
+        case .skinAndWorld: result.collisionModel = .skinAndWorld
+        case .ragdollAndSkin: result.collisionModel = .ragdollAndSkin
+        }
         return result
     }
 }
 
+/// The solver's iterations: one to four and six (Jolt runs a pass per
+/// iteration on a sub-step divided by the count, so six is a 0.9 ms solver
+/// step on the device).
 enum ClothQualityChoice: UInt32, CaseIterable, Identifiable {
-    case one = 1, two, three
+    case one = 1, two, three, four, six = 6
     var id: UInt32 { rawValue }
-    var title: String { rawValue == 1 ? "1 iteration" : "\(rawValue) iterations" }
+    var title: String { "\(rawValue)" }
 
-    /// The holder keeps the count within the three.
+    /// The holder keeps the count among the offered.
     init(_ configuration: ZombieCloth.Configuration) {
-        self = ClothQualityChoice(rawValue: configuration.iterationsPerStep) ?? .two
+        self = ClothQualityChoice(rawValue: configuration.iterationsPerStep) ?? .four
     }
 }
 
@@ -574,11 +590,12 @@ struct CoolZombieVisionOSXRApp: App {
                     }
 
                     // The shirt: off (body-skinned), on its skin alone (no
-                    // collisions: what they cost), or colliding with the
-                    // parts, the balls and the floor; and the solver's
-                    // iterations. Each change takes the shirt off and puts
-                    // it back on rebuilt, so the footnote's cloth line can
-                    // be read against the frame line for each.
+                    // collisions: what they cost), meeting the world (the
+                    // balls and the floor; the default) or the ragdoll's
+                    // parts too (the A/B); and the solver's iterations. Each
+                    // change takes the shirt off and puts it back on
+                    // rebuilt, so the footnote's cloth line can be read
+                    // against the frame line for each.
                     VStack(spacing: 10) {
                         Picker("Cloth", selection: $cloth) {
                             ForEach(ClothChoice.allCases) { choice in
@@ -590,7 +607,7 @@ struct CoolZombieVisionOSXRApp: App {
                         .onChange(of: cloth) { _, choice in
                             ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
                         }
-                        Picker("Cloth quality", selection: $clothQuality) {
+                        Picker("Cloth iterations", selection: $clothQuality) {
                             ForEach(ClothQualityChoice.allCases) { choice in
                                 Text(choice.title).tag(choice)
                             }

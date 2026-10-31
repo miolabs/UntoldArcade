@@ -294,13 +294,13 @@ final class ZombieClothAssetTests: XCTestCase {
     /// shirt is buttoned and the prep sews its front, so its openings are the collar, the
     /// hem and the two cuffs: four loops; the trousers' are the waist and two hems:
     /// three. The shirt's slack is the schedule `testTheShirtSlackScheduleHangsItFromTheShoulders`
-    /// holds (the buttoned front 5 mm, the yoke 1 cm, the sleeves 5, the armhole band 6,
-    /// the chest 8, the back 10, the hem band 12); the trousers' hems 2 cm, the rest 3.
+    /// holds (the buttoned front 5 mm, the yoke 7 cm, the sleeves 11, the armhole band 15,
+    /// the chest 9, the back 10, the hem band 12); the trousers' hems 2 cm, the rest 3.
     func testTheProxiesAreOnePieceWithTheirOpeningsAndPins() throws {
         let cloth = try loadCloth()
         let shirt = try XCTUnwrap(cloth.garment(named: "shirt"))
         let trousers = try XCTUnwrap(cloth.garment(named: "trousers"))
-        for (g, expectedLoops, minPins, slacks) in [(shirt, 4, 300, [Float(0), 0.005, 0.01, 0.05, 0.06, 0.08, 0.10, 0.12]), (trousers, 3, 60, [0, 0.02, 0.03])] {
+        for (g, expectedLoops, minPins, slacks) in [(shirt, 4, 300, [Float(0), 0.005, 0.07, 0.09, 0.10, 0.11, 0.12, 0.15]), (trousers, 3, 60, [0, 0.02, 0.03])] {
             let e = edges(of: g.triangles)
             XCTAssertEqual(islandCount(particles: g.particles.count, edges: e.undirected), 1, "\(g.name) is not one piece")
             let loops = boundaryLoopCount(triangles: g.triangles, g.name)
@@ -336,14 +336,16 @@ final class ZombieClothAssetTests: XCTestCase {
     /// along the surface of the collar loop — and the cuffs — within 6 cm of the cuff
     /// loops — are hard skinned (0), so the folded collar follows the body as one thick
     /// piece and the rolled cuffs ride the forearm's animation without fighting the hand
-    /// parts' tracking error; the yoke (the back and the shoulder tops within 12 cm below
-    /// the collar band, not the chest) is held to 1 cm, which is what the shirt hangs
+    /// parts' tracking error; the yoke (the back and the shoulder tops within 10 cm below
+    /// the collar band, not the chest) is held to 7 cm, which keeps it on the shoulders
+    /// the shirt hangs
     /// from; the chest has 8 cm, the back 10, the hem band (the lowest 12 cm of the body
-    /// panels) 12, the sleeves 5, the armhole band (within 6 cm of the sleeve seam, where
-    /// the graded skin still stretches the edges most) 6; the buttoned front keeps its
-    /// 5 mm. The counts are the cook's (2026-10-31, with the hem strip sewn into the
-    /// proxy: 395 pins, 85 front, 345 yoke, 895 sleeve, 781 armhole, 499 chest, 565
-    /// back, 430 hem) held within a quarter, and each
+    /// panels) 12, the sleeves 11, the armhole band (within 10 cm of the sleeve seam) 15 —
+    /// the armpit, where the body's weights stretch the skinned edges most with the arms
+    /// forward and the slack has to cover what the cloth cannot follow; the buttoned
+    /// front keeps its 5 mm. The counts are the cook's (2026-10-31, the band 10 cm wide
+    /// and the yoke 10 cm deep: 395 pins, 85 front, 287 yoke, 735 sleeve, 1088 armhole,
+    /// 478 chest, 497 back, 430 hem) held within a quarter, and each
     /// region lies where its name says: engine x is Blender x, engine y the height,
     /// engine z minus Blender y (the body faces +z, the spine runs at z about -0.10).
     func testTheShirtSlackScheduleHangsItFromTheShoulders() throws {
@@ -353,8 +355,8 @@ final class ZombieClothAssetTests: XCTestCase {
         var histogram: [Float: Int] = [:]
         for d in shirt.maxDistance { histogram[d, default: 0] += 1 }
         print("CoolZombie cloth shirt slack histogram: " + histogram.sorted { $0.key < $1.key }.map { String(format: "%.3f: %d", $0.key, $0.value) }.joined(separator: ", "))
-        let expected: [(slack: Float, count: Int, name: String)] = [(0, 395, "collar band and cuffs"), (0.005, 85, "buttoned front"), (0.01, 345, "yoke"), (0.05, 895, "sleeves"),
-                                                                    (0.06, 781, "armhole band"), (0.08, 499, "chest"), (0.10, 565, "back"), (0.12, 430, "hem band")]
+        let expected: [(slack: Float, count: Int, name: String)] = [(0, 395, "collar band and cuffs"), (0.005, 85, "buttoned front"), (0.07, 287, "yoke"), (0.11, 735, "sleeves"),
+                                                                    (0.15, 1088, "armhole band"), (0.09, 478, "chest"), (0.10, 497, "back"), (0.12, 430, "hem band")]
         XCTAssertEqual(Set(histogram.keys), Set(expected.map(\.slack)), "the schedule's values")
         for region in expected {
             let count = histogram[region.slack] ?? 0
@@ -366,11 +368,11 @@ final class ZombieClothAssetTests: XCTestCase {
             switch slack {
             case 0: XCTAssertTrue(y > 1.34 || (abs(x) > 0.40 && y < 1.06), "a pin at (\(x), \(y), \(z)), neither collar nor cuff")
             case 0.005: XCTAssertTrue(abs(x) < 0.02 && z > -0.06 && y < 1.36, "a buttoned-front particle at (\(x), \(y), \(z))")
-            case 0.01: XCTAssertTrue(y > 1.36 && abs(x) < 0.23 && (z <= -0.10 + 1e-3 || y >= 1.40 - 1e-3), "a yoke particle at (\(x), \(y), \(z)): not the back nor a shoulder top")
-            case 0.05: XCTAssertTrue(abs(x) > 0.12 && y < 1.37, "a sleeve particle at (\(x), \(y), \(z))")
-            case 0.06: XCTAssertTrue(abs(x) < 0.29 && y > 1.17 && y < 1.44, "an armhole-band particle at (\(x), \(y), \(z))")
-            case 0.08: XCTAssertTrue(z > -0.10 - 1e-3 && abs(x) < 0.19 && y > 0.95 && y < 1.41, "a chest particle at (\(x), \(y), \(z))")
-            case 0.10: XCTAssertTrue(z <= -0.10 + 1e-3 && abs(x) < 0.19 && y > 0.94 && y < 1.40, "a back particle at (\(x), \(y), \(z))")
+            case 0.07: XCTAssertTrue(y > 1.36 && abs(x) < 0.23 && (z <= -0.10 + 1e-3 || y >= 1.40 - 1e-3), "a yoke particle at (\(x), \(y), \(z)): not the back nor a shoulder top")
+            case 0.11: XCTAssertTrue(abs(x) > 0.12 && y < 1.37, "a sleeve particle at (\(x), \(y), \(z))")
+            case 0.15: XCTAssertTrue(abs(x) < 0.31 && y > 1.14 && y < 1.45, "an armhole-band particle at (\(x), \(y), \(z))")
+            case 0.09: XCTAssertTrue(z > -0.10 - 1e-3 && abs(x) < 0.19 && y > 0.95 && y < 1.41, "a chest particle at (\(x), \(y), \(z))")
+            case 0.10: XCTAssertTrue(z <= -0.10 + 1e-3 && abs(x) < 0.19 && y > 0.94 && y < 1.42, "a back particle at (\(x), \(y), \(z))")
             case 0.12: XCTAssertTrue(y < 1.03 && abs(x) < 0.20, "a hem-band particle at (\(x), \(y), \(z))")
             default: XCTFail("slack \(slack) is not in the schedule")
             }
@@ -466,30 +468,21 @@ final class ZombieClothAssetTests: XCTestCase {
         }
     }
 
-    /// The shirt's skin weights are graded across the seams between bones' regions
-    /// (`grade_weight_seams` in the prep). The artist's automatic weights handed the shirt
-    /// from one bone to the next across single edges — upperarm 0.98 to spine_02 0.73 a
-    /// centimetre apart at the armhole, as sharply from spine_01 to spine_02 at the waist
-    /// — so skinned with the arms forward those edges stretched to twenty times their
-    /// length, and the cloth, keeping its rest lengths, sat 13 cm from its target under
-    /// each arm. Graded, the L1 distance between the weight vectors of an edge's two
-    /// particles stays under 0.8 on every edge of the shirt (it was 1.885 at the armhole,
-    /// 1.78 at the collar, 1.65 at the waist; the 16-pass blur over every seam and the
-    /// 200 more over the 12 cm around the armhole leave the worst edge at the waist, 0.675
-    /// from spine_02 to spine_01, and 9 edges over 0.5), and the armhole band — the
-    /// particles with the schedule's 6 cm — lies along the seam between the sleeves and
-    /// the body panel: every one of them within 15 cm of an edge whose particles are
-    /// dominated by an arm bone (an upper arm, a forearm) on one side and a body bone (a
-    /// spine link, the neck, the pelvis, a clavicle) on the other. The prep measures the
-    /// band from the artist's crisp seam before the grading, two chains of 125 and 85
-    /// edges that meander from the shoulder down the flank (the stretch the band is for
-    /// happens where the WEIGHTS hand over, not where a tailor's seam runs); graded, the
-    /// dominant bone flips back and forth across the blurred 12 cm and the seam between
-    /// dominants moves and zigzags, so 21 of the band's particles lie 10-13 cm from it
-    /// (2026-10-31), which is why the bound here is loose. The trousers keep the
-    /// artist's weights (they are not simulated yet); their jumps are printed for the
-    /// record.
-    func testTheShirtWeightsAreGradedAcrossTheSeamsAndTheArmholeBandLiesAlongTheSeam() throws {
+    /// The shirt proxy carries the BODY's skin weights, ungraded (`transfer_weights`
+    /// body to proxy in the prep, 2026-10-31): its skinned positions are the body the
+    /// cloth collides with, so they must be the skin's in every pose — graded, blurred
+    /// weights put 20-41 % of the yoke's, chest's and upper arms' particles inside the
+    /// body in the arms-forward chase pose, the deepest 36 mm; the body's own leave 4 %
+    /// of the armpit's a few millimetres in and nothing else. Ungraded, the weights
+    /// hand the sleeve to the arm across the armpit as sharply as the skin does (the
+    /// jumps are printed for the record; the armhole band's 15 cm of slack is what
+    /// absorbs the stretch), and the hand and finger weights the cuffs pick up at the
+    /// wrists are taken off (`unhand`), so the pinned cuffs ride the forearm alone. The
+    /// armhole band — the particles with the schedule's 15 cm — rings each sleeve where
+    /// the artist's weights draw the tailor's seam: two balanced rings at the shoulders,
+    /// at the heights and widths of the armholes. The trousers keep the artist's weights
+    /// (they are not simulated yet); their jumps are printed for the record.
+    func testTheShirtCarriesTheBodysWeightsAndTheArmholeBandRingsTheSleeves() throws {
         let cloth = try loadCloth()
         func jumps(_ g: ZombieClothAsset.Garment) -> [(jump: Float, a: Int, b: Int)] {
             var vectors = [[Float]](repeating: [Float](repeating: 0, count: g.jointPaths.count), count: g.particles.count)
@@ -508,44 +501,31 @@ final class ZombieClothAssetTests: XCTestCase {
             let p = g.positions
             let worst = sorted.prefix(5).map { String(format: "%.3f %@-%@ at (%.2f,%.2f,%.2f)", $0.jump, name(g, $0.a), name(g, $0.b), p[$0.a].x, p[$0.a].y, p[$0.a].z) }
             print("CoolZombie cloth \(g.name): weight jumps over 0.5 on \(sorted.filter { $0.jump > 0.5 }.count) of \(sorted.count) edges, over 0.3 on \(sorted.filter { $0.jump > 0.3 }.count); worst \(worst)")
-            if g.name == "shirt" {
-                XCTAssertLessThan(sorted[0].jump, 0.8, "the shirt's weights jump \(sorted[0].jump) across an edge: the seams are not graded")
-                XCTAssertLessThan(sorted.filter { $0.jump > 0.5 }.count, 20, "too many shirt edges jump over 0.5")
-            }
         }
 
         let shirt = try XCTUnwrap(cloth.garment(named: "shirt"))
-        let sleeve = ["upperarm_", "lowerarm_"], body = ["spine_", "neck_", "pelvis", "clavicle_"]
-        func side(_ particle: Int) -> Int {
-            let joint = name(shirt, particle)
-            if sleeve.contains(where: { joint.hasPrefix($0) }) { return 1 }
-            if body.contains(where: { joint.hasPrefix($0) }) { return -1 }
-            return 0
+        let hands = ["hand", "thumb", "index", "middle", "ring", "pinky"]
+        for path in shirt.jointPaths {
+            let joint = String(path.split(separator: "/").last ?? "").lowercased()
+            XCTAssertFalse(hands.contains { joint.hasPrefix($0) }, "the shirt is skinned to \(path): a hand or finger weight the cuffs picked up at the wrist")
         }
         let p = shirt.positions
-        let seam = edges(of: shirt.triangles).undirected.filter { side($0[0]) * side($0[1]) < 0 }
-        XCTAssertGreaterThan(seam.count, 50, "the sleeve seam was not found")
-        func distanceToSeam(_ q: SIMD3<Float>) -> Float {
-            var best = Float.greatestFiniteMagnitude
-            for e in seam {
-                let a = p[e[0]], ab = p[e[1]] - a
-                let t = min(max(simd_dot(q - a, ab) / max(simd_length_squared(ab), 1e-9), 0), 1)
-                best = min(best, simd_distance(q, a + ab * t))
-            }
-            return best
+        var left: [SIMD3<Float>] = [], right: [SIMD3<Float>] = []
+        for (i, slack) in shirt.maxDistance.enumerated() where slack == 0.15 {
+            if p[i].x < 0 { left.append(p[i]) } else { right.append(p[i]) }
         }
-        var banded = 0, stray = 0, beyondTen = 0, farthest: Float = 0, farthestAt = SIMD3<Float>.zero
-        for (i, slack) in shirt.maxDistance.enumerated() where slack == 0.06 {
-            banded += 1
-            let d = distanceToSeam(p[i])
-            if d > farthest { farthest = d; farthestAt = p[i] }
-            if d > 0.10 { beyondTen += 1 }
-            if d > 0.15 { stray += 1 }
-        }
-        print(String(format: "CoolZombie cloth shirt: %d sleeve seam edges between dominants, %d particles in the 6 cm armhole band, %d of them 10-15 cm from the seam, the farthest %.0f mm at (%.2f,%.2f,%.2f)",
-                     seam.count, banded, beyondTen, farthest * 1000, farthestAt.x, farthestAt.y, farthestAt.z))
+        let banded = left.count + right.count
+        print("CoolZombie cloth shirt: \(banded) particles in the armhole band, \(left.count) left and \(right.count) right")
         XCTAssertGreaterThan(banded, 500, "the armhole band is too small")
-        XCTAssertLessThan(banded, shirt.particles.count / 4, "the armhole band is a quarter of the shirt")
-        XCTAssertEqual(stray, 0, "\(stray) particles farther than 15 cm from the sleeve seam have the band's 6 cm")
+        XCTAssertLessThan(banded, shirt.particles.count * 3 / 10, "the armhole band is \(banded) of the shirt's \(shirt.particles.count) particles: more than three in ten")
+        XCTAssertLessThan(abs(left.count - right.count), banded / 8, "the band's two rings differ: \(left.count) left, \(right.count) right")
+        for (side, ring) in [("left", left), ("right", right)] {
+            let centroid = ring.reduce(SIMD3<Float>.zero, +) / Float(max(ring.count, 1))
+            XCTAssertTrue(abs(centroid.x) > 0.14 && abs(centroid.x) < 0.26, "the \(side) ring's centroid is at x \(centroid.x), not at a shoulder")
+            XCTAssertTrue(centroid.y > 1.22 && centroid.y < 1.40, "the \(side) ring's centroid is at height \(centroid.y), not at an armhole")
+            for q in ring {
+                XCTAssertTrue(q.y > 1.14 && q.y < 1.45 && abs(q.x) > 0.085 && abs(q.x) < 0.31, "a \(side) band particle at \(q) is off the armhole")
+            }
+        }
     }
 }
