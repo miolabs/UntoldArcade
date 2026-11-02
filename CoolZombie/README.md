@@ -352,7 +352,17 @@ since a tailor's seam is the garment's and the body's weights hand the
 deltoid's skin over up at the shoulder top; the 15 cm covers the armpit's
 stretch with the arms forward, 15.5 cm, all but a centimetre, where on 6 cm
 the clamp fought every pass by 5.5); the buttoned front keeps its 5 mm
-(85), where the buttons hold the panels to the chest. Distances along the
+(85), where the buttons hold the panels to the chest. Where the skin's
+hulls (below) stand under the fabric the slack is a soft ceiling, not a
+wall: Jolt applies the clamp toward the target and then the collision
+push out of the hull in every sub-step, so the hull has the last word,
+and in the arms-forward idle it holds the armpit's particles 10 mm past
+their slack (37.7 mm before the clavicles had hulls of their own;
+2026-11-02) — accepted, since the skin under a particle is where the
+fabric must not go and the slack only where it should not wander, and
+loosening the band for that centimetre would let the whole sleeve settle
+farther (`ZombieClothTests` bounds the excess at 15 mm and prints it).
+Distances along the
 surface are Dijkstra over the proxy's edges. The trousers keep their waist
 and its two-ring pinned (167), 2 cm at the hems, 3 cm elsewhere.
 `ZombieClothAsset.swift` decodes it; `ZombieClothAssetTests.swift` holds it
@@ -372,6 +382,82 @@ its name says; one piece per garment with its openings traced as closed
 boundary cycles — four for the shirt, three for the trousers — edges between
 8 and 40 mm, consistent winding, no hand in the weights, the bind matrices
 equal to the model's).
+
+The sidecar also carries the **skin's colliders** (`colliders`): per bone
+under the shirt — the pelvis, the three spine links, the neck, the two
+clavicles, the upper and the lower arms, eleven — a convex hull of the skin
+that bone moves most, its points in the joint's bind-pose frame in engine
+space, so the hull placed at the joint's world transform is the skin in
+every pose. The fit (`fit_skin_hulls`) keeps each hull on the safe side of
+a skin it cannot follow exactly: a hull is rigid on its bone while the skin
+is blended between bones, so a skin vertex shared with a neighbour is first
+pulled inward by what a 20 degree bend of the neighbour would move it (up
+to 3 cm — the first cook, inset a millimetre alone, stood 27 mm proud of
+the arms-forward chest and pushed the buttoned front 3.8 cm past its 5 mm
+slack, and had the clavicles' skin in the spine's hull, where it stayed
+behind while the shoulders swung); the points are voxel-downsampled to 48
+at most, the hull inset a millimetre, and then pushed in wherever a face
+comes within a particle's radius and half a millimetre (3.5 mm) of the
+resting shirt, since a convex hull bridges every hollow of its skin from
+outside and at the armpit the hollow is the shirt's — the upper arms'
+hulls stood 11 mm through the resting proxy there, and the shirt hung 3 mm
+lower at the back without gravity, pushed at the armpits. The cook of
+2026-11-02: 446 points over the eleven hulls (32-48 each), the hulls a
+millimetre to a few under the skin along the arms and 16-27 mm under it at
+the torso (the bend inset), the largest face protrusion through the skin
+10 mm at the trapezius hollow, every hull at least 3.5 mm under the
+resting shirt. They are there because the back-stop stands for the skin only where a
+particle sits near its skinned target: the stop is a plane a millimetre
+behind that target, and with the arms raised the skinned targets spread
+(the armhole edges 2.4 times at the 99th percentile) while the cloth keeps
+its rest lengths, so a particle sits up to 15 cm from its target and a stop
+placed at the target no longer stands for the arm under the particle — on
+the headset the sleeves and the shoulders sank into the skin in patches
+during the animations, fine at the T-pose (2026-10-31). The ragdoll's
+capsules cannot do this job: inscribed in the body, they are a centimetre
+thin at the arms and stand centimetres outside the skin at the torso.
+`ZombieCloth` puts each hull in the world as a kinematic body on the joint
+it names (`addKinematicConvexHull`), on a collision layer of its own
+(`skinColliderLayer`, 9) that only the awake cloth meets — never the
+resting cloth, since Jolt wakes a sleeping soft body for any awake body on
+a shared layer and a kinematic body that moves is awake, so the hulls would
+undo the sleep every step; never the character, the parts inside them, the
+balls or the room — and puts each on its joint every step: teleported
+there (`setKinematicTransform`) and then targeted there
+(`setKinematicTarget`, a move of nothing that leaves the body's velocity
+at nought), so the hull stands at this frame's pose for all of the step's
+collision steps, where the skin's targets stand (the feed is complete
+after the first soft-body update), whereas a hull moved as a kinematic
+target over the whole step trailed the skin by up to two thirds of the
+frame's joint motion and stood proud on the trailing side of a moving
+arm. The hulls are frictionless (`skinColliderFriction`, 0, not the
+cloth's 0.5): Jolt's soft body reads a collider's velocity only from a
+dynamic body, so a kinematic hull is a static wall to it — its move
+never carried the arm's velocity into the fabric, as the first version
+of this paragraph had it — and with friction its contact took the
+particle's tangential velocity in the world frame, braking a sleeve
+carried by its skinned target against the arm moving under it; the skin
+constraints carry the sleeve, the hulls only keep it out (found reading
+Jolt 5.6.0, 2026-11-02). A
+particle's collision radius against them is 3 mm (`vertexRadius`): the
+proxy sits 2 mm off the skin and the hull a millimetre inside it, so 3 mm
+keeps the fabric where the artist put it, where the centimetre of the first
+cooks would have floated the shirt 7 mm off the body. A collider whose
+joint the skeleton lacks is skipped and counted in one line; a sidecar
+without them (cooked before they existed) decodes, and the cloth runs on
+its back-stop alone; `-cloth skin` builds none, since that cloth meets
+nothing. The report prints `colliders=` with the count in the world.
+Measured in ZombieClothTests on the chase's arms-forward idle — the body
+skinned onto the pose, the particles more than 2 mm inside it — the
+back-stop alone leaves 163 particles inside (the armhole band 124, the
+sleeves 28, the yoke 11, the deepest 34.7 mm into the upper arm), and with
+the hulls 83 remain (sleeves 18, armhole band 65, the deepest 22.4 mm at
+the front of an armpit): what no hull rigid on its bone can follow, the
+armpits and the shoulder caps under 68 degrees of swing on blended skin,
+and the armpit's hollow in particular, which the upper arm's hull may not
+fill since at rest the shirt lies in it. The hang and the sway read none
+inside, on the skin alone or meeting the world, and two cuff particles
+3 mm inside over the ragdoll, pushed by the lagging forearm part.
 
 The script writes the rig `.blend` the retarget tools take as `BLEND` and
 exports through the Untold add-on:
@@ -630,9 +716,12 @@ the skin each part's bones move around the capsule's own line (1 cm bins
 along it, 15° sectors around it, the skin's reach in a bin its farthest
 vertex, so the teeth and eyes inside the head never count) and keeps the
 largest radius whose surface stays within that reach everywhere, to 3 mm,
-and a cloth particle's collision radius (1 cm) inside the shirt and the
-trousers proxies, their surfaces sampled 28 points a triangle — Jolt holds
-a particle that far off a capsule, so a capsule any closer pushes the
+and a centimetre inside the shirt and the trousers proxies, their
+surfaces sampled 28 points a triangle (`CAPSULE_GARMENT_MARGIN`: a cloth
+particle's collision radius when the capsules were the cloth's colliders;
+the radius is 3 mm now, against the skin's hulls, and the centimetre
+stays as the margin for the ragdoll A/B) — Jolt holds a particle its
+radius off a capsule, so a capsule any closer pushes the
 resting garment off its skin, and the parts hang a finger's width off
 their joints at rest (the forearm 1 cm, the hand 3 cm: the tracking
 motors' springs leave each joint a fraction of a degree to a degree and a
@@ -692,19 +781,31 @@ back-stop: the push-out left the proxy 2 mm off the body, which is kept
 under the shirt; Jolt applies the edge constraints after the stop, so they
 have the last word, and on the idle they leave the worst particle 3 mm
 behind its target at the cuff while it stays 3.4 mm off the body), while
-the triangles' stretch, shear and bend constraints make it cloth. Their
-compliances read against the particle's 50 mg: Jolt divides a violation
-by the two particles' inverse masses (20,000 1/kg each) plus the
-compliance over the solver step squared, so at the 1.4 ms solver step
-anything below about 1e-3 m/N is rigid — the first cook's 5e-4 bend made
-the shirt a stiff shell that folded in sharp plastic creases and, solved
-in two passes, jittered. The edges stay rigid (cloth's weight stretches it
-microns), the shear is 0.1 m/N and the bends 0.5 (a pass gives back a
-little under half of a shear violation and an eighth of a bend one, so the
-shirt drapes in folds broader than the proxy's triangles), and the solver
-runs four iterations — Jolt's small steps, a constraint pass each on a
-quarter of the sub-step — where two left every constraint fighting the
-next. The frame runs: the
+the triangles' stretch, shear and bend constraints make it cloth. A
+triangle mesh with rigid edges can only bend isometrically — that is
+paper, and the headset read the shirt as paper while its edges were held
+at 1e-6 m/N (2026-10-31); cloth needs a few percent of in-plane give to
+shear and drape. Jolt's compliance is physical: a constraint's equilibrium
+stretch is the force through it times its compliance, whatever the
+iteration count — the pass divides a violation by the two particles'
+inverse masses (20,000 1/kg each at 50 mg) plus the compliance over the
+solver step squared (1.4 ms: the 5.5 ms sub-step over four iterations),
+which sets how much of the violation one pass gives back, not where it
+settles. Under the shirt's own weight an edge carries about 0.05 N (the
+0.2 kg shirt's 2 N over the few dozen edges of a ring around the torso),
+so the edges' 1e-2 m/N stretches a 1.7 cm edge half a millimetre, 3
+percent; the shear at 2e-2 gives twice that across the diagonals; the
+bends at 0.3, a little stiffer than the 0.5 before (a pass gives back about
+a fifth of a bend violation, where it gave an eighth), keep the folds broad
+on the proxy's 1-4 cm triangles rather than crumpled — anything below
+about 1e-3 reads as rigid at this mass and step, and the first cook's 5e-4
+bend made the shirt a stiff shell that folded in sharp plastic creases
+and, solved in two passes, jittered. The particles' damping is 4 1/s (2.5
+before), standing in for the air's drag on the fabric, so the shirt moves
+slowly, swinging after the body rather than snapping with it; and the
+solver runs four iterations — Jolt's small steps, a constraint pass each
+on a quarter of the sub-step — where two left every constraint fighting
+the next. The frame runs: the
 animation composes the pose; the physics step begins and the cloth's
 `willStep` hook feeds that pose's joints to the skin (the pose the body is
 drawn with); Jolt steps; the game update puts the ragdoll's pose on the
@@ -778,11 +879,18 @@ rule passes most frames; it is the particles, moving with the skin at
 0.2–0.5 m/s, that keep the cloth awake during it (see the measurements
 below).
 The cloth is on a collision layer of its own: the balls dent it, the floor
-stops it, the controller walks through it (the pair is closed both ways),
-the room's boxes meet it only while the body is down, like the ragdoll —
-and the ragdoll's parts do not meet it. The body the shirt collides with
-is its skin, through the back-stop: the proxy carries the body's own
-weights (below), so its reference is the skin in every pose. The capsules
+stops it, its own skin's hulls (the sidecar's colliders, Assets above, on
+`skinColliderLayer`, moved with the joints every step) hold it off the
+body wherever it is, the controller walks through it (the pair is closed
+both ways), the room's boxes meet it only while the body is down, like the
+ragdoll — and the ragdoll's parts do not meet it. The body the shirt
+collides with is its skin, twice over: through the back-stop where a
+particle sits near its skinned target — the proxy carries the body's own
+weights (below), so its reference is the skin in every pose — and through
+the hulls where it does not, the sleeves over the raised arms. The hulls
+meet the two awake cloth layers and nothing else: not the resting cloth,
+which a moving kinematic body on a shared layer would wake every step,
+not the parts inside them, not the balls or the room. The capsules
 are a ragdoll's, not a body's — fitted to this body, the pelvis still
 stands 47 mm outside the skin, the lower spine 67 mm, the yoke 28 mm
 (measured on the rig, 2026-10-31) — and a shirt that met them was pushed
@@ -790,9 +898,14 @@ out into a ridge at the waist and squeezed between them and the skin
 stop: the fold line and much of the jitter the headset showed. `-cloth
 off|skin|world|ragdoll` picks the model on both hosts — off leaves the
 shirt body-skinned, `skin` hangs it on its skin alone on a layer nothing
-meets (what every collision costs and adds), `world` (the default)
-collides as above, `ragdoll` keeps the parts as colliders too (one way,
-on a layer of its own) for the A/B — and `-clothIterations <n>` sets the
+meets (what every collision costs and adds; no hulls are built), `world`
+(the default) collides as above, `ragdoll` keeps the parts as colliders
+too (one way, on a layer of its own) for the A/B — `-clothColliders off`
+leaves the skin's hulls out of any model, the back-stop alone (what the
+hulls cost and add: on the Mac's release build the Jolt step's median is
+3.4 ms with the eleven hulls against 1.7 ms without them, the same build,
+idle and chase alike, 2026-11-02) — and
+`-clothIterations <n>` sets the
 solver's iterations: four by default (the fit tests run at four), one to
 six for the A/B. The same choices switch live: the Mac's Cloth dropdown,
 and on the headset the control window's *Cloth* (Off / Skin only / World

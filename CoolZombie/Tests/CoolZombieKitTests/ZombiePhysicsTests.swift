@@ -86,13 +86,16 @@ final class ZombiePhysicsTests: XCTestCase {
         let ball = configuration.ballLayer, room = configuration.roomLayer
         let cloth = configuration.clothLayer, withRagdoll = configuration.clothWithRagdollLayer
         let inert = configuration.inertLayer, resting = configuration.restingClothLayer
+        let skin = configuration.skinColliderLayer
+        XCTAssertEqual(Set([0, character, ragdoll, ball, room, cloth, withRagdoll, inert, resting, skin]).count, 10, "every layer is its own")
         // The bridge opens a pair when either side's mask says so.
         func meet(_ a: UInt32, _ b: UInt32, in masks: [UInt32]) -> Bool {
             (masks[Int(a)] >> b) & 1 != 0 || (masks[Int(b)] >> a) & 1 != 0
         }
         let standing = ZombiePhysics.layerMatrix(
             characterLayer: character, ragdollLayer: ragdoll, ballLayer: ball, roomLayer: room,
-            clothLayer: cloth, clothWithRagdollLayer: withRagdoll, inertLayer: inert, restingClothLayer: resting, ragdollMeetsRoom: false
+            clothLayer: cloth, clothWithRagdollLayer: withRagdoll, inertLayer: inert, restingClothLayer: resting,
+            skinColliderLayer: skin, ragdollMeetsRoom: false
         )
         XCTAssertEqual(standing.count, 32)
         XCTAssertFalse(meet(ragdoll, room, in: standing), "a desk within reach cannot bend a tracked arm")
@@ -126,10 +129,20 @@ final class ZombiePhysicsTests: XCTestCase {
         for layer in UInt32(0) ..< 32 {
             XCTAssertEqual(meet(resting, layer, in: standing), layer == ball, "the resting cloth and layer \(layer)")
         }
+        // The skin's hulls (`ZombieCloth`'s kinematic colliders, moved with
+        // the joints every step): the two awake cloths meet them and
+        // nothing else does — not the resting cloth, which a moving
+        // kinematic body on a shared layer would wake every step and so
+        // undo the sleep, not the inert cloth, not the character, the
+        // parts inside them, the balls, the room or each other.
+        for layer in UInt32(0) ..< 32 {
+            XCTAssertEqual(meet(skin, layer, in: standing), layer == cloth || layer == withRagdoll, "the skin colliders and layer \(layer), standing")
+        }
 
         let down = ZombiePhysics.layerMatrix(
             characterLayer: character, ragdollLayer: ragdoll, ballLayer: ball, roomLayer: room,
-            clothLayer: cloth, clothWithRagdollLayer: withRagdoll, inertLayer: inert, restingClothLayer: resting, ragdollMeetsRoom: true
+            clothLayer: cloth, clothWithRagdollLayer: withRagdoll, inertLayer: inert, restingClothLayer: resting,
+            skinColliderLayer: skin, ragdollMeetsRoom: true
         )
         XCTAssertTrue(meet(ragdoll, room, in: down), "the fallen body lands on the furniture")
         XCTAssertTrue(meet(ragdoll, 0, in: down))
@@ -142,6 +155,11 @@ final class ZombiePhysicsTests: XCTestCase {
         XCTAssertFalse(meet(inert, cloth, in: down))
         XCTAssertFalse(meet(resting, ragdoll, in: down), "the resting shirt on a fallen body is still not woken by the parts")
         XCTAssertTrue(meet(resting, ball, in: down))
+        // Down or not, the hulls are the shirt's alone: the fallen shirt
+        // meets the furniture, the hulls under it never do.
+        for layer in UInt32(0) ..< 32 {
+            XCTAssertEqual(meet(skin, layer, in: down), layer == cloth || layer == withRagdoll, "the skin colliders and layer \(layer), down")
+        }
     }
 
     func testTheRoomIsOnItsLayerAndTheFloorOnTheFirst() {

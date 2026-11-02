@@ -110,10 +110,13 @@ public struct ZombieRagdollRig: Sendable {
     /// in 1 cm bins along the line and 15° sectors around it — the skin's
     /// reach in a bin is its farthest vertex, so the teeth and the eyes
     /// inside the head never count — and keeps the largest radius whose
-    /// surface stays within that reach everywhere (to 3 mm) and a cloth
-    /// particle's collision radius, 1 cm, inside the shirt and the trousers
-    /// proxies: Jolt holds a particle that far off a capsule, so a capsule
-    /// any closer pushes the resting garment off its skin, and the parts hang
+    /// surface stays within that reach everywhere (to 3 mm) and a centimetre
+    /// inside the shirt and the trousers proxies (the prep's
+    /// CAPSULE_GARMENT_MARGIN: a cloth particle's collision radius when the
+    /// capsules were the cloth's colliders — 3 mm now, against the skin's
+    /// hulls; the centimetre stays as the margin for the ragdoll A/B): Jolt
+    /// holds a particle its radius off a capsule, so a capsule any closer
+    /// pushes the resting garment off its skin, and the parts hang
     /// a finger's width off their joints at rest (the forearm 1 cm, the hand
     /// 3 cm, from the tracking motors' stiffness: ZombieClothTests pins
     /// them). The line runs along the

@@ -58,13 +58,32 @@ clip pipeline expect, the UE4-mannequin convention that `ZombieAA` had:
     frame, so the simulated triangles carry the shell rigidly (its normals the game
     reads off the exported mesh, one per exported copy, since the exporter splits a
     vertex on the artist's sharp edges, and carries in the same frame); a button or a
-    bit binds whole to the one triangle nearest its centre and stays rigid. The proxy
+    bit binds whole to the one triangle nearest its centre and stays rigid, and the
+    fabric within BUTTON_PATCH (10 mm) of a button's centre binds to the button's
+    triangle as well — the button, its two bits of thread and the fabric they sit on
+    one rigid patch, since bound each to its own nearest triangle they interpenetrated
+    on the headset (2026-10-31). The proxy
     itself is kept in the rig file as `Shirt_Proxy`, hidden and not exported: it lives
     in the sidecar only;
   * the ragdoll's twenty capsules fitted to this body and logged in the rig's syntax
-    (`fit_capsules`): inside the skin the part's bones move and a cloth particle's
-    collision radius (1 cm) inside the shirt and the trousers proxies, for
+    (`fit_capsules`): inside the skin the part's bones move and a centimetre inside the
+    shirt and the trousers proxies (CAPSULE_GARMENT_MARGIN: a cloth particle's collision
+    radius when the capsules were the cloth's colliders, kept for the ragdoll A/B), for
     ZombieRagdollRig.swift's table, which ZombieRagdollRigTests holds to the export;
+  * the cloth's SKIN COLLIDERS (`fit_skin_hulls`): for the pelvis, the three spine bones,
+    the neck, the clavicles and the upper and lower arms — eleven — the convex hull of
+    the skin whose heaviest bone is the collider's — the full body, before the skin
+    under the trousers goes — each point first pulled inward by what a 20 degree bend
+    of the other bones it carries weight for would move it (the hull is rigid, the skin
+    is blended), voxel-downsampled to at most 48 points, inset 1 mm and pushed in
+    wherever a face stands within a particle's radius of the resting shirt (the hollow
+    of the armpit, which the upper arm's hull bridged 11 mm through the proxy), in the
+    joint's bind frame, for the game to move with the joint as a kinematic hull on a
+    layer only the cloth meets. The back-stop stands for the skin only where a particle sits near
+    its target; with the arms raised the sleeves' particles sat up to 15 cm from theirs
+    and sank into the arm in patches (headset, 2026-10-31), and the ragdoll's capsules,
+    fitted inside the skin and a particle's radius under the garments, cannot stand for
+    it;
   * the belt loops of the new trousers join the shoes as rigid skin: they ride the waist;
   * the texture sets baked into one 2x2 atlas of TEX_SIZE tiles: face, body and the old
     clothes (the shoes) take three tiles as before; the fourth tile holds the shirt and
@@ -90,7 +109,9 @@ clip pipeline expect, the UE4-mannequin convention that `ZombieAA` had:
     2 cm, the rest 3), the back-stop depth, the dominant joint, the bind-pose joint
     matrices and, for the shirt, the render binding with the shell's rest positions; the
     game binds the shell's vertices (the trousers' particles) to the exported vertices by
-    position (the exporter splits vertices on UV seams, so one maps to several);
+    position (the exporter splits vertices on UV seams, so one maps to several); beside
+    the garments, the skin colliders (`colliders`: the joint's path, the shape `hull`
+    and its points in the joint's bind frame, flat);
   * everything else deleted and orphan data purged.
 
 Env: SRC (artist .blend), OUT_BLEND (prepped rig .blend, the BLEND for the retarget
@@ -105,6 +126,7 @@ Requires the Untold Engine Blender add-on (untold_exporter) installed.
 import bpy, bmesh, os, json, hashlib, heapq, math, shutil
 import numpy as np
 from mathutils import Vector, Matrix
+from mathutils.geometry import closest_point_on_tri
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 from pathlib import Path
@@ -1932,6 +1954,13 @@ def engine_point(p):
     return [round(q.x, 6), round(q.y, 6), round(q.z, 6)]
 
 
+def engine_matrix_column_major(m):
+    """A Blender world matrix as the engine's, sixteen column-major floats: the sidecar's
+    bind matrices (`garment_record`), whose frames the skin colliders' points are in."""
+    e = CONVERSION @ m @ CONVERSION.inverted()
+    return [round(e[r][c], 7) for c in range(4) for r in range(4)]
+
+
 # The ragdoll (ZombieRagdollRig.swift) is twenty capsules on the rig's joints. Their
 # sizes used to be the old mannequin's, and on this body the spine capsules reached
 # 7 cm through the back of the shirt, so with ragdoll collisions on the cloth sat past its
@@ -1952,11 +1981,17 @@ def engine_point(p):
 # the vertices alone put the surface 0.3-2.6 mm farther than it is — scanned by the
 # millimetre and verified on a denser sampling. A high percentile of the radial distances,
 # the first idea, pokes through the front and the back of every torso link: the torso is
-# an ellipse and a capsule is round. The garment margin is a cloth particle's collision
-# radius (ZombieCloth.Configuration.vertexRadius): Jolt holds a particle that far off a
-# capsule, so a capsule any closer under a garment pushes the cloth off its skin before the
-# part has moved at all — and the parts hang a finger's width off their joints at rest
-# (the forearm 1 cm, the hand 3 cm, under the tight sleeve and its cuff). The trousers are
+# an ellipse and a capsule is round. The garment margin, a centimetre, was a cloth
+# particle's collision radius when the capsules were the cloth's colliders: Jolt holds a
+# particle its radius off a capsule, so a capsule any closer under a garment pushes the
+# cloth off its skin before the part has moved at all — and the parts hang a finger's
+# width off their joints at rest (the forearm 1 cm, the hand 3 cm, under the tight sleeve
+# and its cuff). The radius is 3 mm now (ZombieCloth.Configuration.vertexRadius, since
+# the skin hulls below took the capsules' job, 2026-11-02; SKIN_HULL_GARMENT_MARGIN is
+# derived from it), and the centimetre stays as the capsules' margin for the ragdoll A/B
+# (`-cloth ragdoll`): 7 mm more conservative than the particle needs, and lowering it to
+# the hulls' margin would let the arm capsules grow — a re-cook worth making only if that
+# A/B is still wanted. The trousers are
 # not simulated yet, but they are in the sidecar and one configuration switch away, and a
 # thigh capsule fitted to the shirt alone sat 0.7 mm through them.
 CAPSULE_T_BIN = 0.01
@@ -2030,21 +2065,27 @@ def garment_surface(obj, n=GARMENT_SAMPLES_PER_EDGE):
     return np.concatenate([(a * i + b * j + c * (n - i - j)) / n for i in range(n + 1) for j in range(n + 1 - i)])
 
 
-def fit_capsules(body_objs, garment_objs, arm):
-    """Logs one fitted capsule per ragdoll part (see above) and returns them by name as
-    (from, to, radius) in engine space, the tips of the capsule. `garment_objs` are the
-    proxies the capsules must stay CAPSULE_GARMENT_MARGIN under, the shirt and the
-    trousers."""
-    heads = {b.name: np.array(engine_point(arm.matrix_world @ b.head_local)) for b in arm.data.bones}
+def skin_by_dominant(objs):
+    """Every skinned vertex of `objs` in engine space, with the name of its heaviest bone:
+    (points, dominants) as arrays. The part a bone moves is the skin it dominates."""
     points, dominants = [], []
-    for o in body_objs:
+    for o in objs:
         names = [g.name for g in o.vertex_groups]
         for v in o.data.vertices:
             best = max(((g.weight, g.group) for g in v.groups), default=None)
             if best is None:
                 continue
             points.append(engine_point(o.matrix_world @ v.co)); dominants.append(names[best[1]])
-    points = np.array(points); dominants = np.array(dominants, dtype=object)
+    return np.array(points), np.array(dominants, dtype=object)
+
+
+def fit_capsules(body_objs, garment_objs, arm):
+    """Logs one fitted capsule per ragdoll part (see above) and returns them by name as
+    (from, to, radius) in engine space, the tips of the capsule. `garment_objs` are the
+    proxies the capsules must stay CAPSULE_GARMENT_MARGIN under, the shirt and the
+    trousers."""
+    heads = {b.name: np.array(engine_point(arm.matrix_world @ b.head_local)) for b in arm.data.bones}
+    points, dominants = skin_by_dominant(body_objs)
     garments = [(o.name, garment_surface(o)) for o in garment_objs]
     # The rig's parts: joint, the joint the bone aims at (or continues from), how the
     # line is laid (along the bone, or through the skin's centroids for a limb), the
@@ -2162,6 +2203,256 @@ def fit_capsules(body_objs, garment_objs, arm):
 fit_capsules([body, shoes], [shirt, trousers], arm)
 
 
+# ---------------------------------------------------------------- skin colliders
+# The shirt's particles carry the body's weights, so each one's skinned target is the skin
+# 2 mm under it in every pose, and Jolt's back-stop holds a particle no more than BACKSTOP
+# behind its target along the target's normal. That stands for the skin only where the
+# particle sits near its target. With the arms raised the skinned targets spread (the
+# proxy's edges stretch 2.4x at the 99th percentile) while the particles keep their rest
+# lengths, so within the sleeves' and the armhole's slack (11 and 15 cm) a particle sits
+# up to 15 cm from its target, and a stop placed at a target that far off no longer
+# stands for the arm under the particle: on the headset (2026-10-31) the sleeves and the
+# shoulders sank into the arm in patches during the animations, fine at the T-pose. The
+# ragdoll's capsules cannot take over: they are fitted INSIDE the skin, a particle's
+# radius under the garments (fit_capsules), a centimetre thin at the arms and, a circle
+# inscribed in the torso's ellipse, centimetres inside its front and back. So the sidecar
+# carries colliders fitted to the SKIN: for each collider bone the convex hull of the body
+# vertices it moves most (its weight the heaviest), taken from the FULL body — before the
+# skin under the trousers and the shoes is culled below — in the joint's bind frame (the
+# very matrix the garments' bindJointWorldMatrices carry, inverted), for the game to move
+# with the joint every frame as a kinematic hull on a layer only the cloth meets
+# (JoltPhysicsBackend.addKinematicConvexHull takes a few dozen body-local points). The
+# skin points are voxel-downsampled first — one point per voxel, the one farthest from
+# the part's centroid, so the hull's vertices lie ON the skin and its faces sag inward
+# between them by the chord rather than the whole hull sitting at the voxels' means —
+# from SKIN_HULL_VOXEL, coarsened by SKIN_HULL_VOXEL_STEP until the hull has at most
+# SKIN_HULL_MAX_POINTS vertices, then inset SKIN_HULL_INSET along each vertex's normal so
+# that on a convex part the hull never stands proud of the skin. Every hull is verified
+# against the full body's surface: its faces are sampled on a lattice and the signed
+# distance to the skin measured (+ outside): a near-convex part's hull protrudes about a
+# millimetre at most, and the hulls bridge the concavities (the armpit under the upper
+# torso's, the crotch under the pelvis') from the outside, which is accepted.
+# A hull is rigid on its bone while the skin it was cut from is blended: a skin vertex
+# with weight w on the hull's bone and 1 - w on a neighbour moves, when the neighbour
+# bends by an angle t, about (1 - w) |p - J| sin t away from where the hull carries it
+# (J the neighbour's joint) — and that is where the first cook went wrong twice
+# (2026-10-31, measured in ZombieClothTests on the chase's arms-forward idle, where the
+# spine links bend 10-20 degrees each and the clavicles and the upper arms swing forward):
+# the clavicles' skin, folded into spine_03's hull, stayed with the spine while the
+# shoulders moved, so the shoulder caps had no hull under them and the armhole band sank
+# 25-35 mm into clavicle skin with the nearest hull vertex 24-58 mm away (136 particles
+# more than 2 mm inside the posed skin, 87 of them in clavicle skin); and the torso
+# hulls' blended vertices stood 27-28 mm proud of the posed chest (within a millimetre
+# at the bind pose), pushing the buttoned front 3.8 cm past its 5 mm slack. So the
+# clavicles are hulls of their own (eleven hulls), and before the hull each skin point is
+# pulled inward along its normal by that mismatch for a SKIN_HULL_BEND_ANGLE bend of every
+# OTHER bone it carries weight for (capped at SKIN_HULL_BEND_MAX): a point its own bone
+# carries alone keeps the millimetre, a point shared with a neighbour stands back from
+# the skin by what the neighbour's bend could move it. The hulls thin toward the joints
+# (where a near-target particle's back-stop is the skin anyway) and stay the skin along
+# the bones, where the sleeves need them.
+# Last, the garment margin, the rule the capsules obey (CAPSULE_GARMENT_MARGIN): a hull
+# must stay SKIN_HULL_GARMENT_MARGIN under the resting shirt — the particle's collision
+# radius (ZombieCloth.Configuration.vertexRadius, 3 mm) and half a millimetre — or it
+# pushes the fabric off the artist's placement before the body has moved. A convex hull
+# bridges every hollow of its skin from outside, and at the armpit the hollow is the
+# shirt's: the upper arms' hulls stood 11 mm through the resting proxy there and the
+# neck's 5 mm through the collar (measured on the sidecar, 2026-11-02), and in
+# ZombieClothTests the shirt hung 3.2 mm lower at the back WITHOUT gravity, pushed at the
+# armpits — where it had not moved at all before the hulls. So the proxy's surface is
+# sampled as for the capsules (garment_surface) and, round by round, every sample closer
+# than the margin moves the hull vertex nearest to it inward along that vertex's normal
+# by the deficit and the hull is rebuilt, until every sample clears: nothing moves on the
+# torso (12-26 mm clear), the vertices at the armpit end of an upper arm move in until
+# they fall inside the hull (48 -> 35-37 vertices), the collar end of the neck likewise.
+SKIN_HULL_GROUPS = (
+    ("pelvis", ["pelvis"]),
+    ("spine_01", ["spine_01"]),
+    ("spine_02", ["spine_02"]),
+    ("spine_03", ["spine_03"]),
+    ("neck_01", ["neck_01"]),
+    ("clavicle_l", ["clavicle_l"]), ("clavicle_r", ["clavicle_r"]),
+    ("upperarm_l", ["upperarm_l"]), ("upperarm_r", ["upperarm_r"]),
+    ("lowerarm_l", ["lowerarm_l"]), ("lowerarm_r", ["lowerarm_r"]),
+)
+SKIN_HULL_VOXEL = 0.015
+SKIN_HULL_VOXEL_STEP = 0.0025
+SKIN_HULL_MAX_POINTS = 48
+SKIN_HULL_INSET = 0.001
+SKIN_HULL_BEND_ANGLE = 20.0
+SKIN_HULL_BEND_MAX = 0.03
+SKIN_HULL_SAMPLES_PER_EDGE = 4
+SKIN_HULL_GARMENT_MARGIN = 0.0035
+SKIN_HULL_GARMENT_ROUNDS = 80
+
+
+def voxel_extremes(points, voxel):
+    """One point per occupied voxel of side `voxel`: of the voxel's points, the one
+    farthest from the whole set's centroid, so a hull of the result has its vertices on
+    the skin and not at the voxels' means inside it."""
+    d = np.linalg.norm(points - points.mean(axis=0), axis=1)
+    keys = np.floor(points / voxel).astype(np.int64)
+    rep = {}
+    for i, k in enumerate(map(tuple, keys)):
+        if k not in rep or d[i] > d[rep[k]]:
+            rep[k] = i
+    return points[sorted(rep.values())]
+
+
+def convex_hull(points):
+    """The convex hull of `points` (an N x 3 array) by bmesh, as its vertices, their
+    outward normals and its triangles (index arrays)."""
+    bm = bmesh.new()
+    verts = [bm.verts.new(Vector(p)) for p in points]
+    res = bmesh.ops.convex_hull(bm, input=verts, use_existing_faces=False)
+    # The interior and the unused sets overlap; bmesh refuses a vertex listed twice.
+    inside = list({g for g in res["geom_interior"] + res["geom_unused"] if isinstance(g, bmesh.types.BMVert)})
+    bmesh.ops.delete(bm, geom=inside, context="VERTS")
+    bmesh.ops.triangulate(bm, faces=bm.faces[:])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    bm.normal_update()
+    bm.verts.index_update()
+    centre = sum((v.co for v in bm.verts), Vector()) / len(bm.verts)
+    if any(not v.link_faces for v in bm.verts) or any((f.calc_center_median() - centre).dot(f.normal) <= 0 for f in bm.faces):
+        fail("convex hull: a loose vertex or an inward face")
+    V = np.array([v.co[:] for v in bm.verts]); N = np.array([v.normal[:] for v in bm.verts])
+    T = np.array([[v.index for v in f.verts] for f in bm.faces])
+    bm.free()
+    return V, N, T
+
+
+def hull_planes(V, T):
+    """The outward planes of a hull's faces (`convex_hull`'s): unit normals and offsets,
+    so that normal . p - offset is a point's signed distance to a face's plane and the
+    largest over the faces a lower bound of its distance to the hull (+ outside), exact
+    where a face is the nearest feature."""
+    a, b, c = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    n = np.cross(b - a, c - a)
+    n /= np.linalg.norm(n, axis=1)[:, None]
+    return n, (n * a).sum(axis=1)
+
+
+def skin_with_weights(obj):
+    """Every skinned vertex of `obj` in engine space — its position, its unit normal, the
+    name of its heaviest bone and every (bone, weight) it carries — for the skin hulls:
+    the heaviest bone picks the hull, the other weights size the bend inset."""
+    names = [g.name for g in obj.vertex_groups]
+    mw = obj.matrix_world
+    rot = mw.to_3x3().inverted().transposed()
+    conv = CONVERSION.to_3x3()
+    points, normals, dominants, weights = [], [], [], []
+    for v in obj.data.vertices:
+        groups = [(names[g.group], g.weight) for g in v.groups if g.weight > 0]
+        if not groups:
+            continue
+        points.append(engine_point(mw @ v.co))
+        normals.append(list(conv @ (rot @ v.normal).normalized()))
+        dominants.append(max(groups, key=lambda g: g[1])[0])
+        weights.append(groups)
+    return np.array(points), np.array(normals), np.array(dominants, dtype=object), weights
+
+
+def fit_skin_hulls(body_obj, garment_objs, arm):
+    """The cloth's skin colliders (see above): one convex hull per SKIN_HULL_GROUPS
+    entry, in the joint's bind frame, as the sidecar's "colliders" list — {"joint": the
+    joint path the garments' jointPaths use, "shape": "hull", "points": flat x y z
+    triples in engine space, joint-local}. `body_obj` must be the full body;
+    `garment_objs` the simulated proxies (the shirt) the hulls must stay
+    SKIN_HULL_GARMENT_MARGIN under. Each skin point is first pulled inward by the bend
+    inset (the comment above), then hulled, then the hull's vertices inset
+    SKIN_HULL_INSET, then pushed in wherever the garment comes closer than the margin.
+    Logs each hull, its insets, its fit against the skin and its clearance of the
+    garment."""
+    points, normals, dominants, weights = skin_with_weights(body_obj)
+    garment = np.concatenate([garment_surface(o) for o in garment_objs])
+    heads = {b.name: np.array(engine_point(arm.matrix_world @ b.head_local)) for b in arm.data.bones}
+    bend = math.sin(math.radians(SKIN_HULL_BEND_ANGLE))
+    tree = surface_tree([body_obj])
+    to_blender = CONVERSION.inverted()
+    n = SKIN_HULL_SAMPLES_PER_EDGE
+    colliders = []; worst = (-9.0, None)
+    for joint, groups in SKIN_HULL_GROUPS:
+        bone = arm.data.bones[joint]
+        bind = engine_matrix_column_major(arm.matrix_world @ bone.matrix_local)
+        M = Matrix([[bind[c * 4 + r] for c in range(4)] for r in range(4)])
+        to_local = M.inverted()
+        Mi = np.array(to_local)
+        garment_local = garment @ Mi[:3, :3].T + Mi[:3, 3]
+        chosen = np.flatnonzero(np.isin(dominants, groups))
+        if len(chosen) < 4:
+            fail("skin hull", joint, "has", len(chosen), "skin vertices")
+        # What a SKIN_HULL_BEND_ANGLE bend of each OTHER bone the point carries weight
+        # for would move it, summed: the point stands back from the skin by that much.
+        inset = np.array([min(SKIN_HULL_BEND_MAX, bend * sum(w * np.linalg.norm(points[i] - heads[name]) for name, w in weights[i] if name not in groups and name in heads))
+                          for i in chosen])
+        skin = points[chosen] - normals[chosen] * inset[:, None]
+        local = np.array([(to_local @ Vector(p))[:] for p in skin])
+        if np.abs(np.array([(M @ Vector(p))[:] for p in local[:64]]) - skin[:64]).max() > 1e-5:
+            fail("skin hull", joint, "does not round-trip through the sidecar's bind matrix")
+        voxel = SKIN_HULL_VOXEL
+        while True:
+            V, N, T = convex_hull(voxel_extremes(local, voxel))
+            if len(V) <= SKIN_HULL_MAX_POINTS:
+                break
+            voxel += SKIN_HULL_VOXEL_STEP
+        V = V - N * SKIN_HULL_INSET
+        # The garment margin (above). Only the garment's samples near the hull can come
+        # close; a deficit under a hundredth of a millimetre is the float's, not a face's.
+        near = garment_local[np.all((garment_local > V.min(axis=0) - 0.05) & (garment_local < V.max(axis=0) + 0.05), axis=1)]
+        clearance_before = None; clearance_after = None; pushes = 0; pushed_max = 0.0; before_count = len(V); rounds = 0
+        if len(near) == 0:
+            # No garment within 5 cm of the hull — a group far from every simulated garment
+            # (none today: the farthest of the eleven, the pelvis, has shirt samples 30 mm
+            # off) — has nothing to stay under: the push is skipped and the clearance is
+            # logged as such (an empty array's min() would raise instead).
+            garment_text = "no garment within 5 cm of the hull, margin not applied"
+        else:
+            for rounds in range(SKIN_HULL_GARMENT_ROUNDS + 1):
+                fn, fo = hull_planes(V, T)
+                clearance = (near @ fn.T - fo).max(axis=1)
+                if clearance_before is None:
+                    clearance_before = clearance.min()
+                bad = np.flatnonzero(clearance < SKIN_HULL_GARMENT_MARGIN - 1e-5)
+                if len(bad) == 0 or rounds == SKIN_HULL_GARMENT_ROUNDS:
+                    break
+                nearest = np.argmin(((near[bad][:, None, :] - V[None, :, :]) ** 2).sum(axis=2), axis=1)
+                deficit = np.zeros(len(V))
+                np.maximum.at(deficit, nearest, SKIN_HULL_GARMENT_MARGIN - clearance[bad])
+                pushes += int((deficit > 0).sum()); pushed_max = max(pushed_max, float(deficit.max()))
+                V, N, T = convex_hull(V - N * deficit[:, None])
+            clearance_after = clearance.min()
+            if clearance_after < SKIN_HULL_GARMENT_MARGIN - 0.001:
+                fail("skin hull", joint, "stands", round(float(SKIN_HULL_GARMENT_MARGIN - clearance_after) * 1000, 2), "mm within the garment margin after", rounds, "rounds")
+            garment_text = (f"garment clearance {clearance_before * 1000:+.1f} mm -> {clearance_after * 1000:+.1f} mm after {rounds} rounds, "
+                            f"{pushes} vertex pushes, the largest {pushed_max * 1000:.1f} mm")
+        a, b, c = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+        samples = np.concatenate([(a * i + b * j + c * (n - i - j)) / n for i in range(n + 1) for j in range(n + 1 - i)])
+        signed = np.empty(len(samples)); where = []
+        for i, p in enumerate(samples):
+            w = to_blender @ (M @ Vector(p))
+            loc, nrm, _, dist = tree.find_nearest(w)
+            signed[i] = dist if (w - loc).dot(nrm) >= 0 else -dist
+            where.append(engine_point(w))
+        k = int(np.argmax(signed))
+        if signed[k] > worst[0]:
+            worst = (signed[k], joint)
+        lo, hi = V.min(axis=0), V.max(axis=0)
+        log(f"skin hull {joint}: {len(skin)} skin vertices of {groups}, bend inset mean {inset.mean() * 1000:.1f} mm, max {inset.max() * 1000:.1f} mm "
+            f"({100 * (inset < 0.002).mean():.0f} % of the points under 2 mm), voxel {voxel * 1000:.1f} mm -> {len(V)} points, {len(T)} faces, "
+            f"extents (joint frame) x {lo[0]:+.3f}..{hi[0]:+.3f} y {lo[1]:+.3f}..{hi[1]:+.3f} z {lo[2]:+.3f}..{hi[2]:+.3f} m; "
+            f"against the skin over {len(samples)} face samples: max protrusion {signed[k] * 1000:+.1f} mm at {tuple(round(x, 3) for x in where[k])}, "
+            f"median depth {-np.median(signed) * 1000:.1f} mm, {100 * (signed > 0.001).mean():.0f} % of the samples more than 1 mm outside; "
+            f"{garment_text}, {before_count} -> {len(V)} vertices")
+        colliders.append({"joint": bone_path(bone), "shape": "hull",
+                          "points": [round(float(x), 6) for p in V for x in p]})
+    log(f"skin hulls: {len(colliders)} colliders, {sum(len(c['points']) // 3 for c in colliders)} points in all, "
+        f"the largest protrusion {worst[0] * 1000:+.1f} mm ({worst[1]})")
+    return colliders
+
+
+skin_hulls = fit_skin_hulls(body, [shirt], arm)
+
+
 # ---------------------------------------------------------------- UVs into the atlas
 # Eyes: the eye faces use the face textures; the cornea shell goes.
 cornea_slot = slot_index(eyes, "cornea")
@@ -2220,11 +2511,6 @@ log(f"body: {len(hidden)} faces under the trousers and the shoes removed, {len(b
 # join (the join keeps every vertex where it is), the triangles the proxy faces,
 # counter-clockwise seen from outside the garment (the faces point away from the body,
 # see orient_outward).
-def engine_matrix_column_major(m):
-    e = CONVERSION @ m @ CONVERSION.inverted()
-    return [round(e[r][c], 7) for c in range(4) for r in range(4)]
-
-
 def ring(bm, seeds, depth):
     """`seeds` plus the vertices within `depth` edges of them."""
     out = set(seeds); frontier = set(seeds)
@@ -2396,6 +2682,15 @@ PLACKET_HALF_WIDTH = 0.02
 PLACKET_FRONT_Y = 0.06
 
 
+# The buttons on the fabric: a button floating more than BUTTON_SEAT off it is seated on
+# it (seat_buttons), its bits of thread — the islands within BUTTON_BITS of its centre —
+# with it; and the fabric within BUTTON_PATCH of a button's centre binds to the button's
+# triangle (render_binding), a rigid patch under it.
+BUTTON_SEAT = 0.0005
+BUTTON_BITS = 0.012
+BUTTON_PATCH = 0.010
+
+
 def render_binding(shell, proxy):
     """The drawn shell's binding to the simulated proxy, at the bind pose, as the sidecar's
     "render" block (engine space where a position is stored; a frame coordinate is the
@@ -2417,7 +2712,15 @@ def render_binding(shell, proxy):
     the cloth on and the cloth off lit alike. The buttons and the bits of thread (every
     island but the largest) are rigid: all the vertices of one bind to the single
     triangle nearest the island's centre, so the island keeps its shape whatever the
-    cloth under it does. The vertices are written main island first, then each rigid
+    cloth under it does. The fabric under a button is rigid with it: on the headset
+    (2026-10-31) the buttons sat half inside the fabric, since the fabric under a button
+    followed its own nearest triangles while the button followed one, and the placket's
+    triangles tilt against each other within its 5 mm of slack; so the islands are
+    grouped by proximity (a button's two bits of thread sit within BUTTON_BITS of its
+    centre), every island of a group takes the largest's triangle, and every fabric
+    vertex within BUTTON_PATCH of any of the group's centres takes it too, bound at the
+    closest point on that triangle — button, thread and the fabric they sit on move as
+    one piece. The vertices are written main island first, then each rigid
     island whole, and `rigidIslands` gives each one's [first, count]; the rest positions
     are what the game binds to the exported vertices by position (the exporter splits
     vertices on UV seams and sharp edges, so one maps to several); the shell's
@@ -2455,6 +2758,44 @@ def render_binding(shell, proxy):
         centre = SV[order[start:start + count]].mean(axis=0)
         loc, _, index, _ = tree.find_nearest(Vector(centre))
         tri[start:start + count] = index; closest[start:start + count] = loc[:]
+    # The button patches (BUTTON_PATCH, above): islands within BUTTON_BITS of each other
+    # are one group; the group's smaller islands and the fabric within BUTTON_PATCH of
+    # any of its centres take the largest island's triangle, at the closest point on it,
+    # so bary and offset follow and the rebuild check below holds as before.
+    centres = [SV[order[s:s + c]].mean(axis=0) for s, c in rigid]
+    link = list(range(len(rigid)))
+
+    def group_of(i):
+        while link[i] != i:
+            link[i] = link[link[i]]; i = link[i]
+        return i
+
+    for i in range(len(rigid)):
+        for j in range(i + 1, len(rigid)):
+            if np.linalg.norm(centres[i] - centres[j]) < BUTTON_BITS:
+                link[group_of(i)] = group_of(j)
+    groups = {}
+    for i in range(len(rigid)):
+        groups.setdefault(group_of(i), []).append(i)
+    fabric = KDTree(main_count)
+    for k in range(main_count):
+        fabric.insert(Vector(SV[order[k]]), k)
+    fabric.balance()
+    patches = []
+    for members in groups.values():
+        lead = max(members, key=lambda i: rigid[i][1])
+        t = tri[rigid[lead][0]]
+        a, b, c = (Vector(PV[PT[t, i]]) for i in range(3))
+        for i in members:
+            if i != lead:
+                s, cnt = rigid[i]
+                tri[s:s + cnt] = t; closest[s:s + cnt] = closest_point_on_tri(Vector(centres[i]), a, b, c)[:]
+        hit = {k for i in members for _, k, _ in fabric.find_range(Vector(centres[i]), BUTTON_PATCH)}
+        for k in hit:
+            tri[k] = t; closest[k] = closest_point_on_tri(Vector(SV[order[k]]), a, b, c)[:]
+        s, cnt = rigid[lead]
+        reach = np.linalg.norm(SV[order[s:s + cnt]] - centres[lead], axis=1).max()
+        patches.append((cnt, len(members) - 1, len(hit), reach))
     A, B, C = PV[PT[tri, 0]], PV[PT[tri, 1]], PV[PT[tri, 2]]
     e1 = B - A; e1 /= np.linalg.norm(e1, axis=1)[:, None]
     nn = np.cross(e1, C - A); nn /= np.linalg.norm(nn, axis=1)[:, None]
@@ -2487,6 +2828,10 @@ def render_binding(shell, proxy):
         f"rebuilt from the rounded numbers within {position_error.max() * 1000:.4f} mm; "
         f"shell vertices farthest from the proxy: " + ", ".join(f"{distance[k] * 1000:.1f} mm at {tuple(round(float(c), 3) for c in X[k])}" for k in farthest)
         + f"; shell vertices below their triangle's lowest corner: {int((below > 0.002).sum())} by more than 2 mm, the lowest {below.max() * 1000:.1f} mm")
+    log(f"{shell.name} button patches (the fabric within {BUTTON_PATCH * 1000:.0f} mm of a button's centre on the button's triangle): "
+        f"{len(patches)} groups; per group [island vertices, bits, fabric vertices patched, the island's reach mm]: "
+        + ", ".join(f"[{cnt}, {bits}, {hit}, {reach * 1000:.1f}]" for cnt, bits, hit, reach in patches)
+        + f"; {sum(hit for _, _, hit, _ in patches)} fabric vertices patched in all")
     if position_error.max() > 5e-5:
         fail(shell.name, "the render binding does not rebuild the shell")
     return {
@@ -2584,10 +2929,6 @@ def trousers_slack(bm, loops):
 # BUTTON_BITS of its centre) move with it, so the thread stays wound. The seat keeps the
 # button clear of the 0.2 mm within which the game binds the shell to the exported mesh
 # (ZombieCloth.bindTolerance), so no fabric vertex is mistaken for a button's.
-BUTTON_SEAT = 0.0005
-BUTTON_BITS = 0.012
-
-
 def seat_buttons(shell, seat=BUTTON_SEAT, bits_within=BUTTON_BITS):
     """Moves every rigid island of `shell` that floats more than `seat` off the fabric
     (the largest island) onto it, each with the small islands around its centre; logs
@@ -2642,6 +2983,7 @@ seat_buttons(shirt_render)
 cloth = {
     "garments": [garment_record(shirt, "shirt", shirt_slack, render=render_binding(shirt_render, shirt)),
                  garment_record(trousers, "trousers", trousers_slack)],
+    "colliders": skin_hulls,
 }
 
 # ---------------------------------------------------------------- one object

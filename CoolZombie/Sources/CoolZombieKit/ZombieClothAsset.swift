@@ -21,8 +21,10 @@ import simd
 /// the shirt proxy is not in the export; the shell is, and every shell vertex is bound
 /// to a proxy triangle, carried rigidly in its frame. Positions are matched to the
 /// exported vertices by position in both cases: the exporter splits a vertex on UV
-/// seams and sharp edges, so one drives several. Pure data; the game turns it into a
-/// Jolt soft body and the engine's deformation override.
+/// seams and sharp edges, so one drives several. Beside the garments, the skin's
+/// colliders: a convex hull per bone of the skin that bone moves, which the game puts
+/// in the world as kinematic bodies on the joints. Pure data; the game turns it into a
+/// Jolt soft body, its colliders and the engine's deformation override.
 public struct ZombieClothAsset: Codable, Sendable, Equatable {
     /// The drawn shell's binding to its garment's proxy, at the bind pose. Every shell
     /// vertex names the proxy triangle nearest to it, the barycentric coordinates of the
@@ -132,7 +134,48 @@ public struct ZombieClothAsset: Codable, Sendable, Equatable {
         }
     }
 
+    /// One of the skin's colliders: the skin a bone moves, as a convex hull in that
+    /// bone's frame, for the cloth to collide with where the back-stop cannot stand for
+    /// the skin. The back-stop is a plane behind each particle's skinned position, so
+    /// it is the skin only where the particle sits near its target; with the arms
+    /// raised the skinned targets spread (the armhole edges 2.4 times at the 99th
+    /// percentile), a particle sits up to 15 cm from its target, and a stop placed at
+    /// the target no longer stands for the arm under the particle — the sleeve sank
+    /// into the arm in patches on the headset (2026-10-31). The hulls are the skin
+    /// itself, fitted by the prep to the vertices each bone moves most: a millimetre
+    /// inside it along the bone, and standing back by up to 3 cm toward the joints,
+    /// where the skin is blended between bones and a hull rigid on its own bone would
+    /// stand proud of the posed skin (the prep's bend inset: inset the millimetre
+    /// alone, the first cook's torso hulls stood 27 mm proud of the arms-forward
+    /// chest and pushed the buttoned front 3.8 cm past its 5 mm slack), and clear of
+    /// the resting shirt by a particle's radius (the prep's garment margin: a convex
+    /// hull fills the armpit's hollow, where the shirt lies, and filled it stood 11 mm
+    /// through the resting proxy and moved the shirt before the arm had). `ZombieCloth`
+    /// moves each with its joint every step on a layer only the awake cloth meets
+    /// (`ZombiePhysics.Configuration.skinColliderLayer`). The
+    /// ragdoll's capsules cannot do this: inscribed in the body, they are a centimetre
+    /// thin at the arms and stand centimetres outside the skin at the torso.
+    public struct Collider: Codable, Sendable, Equatable {
+        /// The skeleton joint the hull follows, as the engine names it
+        /// (`/root/pelvis/spine_01/spine_02/spine_03/clavicle_l/upperarm_l`).
+        public var joint: String
+        /// `hull`: the points are the vertices of a convex hull (Jolt builds the hull;
+        /// at least four, a few dozen at most).
+        public var shape: String
+        /// The hull's points in the joint's local frame at the bind pose, engine space,
+        /// three floats per point: a point's world position is the joint's world
+        /// transform applied to it, in every pose.
+        public var points: [Float]
+
+        public var pointVectors: [SIMD3<Float>] {
+            stride(from: 0, to: points.count - 2, by: 3).map { SIMD3(points[$0], points[$0 + 1], points[$0 + 2]) }
+        }
+    }
+
     public var garments: [Garment]
+    /// The skin's colliders, when the prep wrote them (a sidecar cooked before they
+    /// existed decodes without them, and the cloth then runs on its back-stop alone).
+    public var colliders: [Collider]?
 
     /// The garment of that name, if present.
     public func garment(named name: String) -> Garment? {

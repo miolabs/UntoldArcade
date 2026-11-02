@@ -124,7 +124,10 @@ public final class ZombieClothEntityBody: ZombieClothBody {
 /// a vertex on the artist's sharp edges into copies with their own
 /// normals), the proxy becomes a soft body whose particles Jolt keeps
 /// within their slack of where the skin puts them (and no more than a
-/// millimetre behind it: the back-stop, the body), and every frame the
+/// millimetre behind it: the back-stop, the body — and off the skin's
+/// hulls, the sidecar's colliders moved with the joints, where a particle
+/// far from its target has no stop that stands for the arm under it), and
+/// every frame the
 /// particles are read back, the triangles' frames rebuilt from them and
 /// the shell's vertices and normals evaluated from the binding
 /// (`RenderShell`) and written over the deformation pass's output — so the
@@ -181,16 +184,21 @@ public final class ZombieCloth: @unchecked Sendable {
         /// reference sits 2 mm off the skin in every pose, and the back-stop
         /// is the body's surface. `skinAndWorld` — the default — puts it on
         /// the cloth layer: the balls dent it, the floor and the fallen
-        /// body's furniture stop it, and the ragdoll's parts are NOT
+        /// body's furniture stop it, the skin's hulls
+        /// (`ZombieClothAsset.colliders`, on
+        /// `ZombiePhysics.Configuration.skinColliderLayer`, which opens to
+        /// this layer and `ragdollAndSkin`'s alone) hold it off the body
+        /// where the back-stop does not stand for it, and the ragdoll's parts
+        /// are NOT
         /// colliders: the capsules are a ragdoll's, not a body's — the
         /// pelvis stands 47 mm outside the skin, the lower spine 67 mm, the
         /// yoke 28 mm (measured 2026-10-31) — so a shirt that met them was
         /// pushed out into a ridge at the waist and squeezed between them
         /// and the skin stop, which was the fold line and much of the
         /// jitter the headset showed. `ragdollAndSkin` keeps them as
-        /// colliders (one way), for the A/B. `skinOnly` puts it on a layer
-        /// nothing meets: the skin alone shapes it — what every collision
-        /// costs and adds.
+        /// colliders (one way), for the A/B, with the hulls. `skinOnly` puts
+        /// it on a layer nothing meets, and builds no hulls: the skin alone
+        /// shapes it — what every collision costs and adds.
         public enum CollisionModel: String, Sendable {
             case skinAndWorld
             case ragdollAndSkin
@@ -216,28 +224,87 @@ public final class ZombieCloth: @unchecked Sendable {
         /// 0.2 kg.
         public var particleMass: Float = 0.00005
         /// Inverse stiffness of the edges, the shear and the (distance)
-        /// bends, in m/N. Jolt's constraint divides a violation by the two
-        /// particles' inverse masses plus the compliance over the solver
-        /// step squared, so what a compliance means depends on the mass:
-        /// at 50 mg a particle (20,000 1/kg) and a 1.4 ms solver step
-        /// (5.5 ms sub-step, four iterations), anything below about 1e-3
-        /// is rigid — the first cook's 5e-4 bend made the shirt a stiff
-        /// shell that folded in sharp plastic creases. The edges stay
-        /// rigid, as cloth is (its weight stretches it microns); a shear
-        /// pass gives back a little under half of a violation and a bend
-        /// pass about an eighth, so the shirt folds and drapes, but on the
-        /// proxy's 1-4 cm triangles the folds stay broad rather than
-        /// crumpled.
-        public var stretchCompliance: Float = 1e-6
-        public var shearCompliance: Float = 0.1
-        public var bendCompliance: Float = 0.5
-        /// Collision radius of a particle.
-        public var vertexRadius: Float = 0.01
-        public var linearDamping: Float = 2.5
+        /// bends, in m/N. A triangle mesh with rigid edges can only bend
+        /// isometrically — that is paper, and the headset read the shirt
+        /// as paper (2026-10-31, at 1e-6 on the edges); cloth needs a few
+        /// percent of in-plane give to shear and drape. Jolt's compliance
+        /// is physical: the constraint's equilibrium stretch is the force
+        /// through it times the compliance, whatever the iteration count
+        /// (the pass divides a violation by the two particles' inverse
+        /// masses, 20,000 1/kg each at 50 mg, plus the compliance over the
+        /// solver step squared — 1.4 ms: the 5.5 ms sub-step over four
+        /// iterations — which sets how much of the violation one pass
+        /// gives back, not where it settles). Under the shirt's own weight
+        /// an edge carries about 0.05 N (the 0.2 kg shirt's 2 N over the
+        /// few dozen edges of a ring around the torso), so 1e-2 m/N
+        /// stretches a 1.7 cm edge half a millimetre, 3 percent; the shear
+        /// at 2e-2 gives twice that across the diagonals; the bends at 0.3,
+        /// a little stiffer than the 0.5 before (a pass gives back about a
+        /// fifth of a bend violation, where it gave an eighth), keep the
+        /// folds broad on the proxy's 1-4 cm triangles rather than
+        /// crumpled. Anything below about 1e-3 reads as rigid at this mass
+        /// and step — the first cook's 5e-4 bend made the shirt a stiff
+        /// shell that folded in sharp plastic creases.
+        public var stretchCompliance: Float = 1e-2
+        public var shearCompliance: Float = 2e-2
+        public var bendCompliance: Float = 0.3
+        /// Collision radius of a particle, against the skin's hulls and
+        /// the world: the proxy sits 2 mm off the skin and a hull 1 mm
+        /// inside it, so 3 mm keeps the fabric where the artist put it —
+        /// the centimetre before the hulls would have floated the shirt
+        /// 7 mm off the body everywhere a hull is.
+        public var vertexRadius: Float = 0.003
+        /// Jolt's damping of the particles' velocity, 1/s, standing in for
+        /// the air's drag on the fabric: 4 (2.5 before) so the shirt moves
+        /// slowly, swinging after the body rather than snapping with it.
+        public var linearDamping: Float = 4
+        /// The skin's colliders (`ZombieClothAsset.Collider`): a kinematic
+        /// convex hull per bone — eleven: the pelvis, the three spine links,
+        /// the neck, the clavicles, the upper and the lower arms — fitted to
+        /// the skin that bone moves most, a millimetre inside it along the
+        /// bone, standing back toward the joints where the skin is blended
+        /// between bones (the prep's bend inset) and clear of the resting
+        /// shirt by a particle's radius, moved with its joint every step on
+        /// `ZombiePhysics.Configuration.skinColliderLayer`. The back-stop
+        /// stands for the skin only where the particle sits near its
+        /// target: with the arms raised the skinned targets spread and
+        /// particles sit up to 15 cm from them, a stop placed at the target
+        /// no longer stands for the arm under the particle, and the sleeve
+        /// sank into the arm in patches on the headset (2026-10-31). The
+        /// hulls are the skin under the particle wherever it is: in the
+        /// chase's arms-forward idle they take the particles more than 2 mm
+        /// inside the posed skin from 163 to 83 (ZombieClothTests,
+        /// 2026-11-03); what is left sits at the armpits and the shoulder
+        /// caps, where 68 degrees of swing on blended skin is more than a
+        /// hull rigid on its bone follows, and the armpit's hollow is the
+        /// shirt's, so no hull may fill it. Off, or
+        /// with a sidecar that has none, the back-stop alone is the body;
+        /// `skinOnly` builds none either, since nothing meets that cloth.
         /// Ceiling on a particle's speed, m/s: bounds what a yanked pin or a
         /// resolved overlap can put into the body.
         public var maxLinearVelocity: Float = 4
+        public var skinColliders = true
+        /// The cloth's friction against the world and the balls (Jolt
+        /// combines it with the other body's as the geometric mean).
         public var friction: Float = 0.5
+        /// The hulls' friction, nought — not the cloth's 0.5. Jolt's soft
+        /// body reads a collider's velocity only from a DYNAMIC body
+        /// (`SoftBodyMotionProperties::DetermineCollidingShapes`, Jolt
+        /// 5.6.0); a kinematic hull is "not movable" to it, and its contact
+        /// takes the particle's tangential velocity in the WORLD frame, up
+        /// to all of it when friction times the penetration over the
+        /// sub-step exceeds it
+        /// (`ApplyCollisionConstraintsAndUpdateVelocities`), so with the
+        /// cloth's 0.5 a sleeve particle carried by its skinned target at
+        /// 0.2-0.5 m/s was braked against a moving arm every sub-step it
+        /// touched the hull and the slack clamp had to drag it after the arm
+        /// (found 2026-11-02 reading Jolt; the first comments had the move
+        /// carrying the arm's velocity into the fabric, which it never did).
+        /// The skin constraints carry the sleeve; the hulls only keep it
+        /// out, and at nought the combined friction is nought. A friction
+        /// that moved with the arm would need a contact path in the Jolt
+        /// plugin that knows a kinematic body's velocity, not a number here.
+        public var skinColliderFriction: Float = 0
         /// The ragdoll's parts push the cloth and the cloth never pushes
         /// them back.
         public var oneWayAgainstRagdolls = true
@@ -291,6 +358,15 @@ public final class ZombieCloth: @unchecked Sendable {
                let iterations = UInt32(arguments[index + 1]), iterations > 0
             {
                 iterationsPerStep = iterations
+            }
+            // The skin's hulls, for the A/B of what they cost and add: on by
+            // default; `-clothColliders off` runs the back-stop alone.
+            if let index = arguments.firstIndex(of: "-clothColliders"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "on": skinColliders = true
+                case "off": skinColliders = false
+                default: print("CoolZombie: unknown -clothColliders \(arguments[index + 1]); on or off")
+                }
             }
         }
     }
@@ -535,6 +611,14 @@ public final class ZombieCloth: @unchecked Sendable {
         }
     }
 
+    /// One of the skin's colliders in the world (`ZombieClothAsset.Collider`):
+    /// a kinematic convex hull on the skeleton joint it follows.
+    private struct SkinCollider {
+        let body: JoltKinematicBody
+        /// The skeleton joint, an index into the model transforms.
+        let joint: Int
+    }
+
     /// The exported vertices hashed into millimetre cells, for the binding.
     private struct VertexGrid {
         private let cell: Float = 0.001
@@ -577,6 +661,9 @@ public final class ZombieCloth: @unchecked Sendable {
     private var physics: ZombiePhysics?
     private var jointInfo: SkeletonJointInfo?
     private var garments: [Garment] = []
+    /// The skin's hulls, moved with their joints every step while a
+    /// garment is attached (`moveSkinColliders`).
+    private var skinColliders: [SkinCollider] = []
     /// The mesh's own matrix on top of the entity's (identity for the
     /// zombie), folded into every model-to-world.
     private var localTransform = matrix_identity_float4x4
@@ -712,6 +799,7 @@ public final class ZombieCloth: @unchecked Sendable {
         self.body = body
         self.physics = physics
         self.jointInfo = jointInfo
+        addSkinColliders(body: body, physics: physics, jointInfo: jointInfo)
         // The hooks, over whatever was there: the skin feed inside the step,
         // the re-seat from the ragdoll.
         previousWillStep = physics.backend.willStep
@@ -888,6 +976,94 @@ public final class ZombieCloth: @unchecked Sendable {
         )
     }
 
+    /// The sidecar's skin colliders into the world, each a kinematic convex
+    /// hull at its joint's current world transform (the product `placeJoints`
+    /// uses; the bind pose when the body has no pose yet) on the skin
+    /// collider layer, frictionless (`skinColliderFriction`). Nothing is built when the
+    /// configuration says so, when the sidecar has none, or under `skinOnly`
+    /// (that cloth sits on the inert layer and meets nothing, so the hulls
+    /// would move for nothing). A collider whose joint the skeleton lacks,
+    /// or whose shape Jolt refuses (not a hull, fewer than four points), is
+    /// skipped; the skips are counted in one line.
+    private func addSkinColliders(body: any ZombieClothBody, physics: ZombiePhysics, jointInfo: SkeletonJointInfo) {
+        guard configuration.skinColliders, configuration.collisionModel != .skinOnly,
+              let colliders = asset.colliders, !colliders.isEmpty
+        else { return }
+        let model = body.jointModelTransforms() ?? jointInfo.bindModelTransforms
+        let meshToWorld = body.entityWorld() * localTransform
+        var missing: [String] = []
+        var refused = 0
+        for collider in colliders {
+            guard let joint = jointInfo.jointPaths.firstIndex(of: collider.joint), joint < model.count else {
+                missing.append(collider.joint)
+                continue
+            }
+            let frame = Self.frame(of: meshToWorld * model[joint])
+            guard collider.shape == "hull",
+                  let hull = physics.backend.addKinematicConvexHull(
+                      points: collider.pointVectors, position: frame.position, rotation: frame.rotation,
+                      friction: configuration.skinColliderFriction, layer: physics.configuration.skinColliderLayer
+                  )
+            else {
+                refused += 1
+                continue
+            }
+            skinColliders.append(SkinCollider(body: hull, joint: joint))
+        }
+        if !missing.isEmpty || refused > 0 {
+            var reasons: [String] = []
+            if !missing.isEmpty { reasons.append("the skeleton has no joint \(missing.joined(separator: ", "))") }
+            if refused > 0 { reasons.append("Jolt refused \(refused) (not a hull of four points or more)") }
+            print("CoolZombie: cloth: \(missing.count + refused) of \(colliders.count) skin colliders skipped: \(reasons.joined(separator: "; "))")
+        }
+    }
+
+    /// Every hull onto its joint for `model` (skeleton order) under
+    /// `meshToWorld`: put there at once (`setKinematicTransform`) and then
+    /// targeted there too (`setKinematicTarget`, a move of nothing over the
+    /// step, which sets the body's velocity to nought — a teleport alone
+    /// keeps the velocity of the last move, and the body would drift on
+    /// through the step). Not moved as a kinematic target over the step,
+    /// which the first version did on the idea that the move carried the
+    /// arm's velocity into the fabric: Jolt's soft body never reads a
+    /// kinematic collider's velocity (`skinColliderFriction`), and a target
+    /// is reached over the WHOLE step while the skin feed is complete after
+    /// the first of the three collision steps (the targets interpolate
+    /// previous to current over the first soft-body update's iterations
+    /// alone), so a targeted hull trailed the skin by up to two thirds of
+    /// the frame's joint motion — at the idle's 0.2-0.5 m/s and a 16.7 ms
+    /// frame, 5.6 mm behind in the first collision step — and a hull a
+    /// millimetre inside the skin stood proud on the trailing side of a
+    /// moving arm. Teleported, it stands at this frame's pose for all three
+    /// collision steps, where the skin's targets are; a hard skin needs
+    /// nothing more. Called every step the cloth is attached, asleep or out
+    /// of range as well: ten calls are nothing and the layer never meets a
+    /// resting cloth; and a step that cannot read the pose (no skeleton)
+    /// calls nothing, which is safe, since every move leaves the hull at
+    /// rest.
+    private func moveSkinColliders(model: [simd_float4x4], meshToWorld: simd_float4x4) {
+        guard let physics, !skinColliders.isEmpty else { return }
+        for collider in skinColliders where collider.joint < model.count {
+            let frame = Self.frame(of: meshToWorld * model[collider.joint])
+            physics.backend.setKinematicTransform(collider.body, position: frame.position, rotation: frame.rotation)
+            physics.backend.setKinematicTarget(collider.body, position: frame.position, rotation: frame.rotation)
+        }
+    }
+
+    /// A joint's world transform as a rigid frame for Jolt: its translation
+    /// and the rotation of its normalized axes (a scaled joint would
+    /// otherwise skew the quaternion).
+    private static func frame(of m: simd_float4x4) -> (position: SIMD3<Float>, rotation: simd_quatf) {
+        let rotation = simd_quatf(simd_float3x3(
+            columns: (
+                simd_normalize(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z)),
+                simd_normalize(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z)),
+                simd_normalize(SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
+            )
+        ))
+        return (SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z), simd_normalize(rotation))
+    }
+
     /// Removes the soft bodies, the hooks and the override, and returns the
     /// body to its own skinning: the inverse of `attach`, so a detached body
     /// is as it was before the cloth, vertex-shader skinned at that price
@@ -899,6 +1075,8 @@ public final class ZombieCloth: @unchecked Sendable {
         guard let physics else { return }
         for garment in garments { physics.backend.removeSoftBody(garment.soft) }
         garments = []
+        for collider in skinColliders { physics.backend.removeKinematicBody(collider.body) }
+        skinColliders = []
         physics.backend.willStep = previousWillStep
         physics.didReseat = previousDidReseat
         previousWillStep = nil
@@ -1004,7 +1182,9 @@ public final class ZombieCloth: @unchecked Sendable {
 
     private func hardSkinNow() {
         guard let body, let physics, let model = body.jointModelTransforms() else { return }
-        _ = placeJoints(model, meshToWorld: body.entityWorld() * localTransform)
+        let meshToWorld = body.entityWorld() * localTransform
+        _ = placeJoints(model, meshToWorld: meshToWorld)
+        moveSkinColliders(model: model, meshToWorld: meshToWorld)
         for garment in garments {
             physics.backend.skinSoftBody(garment.soft, jointWorldMatrices: garment.jointWorld, hardSkinAll: true)
             physics.backend.setSoftBodySkin(garment.soft, maxDistanceMultiplier: 0)
@@ -1030,6 +1210,9 @@ public final class ZombieCloth: @unchecked Sendable {
         }
         let world = body.entityWorld()
         if placeJoints(model, meshToWorld: world * localTransform) { jointsMoved = true }
+        // The hulls onto this frame's joints, whatever the cloth's state,
+        // where the skin's targets will stand for the step.
+        moveSkinColliders(model: model, meshToWorld: world * localTransform)
         if jointsMoved, asleep {
             asleep = false
             stillTime = 0
@@ -1312,8 +1495,8 @@ public final class ZombieCloth: @unchecked Sendable {
     // MARK: - Diagnostics
 
     /// One line on the simulation: the garments, their particles and pins
-    /// and the shell vertices they carry, the slack in force, the sleep and
-    /// range state, the microseconds of the skin feed, the read-back and,
+    /// and the shell vertices they carry, the skin's hulls in the world
+    /// (`colliders=`), the slack in force, the sleep and range state, the microseconds of the skin feed, the read-back and,
     /// of the read-back, the shell's evaluation (`bind=`), the step interval
     /// (`willStep`'s end
     /// to the game update's start: Jolt's step and the coordinator's
@@ -1352,8 +1535,8 @@ public final class ZombieCloth: @unchecked Sendable {
             farthest = String(format: "%.3fm@(%.2f,%.2f,%.2f)", worst, at.x, at.y, at.z)
         }
         return String(
-            format: "cloth %@: %d particles (%d pins)%@ mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d joltWakes=%d",
-            names, particles, pins, shellDescription, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
+            format: "cloth %@: %d particles (%d pins)%@ colliders=%d mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d joltWakes=%d",
+            names, particles, pins, shellDescription, skinColliders.count, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
             lastFrameJointMotion * 1000, hardSkinCount, runawayCount, overrideWriteCount, joltWakeCount
         )
     }
@@ -1399,6 +1582,10 @@ public final class ZombieCloth: @unchecked Sendable {
 
     /// The garments by name, for the tests and the report.
     public var garmentNames: [String] { garments.map(\.name) }
+
+    /// The skin's hulls in the world: the sidecar's colliders whose joints
+    /// the skeleton has, when the configuration builds them.
+    public var skinColliderCount: Int { skinColliders.count }
 
     /// The slack per particle of a garment, as built.
     func maxDistances(ofGarment index: Int) -> [Float] {

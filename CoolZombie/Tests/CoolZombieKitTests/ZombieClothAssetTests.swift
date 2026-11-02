@@ -528,4 +528,66 @@ final class ZombieClothAssetTests: XCTestCase {
             }
         }
     }
+
+    /// The skin's colliders (`colliders`, `fit_skin_hulls` in the prep, 2026-10-31): one
+    /// convex hull per bone under the shirt — the pelvis, the three spine links, the
+    /// neck, the two clavicles, the upper and the lower arms, eleven — of the body
+    /// vertices that bone moves most, in the bone's bind-pose frame, so `ZombieCloth`
+    /// can put each at its joint's world transform as a kinematic hull
+    /// (`addKinematicConvexHull`: a few dozen body-local points, four at least) and move
+    /// it with the joint; the joints are the shirt's own, by path, since the game looks
+    /// each up in the skeleton the shirt is skinned to. The clavicles are hulls of their
+    /// own: folded into spine_03's hull (the first cook, nine hulls) their skin stayed
+    /// with the spine while the shoulders swung forward, and the armhole band sank
+    /// 25-35 mm into clavicle skin with no hull under it. The hull's vertices are taken
+    /// from the skin — inset a millimetre along the bone, and pulled back by up to 3 cm
+    /// toward the joints by what a 20 degree bend of the OTHER bones a vertex carries
+    /// weight for would move it, since a hull rigid on its bone would otherwise stand
+    /// proud of the posed, blended skin (27 mm at the arms-forward chest in the first
+    /// cook, which pushed the buttoned front 3.8 cm past its 5 mm slack) — and then
+    /// pushed in wherever a face came within a particle's radius and half a millimetre
+    /// (3.5 mm) of the resting shirt proxy (the garment margin: a convex hull bridges
+    /// the armpit's hollow, where the shirt lies, and the upper arms' hulls stood 11 mm
+    /// through the resting proxy there and moved the shirt off the body before the arm
+    /// had). So through the shirt's bind matrices every hull vertex stands at least
+    /// 3 mm from every particle of the resting proxy (measured: the nearest 5.9 mm, a
+    /// lower arm's; against the skin itself the hulls still bridge the body's own
+    /// hollows from outside, by up to 10.1 mm at the trapezius under the neck and
+    /// 8.3 mm at the upper arms in the cook's own check, which is the back-stop's
+    /// business there). The voxel downsample keeps the hulls under the prep's cap of
+    /// 48 points and the garment push takes the armpit end of the upper arms and the
+    /// collar end of the neck down to 35-37: 32-48 points each, 446 in all.
+    func testTheSkinCollidersAreHullsOnTheShirtsJointsOffTheProxy() throws {
+        let cloth = try loadCloth()
+        let shirt = try XCTUnwrap(cloth.garment(named: "shirt"))
+        let colliders = try XCTUnwrap(cloth.colliders, "the sidecar carries no skin colliders")
+        func name(_ path: String) -> String { String(path.split(separator: "/").last ?? "") }
+        XCTAssertEqual(colliders.map { name($0.joint) }, ["pelvis", "spine_01", "spine_02", "spine_03", "neck_01", "clavicle_l", "clavicle_r", "upperarm_l", "upperarm_r", "lowerarm_l", "lowerarm_r"],
+                       "the hulls are not the eleven bones under the shirt")
+        let particles = shirt.positions
+        var nearest: Float = .greatestFiniteMagnitude, nearestHull = "", points = 0
+        for c in colliders {
+            XCTAssertEqual(c.shape, "hull", c.joint)
+            XCTAssertEqual(c.points.count % 3, 0, "\(c.joint): the points are not triples")
+            let v = c.pointVectors
+            points += v.count
+            XCTAssertTrue(v.count >= 4 && v.count <= 48, "\(c.joint): \(v.count) points; Jolt wants four at least, the prep caps at 48")
+            XCTAssertTrue(v.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(c.joint): a point is not finite")
+            let joint = try XCTUnwrap(shirt.jointPaths.firstIndex(of: c.joint), "\(c.joint) is not one of the shirt's joints")
+            let bind = shirt.bindMatrices[joint]
+            let model = v.map { q -> SIMD3<Float> in let w = bind * SIMD4(q, 1); return SIMD3(w.x, w.y, w.z) }
+            let low = model.reduce(SIMD3<Float>(repeating: .greatestFiniteMagnitude), simd_min), high = model.reduce(SIMD3<Float>(repeating: -.greatestFiniteMagnitude), simd_max)
+            // A hull spans a limb or a torso band — several centimetres each way — and
+            // stands within the body's bounds (the pelvis reaches under the trousers).
+            XCTAssertTrue(simd_reduce_min(high - low) > 0.05, "\(c.joint): the hull spans only \(high - low) m")
+            XCTAssertTrue(low.y > 0.6 && high.y < 1.7 && abs(low.x) < 0.5 && abs(high.x) < 0.5, "\(c.joint): the hull is off the body, \(low)...\(high)")
+            for q in model {
+                var d: Float = .greatestFiniteMagnitude
+                for p in particles { d = min(d, simd_distance(p, q)) }
+                if d < nearest { nearest = d; nearestHull = name(c.joint) }
+            }
+        }
+        print(String(format: "CoolZombie cloth skin colliders: %d hulls, %d points in all; the hull vertex nearest a resting particle is %.1f mm from it (%@)", colliders.count, points, nearest * 1000, nearestHull))
+        XCTAssertGreaterThanOrEqual(nearest, 0.003, "a vertex of the \(nearestHull) hull is \(nearest) m from a resting particle: not under the proxy")
+    }
 }
