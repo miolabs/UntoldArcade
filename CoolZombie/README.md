@@ -334,9 +334,20 @@ The shirt's slack is a **schedule** (`shirt_slack`), since a shirt hangs
 from its shoulders and the headset showed one 3 cm everywhere as a second
 skin: the collar band — the collar, its stand and its points, every particle
 within 8 cm along the surface of the collar loop, 267 — and the cuffs —
-within 6 cm of the cuff loops, 128 — are hard skinned (0), so the folded
-collar follows the body as one thick piece and the rolled cuffs ride the
-forearm's animation without fighting the hand parts' tracking error; the
+the whole rolled cuff, every particle within 6 cm up the forearm's axis of
+the cuff loop's plane and within 10 cm of the axis, both layers of the
+roll — are hard skinned (0), so the folded collar follows the body as one
+thick piece and the rolled cuffs ride the forearm's animation without
+fighting the hand parts' tracking error, and the wrist band above the
+cuffs (the next 3 cm up the axis) is held to 3 cm, the step to the
+sleeve's 11. Until 2026-11-03 the cuffs were measured along the surface
+from the cuff loop, and a rolled cuff is two layers: the roll's outer
+layer was pinned and the sleeve's end under it was not (over the roll and
+back is 8 cm), so at one height a third of the particles were pinned
+beside free ones with 11 cm, 36 triangles had a pinned corner and a free
+one, and when the forearm swung those triangles sheared and the drawn
+shirt bound to them tore into flat shards around the wrist (headset,
+2026-11-03); the
 yoke (the back and the shoulder tops within 10 cm below the collar band, not
 the chest) is held to 7 cm, which keeps it on the shoulders the shirt
 hangs from (1 cm over 12 cm until 2026-10-31: with the arms forward the

@@ -470,7 +470,7 @@ final class ZombieClothTests: XCTestCase {
     /// The schedule's regions by their slack (ZombieClothAssetTests holds the
     /// values distinct), for the readouts.
     private static func regionName(slack: Float) -> String {
-        let names: [(slack: Float, name: String)] = [(0, "collar and cuffs"), (0.005, "placket"), (0.07, "yoke"), (0.09, "chest"), (0.10, "back"), (0.11, "sleeves"), (0.12, "hem"), (0.15, "armhole")]
+        let names: [(slack: Float, name: String)] = [(0, "collar and cuffs"), (0.005, "placket"), (0.03, "wrist"), (0.07, "yoke"), (0.09, "chest"), (0.10, "back"), (0.11, "sleeves"), (0.12, "hem"), (0.15, "armhole")]
         return names.first { abs($0.slack - slack) < 1e-4 }?.name ?? String(format: "slack %.3f", slack)
     }
 

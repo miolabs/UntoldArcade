@@ -2630,9 +2630,20 @@ def surface_distances(bm, seeds, limit):
 # headset showed the shirt as a second skin — the same 3 cm everywhere — with a
 # sawtooth collar and cuffs fighting the hands (2026-10-30): a shirt hangs from its
 # shoulders. So the collar band (the collar, its stand and its points, within
-# COLLAR_BAND of the collar loop) and the cuffs (within CUFF_BAND of the cuff loops) are
-# hard skinned and follow the body exactly — the rolled cuffs ride the forearm's
-# animation and never fight the hand parts' tracking error; the yoke (the back and the
+# COLLAR_BAND of the collar loop) and the cuffs (the whole rolled cuff: every particle
+# within CUFF_BAND up the forearm's axis of the cuff loop's plane and within CUFF_RADIUS
+# of the axis, both layers of the roll) are hard skinned and follow the body exactly —
+# the rolled cuffs ride the forearm's animation and never fight the hand parts' tracking
+# error — and the wrist band above them (the next CUFF_GRADE up the axis) is held to
+# 3 cm, the step from the pins to the sleeve's 11. Until 2026-11-03 the cuffs were
+# measured along the surface from the cuff loop, and a rolled cuff is two layers: the
+# roll's outer layer lay within 6 cm of its free edge and the sleeve's own end under it
+# did not (over the roll and back is 8 cm), so at the same height a third of the
+# particles were pinned and the rest had the sleeve's 11 cm, and 36 triangles had a
+# pinned corner and a free one. When the forearm swung, the pinned corners went with the
+# bone and the free ones lagged or were shoved by the forearm's hull, the triangles
+# sheared, and the drawn shirt bound to them tore into flat shards around the wrist
+# (headset, 2026-11-03). The yoke (the back and the
 # shoulder tops within YOKE_BAND below the collar band, not the chest) is held to 7 cm
 # (1 cm over 12 cm until 2026-10-31: with the arms forward the shoulder blades spread
 # under the skin and the yoke's lateral edge sat 4.4-6.3 cm from its targets — the
@@ -2661,9 +2672,11 @@ def surface_distances(bm, seeds, limit):
 # beside the band sat 7.3, then 10.7, then 13.1 cm off its targets as its own slack was
 # opened (the cloth settles where the whole lets it), so the band takes that zone and the
 # sleeve's 11 cm cover what lies beyond.
-SLACK = {"collar": 0.0, "cuff": 0.0, "placket": 0.005, "yoke": 0.07, "sleeve": 0.11, "armhole": 0.15, "chest": 0.09, "back": 0.10, "hem": 0.12}
+SLACK = {"collar": 0.0, "cuff": 0.0, "wrist": 0.03, "placket": 0.005, "yoke": 0.07, "sleeve": 0.11, "armhole": 0.15, "chest": 0.09, "back": 0.10, "hem": 0.12}
 COLLAR_BAND = 0.08
 CUFF_BAND = 0.06
+CUFF_RADIUS = 0.10
+CUFF_GRADE = 0.03
 YOKE_BAND = 0.10
 HEM_BAND = 0.12
 ARMHOLE_BAND = 0.10
@@ -2847,7 +2860,9 @@ def render_binding(shell, proxy):
 def shirt_slack(bm, loops):
     """The per-particle slack of the shirt by SLACK's regions (see there). The collar is
     the loop with the highest centroid (the front is sewn, so it is a loop of its own),
-    the cuffs the two loops out at the wrists, the hem what is left; the sleeves are the
+    the cuffs the two loops out at the wrists (the pins reach CUFF_BAND up the forearm's
+    axis, both layers of the roll, the wrist band CUFF_GRADE beyond), the hem what is
+    left; the sleeves are the
     particles whose heaviest bone is an arm's (SLEEVE_BONES) and the armhole seam is the
     artist's sleeve-against-body seam kept before the grading (`sleeve_seam_segments`).
     A particle takes the first region that claims it, in SLACK's order — the collar and
@@ -2866,7 +2881,27 @@ def shirt_slack(bm, loops):
     names = [g.name for g in shirt.vertex_groups]
     dominant = artist_dominant or {i: names[dominant_group(w)] for i, w in vertex_weights(shirt).items() if w}
     collar_band = set(surface_distances(bm, collar, COLLAR_BAND))
-    cuff_band = set(surface_distances(bm, [v for l in cuffs for v in l], CUFF_BAND))
+    # The cuffs along the forearm's axis, both layers of the roll (see SLACK): up the
+    # axis from the cuff loop's plane, within CUFF_RADIUS of the axis so nothing else
+    # at that height is caught, the pins to CUFF_BAND and the wrist band CUFF_GRADE
+    # beyond them.
+    cuff_band, wrist_band = set(), set()
+    for loop in cuffs:
+        centre = sum((mw @ v.co for v in loop), Vector()) / len(loop)
+        side = "l" if centre.x > 0 else "r"
+        elbow = arm.matrix_world @ arm.data.bones[f"lowerarm_{side}"].head_local
+        hand = arm.matrix_world @ arm.data.bones[f"hand_{side}"].head_local
+        axis = (hand - elbow).normalized()
+        for v in bm.verts:
+            d = (mw @ v.co) - centre
+            along = -d.dot(axis)
+            if (d - d.dot(axis) * axis).length > CUFF_RADIUS:
+                continue
+            if along < CUFF_BAND:
+                cuff_band.add(v)
+            elif along < CUFF_BAND + CUFF_GRADE:
+                wrist_band.add(v)
+    wrist_band -= cuff_band
     yoke_reach = set(surface_distances(bm, list(collar_band), YOKE_BAND))
     hem_band = set(surface_distances(bm, hem, HEM_BAND))
     # The sleeves, like the band, stay off the centre of the chest: the artist's weights
@@ -2884,6 +2919,8 @@ def shirt_slack(bm, loops):
             region[v] = "collar"
         elif v in cuff_band:
             region[v] = "cuff"
+        elif v in wrist_band:
+            region[v] = "wrist"
         elif abs(p.x) < PLACKET_HALF_WIDTH and p.y < PLACKET_FRONT_Y and p.z < collar_z:
             region[v] = "placket"
         elif v in yoke_reach and v not in sleeve and (p.y >= TORSO_AXIS_Y or p.z >= SHOULDER_Z):

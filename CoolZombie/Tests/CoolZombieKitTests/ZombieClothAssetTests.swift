@@ -294,13 +294,14 @@ final class ZombieClothAssetTests: XCTestCase {
     /// shirt is buttoned and the prep sews its front, so its openings are the collar, the
     /// hem and the two cuffs: four loops; the trousers' are the waist and two hems:
     /// three. The shirt's slack is the schedule `testTheShirtSlackScheduleHangsItFromTheShoulders`
-    /// holds (the buttoned front 5 mm, the yoke 7 cm, the sleeves 11, the armhole band 15,
-    /// the chest 9, the back 10, the hem band 12); the trousers' hems 2 cm, the rest 3.
+    /// holds (the buttoned front 5 mm, the wrist band 3 cm, the yoke 7, the sleeves 11,
+    /// the armhole band 15, the chest 9, the back 10, the hem band 12); the trousers'
+    /// hems 2 cm, the rest 3.
     func testTheProxiesAreOnePieceWithTheirOpeningsAndPins() throws {
         let cloth = try loadCloth()
         let shirt = try XCTUnwrap(cloth.garment(named: "shirt"))
         let trousers = try XCTUnwrap(cloth.garment(named: "trousers"))
-        for (g, expectedLoops, minPins, slacks) in [(shirt, 4, 300, [Float(0), 0.005, 0.07, 0.09, 0.10, 0.11, 0.12, 0.15]), (trousers, 3, 60, [0, 0.02, 0.03])] {
+        for (g, expectedLoops, minPins, slacks) in [(shirt, 4, 300, [Float(0), 0.005, 0.03, 0.07, 0.09, 0.10, 0.11, 0.12, 0.15]), (trousers, 3, 60, [0, 0.02, 0.03])] {
             let e = edges(of: g.triangles)
             XCTAssertEqual(islandCount(particles: g.particles.count, edges: e.undirected), 1, "\(g.name) is not one piece")
             let loops = boundaryLoopCount(triangles: g.triangles, g.name)
@@ -343,9 +344,13 @@ final class ZombieClothAssetTests: XCTestCase {
     /// panels) 12, the sleeves 11, the armhole band (within 10 cm of the sleeve seam) 15 —
     /// the armpit, where the body's weights stretch the skinned edges most with the arms
     /// forward and the slack has to cover what the cloth cannot follow; the buttoned
-    /// front keeps its 5 mm. The counts are the cook's (2026-10-31, the band 10 cm wide
-    /// and the yoke 10 cm deep: 395 pins, 85 front, 287 yoke, 735 sleeve, 1088 armhole,
-    /// 478 chest, 497 back, 430 hem) held within a quarter, and each
+    /// front keeps its 5 mm; the cuffs pin the whole rolled cuff, both layers, 6 cm up
+    /// the forearm's axis, and the wrist band above them (3 cm more) is held to 3 cm,
+    /// the step to the sleeve (2026-11-03: measured along the surface, the roll's outer
+    /// layer was pinned beside the free sleeve end under it, and the drawn cuff tore
+    /// into shards when the forearm swung). The counts are the cook's (2026-11-03, the
+    /// band 10 cm wide and the yoke 10 cm deep: 532 pins, 85 front, 66 wrist, 287 yoke,
+    /// 532 sleeve, 1088 armhole, 478 chest, 497 back, 430 hem) held within a quarter, and each
     /// region lies where its name says: engine x is Blender x, engine y the height,
     /// engine z minus Blender y (the body faces +z, the spine runs at z about -0.10).
     func testTheShirtSlackScheduleHangsItFromTheShoulders() throws {
@@ -355,7 +360,7 @@ final class ZombieClothAssetTests: XCTestCase {
         var histogram: [Float: Int] = [:]
         for d in shirt.maxDistance { histogram[d, default: 0] += 1 }
         print("CoolZombie cloth shirt slack histogram: " + histogram.sorted { $0.key < $1.key }.map { String(format: "%.3f: %d", $0.key, $0.value) }.joined(separator: ", "))
-        let expected: [(slack: Float, count: Int, name: String)] = [(0, 395, "collar band and cuffs"), (0.005, 85, "buttoned front"), (0.07, 287, "yoke"), (0.11, 735, "sleeves"),
+        let expected: [(slack: Float, count: Int, name: String)] = [(0, 532, "collar band and cuffs"), (0.005, 85, "buttoned front"), (0.03, 66, "wrist band"), (0.07, 287, "yoke"), (0.11, 532, "sleeves"),
                                                                     (0.15, 1088, "armhole band"), (0.09, 478, "chest"), (0.10, 497, "back"), (0.12, 430, "hem band")]
         XCTAssertEqual(Set(histogram.keys), Set(expected.map(\.slack)), "the schedule's values")
         for region in expected {
@@ -366,7 +371,8 @@ final class ZombieClothAssetTests: XCTestCase {
         for (i, slack) in shirt.maxDistance.enumerated() {
             let x = p[i].x, y = p[i].y, z = p[i].z
             switch slack {
-            case 0: XCTAssertTrue(y > 1.34 || (abs(x) > 0.40 && y < 1.06), "a pin at (\(x), \(y), \(z)), neither collar nor cuff")
+            case 0: XCTAssertTrue(y > 1.34 || (abs(x) > 0.40 && y < 1.07), "a pin at (\(x), \(y), \(z)), neither collar nor cuff")
+            case 0.03: XCTAssertTrue(abs(x) > 0.38 && abs(x) < 0.47 && y > 1.00 && y < 1.09, "a wrist-band particle at (\(x), \(y), \(z))")
             case 0.005: XCTAssertTrue(abs(x) < 0.02 && z > -0.06 && y < 1.36, "a buttoned-front particle at (\(x), \(y), \(z))")
             case 0.07: XCTAssertTrue(y > 1.36 && abs(x) < 0.23 && (z <= -0.10 + 1e-3 || y >= 1.40 - 1e-3), "a yoke particle at (\(x), \(y), \(z)): not the back nor a shoulder top")
             case 0.11: XCTAssertTrue(abs(x) > 0.12 && y < 1.37, "a sleeve particle at (\(x), \(y), \(z))")
