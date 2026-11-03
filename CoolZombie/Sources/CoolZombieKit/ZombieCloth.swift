@@ -9,6 +9,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import Foundation
+import Metal
 import os.signpost
 import QuartzCore
 import simd
@@ -112,30 +113,34 @@ public final class ZombieClothEntityBody: ZombieClothBody {
     }
 }
 
-/// The zombie's shirt as a Jolt soft body skinned to the skeleton, worn
-/// over the powered ragdoll. The artist's shirt — the shell: two layers of
+/// The zombie's shirt as a simulated proxy skinned to the skeleton, worn
+/// over the powered ragdoll and solved behind `ClothSolver`: the Jolt
+/// soft body of `JoltClothSolver` today, the GPU solver of
+/// `Docs/GPUCloth.md` beside it from phase 1, picked by
+/// `Configuration.solver`; everything below the solver's fourteen calls
+/// is the same for both. The artist's shirt — the shell: two layers of
 /// fabric, the folded collar, the buttons — is in the exported mesh,
 /// body-skinned like the rest; the cloth sidecar (`ZombieClothAsset`)
 /// carries a particle proxy of it, which is not in the mesh, and the
-/// shell's binding to that proxy: every shell vertex on a proxy triangle,
-/// with its rest offset in the triangle's frame. At the reveal every shell
-/// vertex is bound to the exported vertices at its position, each of
-/// those given its own exported normal in that frame (the exporter splits
-/// a vertex on the artist's sharp edges into copies with their own
-/// normals), the proxy becomes a soft body whose particles Jolt keeps
-/// within their slack of where the skin puts them (and no more than a
-/// millimetre behind it: the back-stop, the body — and off the skin's
-/// hulls, the sidecar's colliders moved with the joints, where a particle
-/// far from its target has no stop that stands for the arm under it), and
-/// every frame the
-/// particles are read back, the triangles' frames rebuilt from them and
-/// the shell's vertices and normals evaluated from the binding
-/// (`RenderShell`) and written over the deformation pass's output — so the
-/// shirt is the artist's shell carried by the simulated proxy: it hangs
-/// from the shoulders, swings, drapes, takes a ball's dent, keeps its
-/// fold, its creases and its buttons. (A garment without a binding — the
-/// trousers, not simulated yet — is drawn as its proxy, the particles
-/// written over their own vertices.)
+/// shell's binding to that proxy: every shell vertex on a proxy
+/// triangle, with its rest offset in the triangle's frame. At the reveal
+/// every shell vertex is bound to the exported vertices at its position,
+/// each of those given its own exported normal in that frame (the
+/// exporter splits a vertex on the artist's sharp edges into copies with
+/// their own normals), the proxy becomes a soft body whose particles
+/// Jolt keeps within their slack of where the skin puts them (and no
+/// more than a millimetre behind it: the back-stop, the body — and off
+/// the skin's hulls, the sidecar's colliders moved with the joints,
+/// where a particle far from its target has no stop that stands for the
+/// arm under it), and every frame the particles are read back, the
+/// triangles' frames rebuilt from them and the shell's vertices and
+/// normals evaluated from the binding (`RenderShell`) and written over
+/// the deformation pass's output — so the shirt is the artist's shell
+/// carried by the simulated proxy: it hangs from the shoulders, swings,
+/// drapes, takes a ball's dent, keeps its fold, its creases and its
+/// buttons. (A garment without a binding — the trousers, not simulated
+/// yet — is drawn as its proxy, the particles written over their own
+/// vertices.)
 ///
 /// The frame runs: the animation composes this frame's pose; the physics
 /// step begins and `willStep` feeds that pose's joints to the skin (the
@@ -211,6 +216,72 @@ public final class ZombieCloth: @unchecked Sendable {
         /// too and come in a later phase.
         public var garments: [String] = ["shirt"]
         public var collisionModel: CollisionModel = .skinAndWorld
+        /// Which solver holds the proxy: Jolt's skinned soft body
+        /// (`JoltClothSolver`), the default, or the GPU XPBD solver of
+        /// `Docs/GPUCloth.md`, chosen 2026-11-03 after three headset rounds
+        /// read the Jolt shirt as paper: at 3,995 particles the proxy's
+        /// 17.5 mm median edge shows no fold under 8 cm, Jolt solves the
+        /// edges on one thread per body so four times the particles is four
+        /// times its 3.4 ms step, and its skin constraint runs before the
+        /// edges, so neither the slack nor the back-stop is exact at a
+        /// pass's end. The GPU solver is phase 1 of the design; until it
+        /// lands, `gpu` falls back to Jolt with one printed line, and the
+        /// default stays `jolt` until the design's gate 2 flips it.
+        public enum Solver: String, Sendable {
+            case jolt
+            case gpu
+        }
+
+        public var solver: Solver = .jolt
+        /// GPU arm (phase 1): the substeps a 10 ms frame is cut into, so a
+        /// substep is 0.01 / `gpuSubsteps` long — 0.625 ms at 16 — and the
+        /// count follows the frame's delta (16 at the headset's 10 ms, 27 at
+        /// the Mac's 16.7 ms, 32 at most). A small step's error falls with
+        /// the step squared, which is what pays back one Jacobi gather per
+        /// substep against Jolt's Gauss-Seidel passes; 8, 12, 16 and 24 are
+        /// the A/B (the headset's picker), 1 to 32 the launch argument's range.
+        public var gpuSubsteps = 16
+        /// GPU arm: edge gathers per substep, 1 to 4. A second gather is the
+        /// cheaper lever than more substeps when the stretch residual at
+        /// rest says the edges are not held (the design's 1 % gate).
+        public var gpuIterations = 1
+        /// GPU arm: the factor on a particle's summed edge corrections per
+        /// gather — CoolCloth's 0.5 on the raw sum, tuned there for twelve
+        /// grid neighbours where the shirt has up to 22 and 10.44 on
+        /// average; the averaged form (`gpuAveragedJacobi`) takes about 1.5
+        /// instead. Above 0.
+        public var gpuRelaxation: Float = 0.5
+        /// GPU arm: off, the relaxation scales the RAW sum of a particle's
+        /// corrections (CoolCloth); on, their average times the relaxation,
+        /// which at the shirt's mean degree is three and a half times weaker
+        /// per pass. The two were never run on this mesh; the residual test
+        /// decides which holds the edges within 1 % at rest.
+        public var gpuAveragedJacobi = false
+        /// GPU arm: the particles' damping, 1/s, or nil for `linearDamping`
+        /// (Jolt's 4, kept so the first headset A/B is like for like). Both
+        /// forms lose about 98 % of a velocity per second at 4; whether that
+        /// is what keeps the crumples from falling is the sweep (4 against 1).
+        public var gpuDamping: Float? = nil
+        /// GPU arm: the hulls' friction on the cloth, 0 or more — the one
+        /// thing the Jolt arm cannot have (`skinColliderFriction`): on the
+        /// GPU a hull's own motion over the substep is known, so the
+        /// tangential part of a particle's motion relative to the hull's is
+        /// scaled by one minus this. 0 matches Jolt; 0.2 is the A/B value.
+        public var gpuHullFriction: Float = 0
+        /// GPU arm: on, the first read of the frame waits for the frame's
+        /// command buffer, so the shirt is drawn on the pose it was fed (the
+        /// Jolt arm's zero-frame lag) and the footnote prints the wait; off,
+        /// the read takes the last completed frame's positions and never
+        /// waits — 10 ms of shirt lag on the headset, a pinned cuff up to
+        /// 2 cm behind a 2 m/s wrist — the fallback should the wait be the
+        /// cost.
+        public var gpuWait = true
+        /// Phase 2: the name of a second sidecar — `Zombie.cloth16k.json`,
+        /// the 16,000-particle cook whose 8.4 mm spacing shows the folds the
+        /// drawn shell can — in place of the bundled `Zombie.cloth.json`; nil
+        /// is the bundled one. The Jolt arm keeps its 3,995: at 16k it is
+        /// four times its 3.4 ms step and is refused with one line.
+        public var sidecar: String? = nil
         /// Jolt solver iterations per step: Jolt divides each of the world's
         /// sub-steps by this count and runs one constraint pass per piece
         /// (small steps, not repeated passes), so four quarter the solver's
@@ -264,7 +335,7 @@ public final class ZombieCloth: @unchecked Sendable {
         /// the skin that bone moves most, a millimetre inside it along the
         /// bone, standing back toward the joints where the skin is blended
         /// between bones (the prep's bend inset) and clear of the resting
-        /// shirt by a particle's radius, moved with its joint every step on
+        /// shirt by a particle's radius, moved with its joint every feed on
         /// `ZombiePhysics.Configuration.skinColliderLayer`. The back-stop
         /// stands for the skin only where the particle sits near its
         /// target: with the arms raised the skinned targets spread and
@@ -273,8 +344,8 @@ public final class ZombieCloth: @unchecked Sendable {
         /// sank into the arm in patches on the headset (2026-10-31). The
         /// hulls are the skin under the particle wherever it is: in the
         /// chase's arms-forward idle they take the particles more than 2 mm
-        /// inside the posed skin from 163 to 83 (ZombieClothTests,
-        /// 2026-11-03); what is left sits at the armpits and the shoulder
+        /// inside the posed skin from 154 to 65 (ZombieClothTests,
+        /// 2026-11-03, the cuff roll pinned whole); what is left sits at the armpits and the shoulder
         /// caps, where 68 degrees of swing on blended skin is more than a
         /// hull rigid on its bone follows, and the armpit's hollow is the
         /// shirt's, so no hull may fill it. Off, or
@@ -349,8 +420,15 @@ public final class ZombieCloth: @unchecked Sendable {
         /// shirt body-skinned, skin hangs it on the skin alone on a layer
         /// nothing meets, world — the default — meets the balls, the floor
         /// and the fallen body's furniture, ragdoll the parts too),
-        /// `-clothIterations <n>` the solver's iterations. Anything else
-        /// stays as it was; an unknown model is named once.
+        /// `-clothIterations <n>` Jolt's iterations, `-clothSolver jolt|gpu`
+        /// the solver, and the GPU arm's knobs: `-clothSubsteps <n>` (1 to
+        /// 32), `-clothGPUIterations <n>` (1 to 4), `-clothRelaxation <r>`
+        /// (above 0), `-clothAveragedJacobi on|off`, `-clothGPUDamping <d>`
+        /// (0 or more), `-clothHullFriction <f>` (0 or more),
+        /// `-clothGPUWait on|off` and `-clothSidecar <name>`. Anything else
+        /// stays as it was — a count outside its range, a word or an
+        /// infinity for a number, a flag with no value — and an unknown
+        /// model, solver or switch is named once.
         public mutating func apply(launchArguments arguments: [String]) {
             if let index = arguments.firstIndex(of: "-cloth"), index + 1 < arguments.count {
                 switch arguments[index + 1] {
@@ -378,6 +456,57 @@ public final class ZombieCloth: @unchecked Sendable {
                 case "off": skinColliders = false
                 default: print("CoolZombie: unknown -clothColliders \(arguments[index + 1]); on or off")
                 }
+            }
+            // The solver, and the GPU arm's knobs (`Docs/GPUCloth.md`).
+            if let index = arguments.firstIndex(of: "-clothSolver"), index + 1 < arguments.count {
+                if let choice = Solver(rawValue: arguments[index + 1]) {
+                    solver = choice
+                } else {
+                    print("CoolZombie: unknown -clothSolver \(arguments[index + 1]); jolt or gpu")
+                }
+            }
+            if let index = arguments.firstIndex(of: "-clothSubsteps"), index + 1 < arguments.count,
+               let substeps = Int(arguments[index + 1]), (1 ... 32).contains(substeps)
+            {
+                gpuSubsteps = substeps
+            }
+            if let index = arguments.firstIndex(of: "-clothGPUIterations"), index + 1 < arguments.count,
+               let iterations = Int(arguments[index + 1]), (1 ... 4).contains(iterations)
+            {
+                gpuIterations = iterations
+            }
+            if let index = arguments.firstIndex(of: "-clothRelaxation"), index + 1 < arguments.count,
+               let relaxation = Float(arguments[index + 1]), relaxation.isFinite, relaxation > 0
+            {
+                gpuRelaxation = relaxation
+            }
+            if let index = arguments.firstIndex(of: "-clothAveragedJacobi"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "on": gpuAveragedJacobi = true
+                case "off": gpuAveragedJacobi = false
+                default: print("CoolZombie: unknown -clothAveragedJacobi \(arguments[index + 1]); on or off")
+                }
+            }
+            if let index = arguments.firstIndex(of: "-clothGPUDamping"), index + 1 < arguments.count,
+               let damping = Float(arguments[index + 1]), damping.isFinite, damping >= 0
+            {
+                gpuDamping = damping
+            }
+            if let index = arguments.firstIndex(of: "-clothHullFriction"), index + 1 < arguments.count,
+               let friction = Float(arguments[index + 1]), friction.isFinite, friction >= 0
+            {
+                gpuHullFriction = friction
+            }
+            if let index = arguments.firstIndex(of: "-clothGPUWait"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "on": gpuWait = true
+                case "off": gpuWait = false
+                default: print("CoolZombie: unknown -clothGPUWait \(arguments[index + 1]); on or off")
+                }
+            }
+            // A name, never the next flag.
+            if let index = arguments.firstIndex(of: "-clothSidecar"), index + 1 < arguments.count, !arguments[index + 1].hasPrefix("-") {
+                sidecar = arguments[index + 1]
             }
         }
     }
@@ -538,10 +667,11 @@ public final class ZombieCloth: @unchecked Sendable {
         }
     }
 
-    /// One garment's soft body and its binding to the mesh.
+    /// One garment's solver and its binding to the mesh.
     private final class Garment {
         let name: String
-        let soft: JoltSoftBody
+        /// The solver holding the proxy and the skin's hulls (`ClothSolver`).
+        let solver: any ClothSolver
         /// The particles at the bind pose, world space of the attach, and
         /// as the sidecar has them (model space), for the report.
         let bindWorld: [SIMD3<Float>]
@@ -554,7 +684,7 @@ public final class ZombieCloth: @unchecked Sendable {
         /// created with (world space of the attach): the skin matrix is this
         /// frame's joint times it.
         let inverseBindWorld: [simd_float4x4]
-        let influences: [[JoltSoftBodySkinInfluence]]
+        let influences: [[ClothInfluence]]
         /// The sidecar joint that is the pelvis (the runaway reference).
         let pelvisJoint: Int
         /// The drawn shell bound to this proxy, or nil when the proxy itself
@@ -579,11 +709,11 @@ public final class ZombieCloth: @unchecked Sendable {
         var worldNormals: [SIMD3<Float>] = []
         var previousWorldPositions: [SIMD3<Float>] = []
 
-        init(name: String, soft: JoltSoftBody, bindWorld: [SIMD3<Float>], restPositions: [SIMD3<Float>], maxDistance: [Float], skeletonJoints: [Int],
-             inverseBindWorld: [simd_float4x4], influences: [[JoltSoftBodySkinInfluence]], pelvisJoint: Int, shell: RenderShell?, overrideRanges: [Range<Int>])
+        init(name: String, solver: any ClothSolver, bindWorld: [SIMD3<Float>], restPositions: [SIMD3<Float>], maxDistance: [Float], skeletonJoints: [Int],
+             inverseBindWorld: [simd_float4x4], influences: [[ClothInfluence]], pelvisJoint: Int, shell: RenderShell?, overrideRanges: [Range<Int>])
         {
             self.name = name
-            self.soft = soft
+            self.solver = solver
             self.bindWorld = bindWorld
             self.restPositions = restPositions
             self.maxDistance = maxDistance
@@ -622,12 +752,36 @@ public final class ZombieCloth: @unchecked Sendable {
         }
     }
 
-    /// One of the skin's colliders in the world (`ZombieClothAsset.Collider`):
-    /// a kinematic convex hull on the skeleton joint it follows.
-    private struct SkinCollider {
-        let body: JoltKinematicBody
-        /// The skeleton joint, an index into the model transforms.
-        let joint: Int
+    /// The sidecar's skin colliders as a garment's solver builds them
+    /// (`ClothHullSetup`): each on the feed joint it follows, at that
+    /// joint's current world transform (the product `placeJoints` takes; the
+    /// bind pose when the body has no pose yet), on the skin collider layer,
+    /// frictionless (`skinColliderFriction`). Nothing is planned when the
+    /// configuration says so, when the sidecar has none, or under `skinOnly`
+    /// (that cloth sits on the inert layer and meets nothing, so the hulls
+    /// would move for nothing). A collider whose joint the skeleton lacks,
+    /// or the garment is not skinned to (no feed could move it; the shirt's
+    /// thirteen joints cover all eleven), or whose shape is not a hull is
+    /// left out, and `report` counts those with the ones the solver refused
+    /// in one line.
+    private struct SkinHullPlan {
+        var setups: [ClothHullSetup] = []
+        var colliderCount = 0
+        var missing: [String] = []
+        var unskinned: [String] = []
+        var refused = 0
+
+        /// The skips in one line, once the solver has built `built` of the
+        /// planned hulls.
+        func report(garment: String, built: Int) {
+            let refused = refused + (setups.count - built)
+            guard !missing.isEmpty || !unskinned.isEmpty || refused > 0 else { return }
+            var reasons: [String] = []
+            if !missing.isEmpty { reasons.append("the skeleton has no joint \(missing.joined(separator: ", "))") }
+            if !unskinned.isEmpty { reasons.append("\(garment) is not skinned to \(unskinned.joined(separator: ", "))") }
+            if refused > 0 { reasons.append("Jolt refused \(refused) (not a hull of four points or more)") }
+            print("CoolZombie: cloth: \(missing.count + unskinned.count + refused) of \(colliderCount) skin colliders skipped: \(reasons.joined(separator: "; "))")
+        }
     }
 
     /// The exported vertices hashed into millimetre cells, for the binding.
@@ -672,9 +826,18 @@ public final class ZombieCloth: @unchecked Sendable {
     private var physics: ZombiePhysics?
     private var jointInfo: SkeletonJointInfo?
     private var garments: [Garment] = []
-    /// The skin's hulls, moved with their joints every step while a
-    /// garment is attached (`moveSkinColliders`).
-    private var skinColliders: [SkinCollider] = []
+    /// The Metal device the GPU solver would build on (phase 1); nil — the
+    /// tests, a host without one — leaves the Jolt arm alone.
+    private let device: MTLDevice?
+    /// The balls as spheres for the GPU solver, read at `beginUpdate` after
+    /// the physics step: `ZombieChaseGame` hands one that maps
+    /// `ZombieProps`' balls through the Jolt backend's body state. The Jolt
+    /// solver ignores them (its balls are Jolt bodies). Game thread.
+    public var sphereProvider: (() -> [ClothSphere])?
+    /// The floor's top, world space, for the GPU solver's floor plane
+    /// (`ZombieChaseGame` keeps it at its slab's height); the Jolt arm meets
+    /// the slab itself.
+    public var floorY: Float = 0
     /// The mesh's own matrix on top of the entity's (identity for the
     /// zombie), folded into every model-to-world.
     private var localTransform = matrix_identity_float4x4
@@ -707,8 +870,6 @@ public final class ZombieCloth: @unchecked Sendable {
     /// threshold can be judged against what the idle does.
     private var maxJointMotion: Float = 0
     private var lastFrameJointMotion: Float = 0
-    /// The engine layer the soft bodies sit on now (`applyBodyRest`).
-    private var bodyLayer: UInt32?
     /// Whether the last `applyBodyRest` put the bodies to sleep and no feed
     /// of the cloth's own has woken them since: a body found awake then was
     /// woken by Jolt itself (a ball reaching a resting shirt).
@@ -724,10 +885,12 @@ public final class ZombieCloth: @unchecked Sendable {
     private var updateBegan: CFTimeInterval = 0
     private let signpostLog = OSLog(subsystem: "com.untoldengine.coolzombie", category: "cloth")
 
-    /// The sidecar's garments and how to run them.
-    public init(asset: ZombieClothAsset, configuration: Configuration = Configuration()) {
+    /// The sidecar's garments and how to run them; `device` is where the GPU
+    /// solver would build (phase 1), nil for the Jolt arm alone.
+    public init(asset: ZombieClothAsset, configuration: Configuration = Configuration(), device: MTLDevice? = nil) {
         self.asset = asset
         self.configuration = configuration
+        self.device = device
     }
 
     // MARK: - Attach and detach
@@ -783,6 +946,14 @@ public final class ZombieCloth: @unchecked Sendable {
             print("CoolZombie: cloth: the mesh gives \(geometry.normals.count) normals for \(geometry.positions.count) vertices; the garments stay body-skinned")
             return false
         }
+        if configuration.solver == .gpu {
+            // Phase 1 replaces this with `GPUClothSolver(device:configuration:)`,
+            // Jolt standing in only when that cannot be built.
+            print("CoolZombie: cloth: the GPU solver is not built yet; Jolt stands in")
+        }
+        // The pose the hulls are built at (the bind pose before the body
+        // has one); the attach's hard skin moves them at once.
+        let model = body.jointModelTransforms() ?? jointInfo.bindModelTransforms
         var built: [Garment] = []
         var indices: [UInt32] = []
         for name in configuration.garments {
@@ -790,7 +961,8 @@ public final class ZombieCloth: @unchecked Sendable {
                 print("CoolZombie: cloth: the sidecar has no garment named \(name)")
                 continue
             }
-            if let garment = bind(garment, grid: grid, meshNormals: geometry.normals, jointInfo: jointInfo, physics: physics, meshToWorld: meshToWorld, indices: &indices)
+            if let garment = bind(garment, grid: grid, meshNormals: geometry.normals, jointInfo: jointInfo, physics: physics, meshToWorld: meshToWorld,
+                                  model: model, indices: &indices)
             {
                 built.append(garment)
             }
@@ -799,7 +971,7 @@ public final class ZombieCloth: @unchecked Sendable {
         // The override needs the body on compute skinning; a body that did
         // not take it would show the skin alone over a simulating shirt.
         guard body.beginOverride() else {
-            for garment in built { physics.backend.removeSoftBody(garment.soft) }
+            for garment in built { garment.solver.destroy() }
             print("CoolZombie: cloth: the body did not take the deformation component; the garments stay body-skinned")
             return false
         }
@@ -810,7 +982,6 @@ public final class ZombieCloth: @unchecked Sendable {
         self.body = body
         self.physics = physics
         self.jointInfo = jointInfo
-        addSkinColliders(body: body, physics: physics, jointInfo: jointInfo)
         // The hooks, over whatever was there: the skin feed inside the step,
         // the re-seat from the ragdoll.
         previousWillStep = physics.backend.willStep
@@ -835,7 +1006,6 @@ public final class ZombieCloth: @unchecked Sendable {
         overrideWriteCount = 0
         joltWakeCount = 0
         // The bodies were built on the layer their model asks for, awake.
-        bodyLayer = nil
         bodyPutToRest = false
         // Onto the displayed pose before the first step; the next feed is
         // hard too, so the pose the step then runs on is a resting one. The
@@ -858,7 +1028,7 @@ public final class ZombieCloth: @unchecked Sendable {
     /// stale sidecar, another export), a joint the skeleton lacks, counts
     /// that disagree.
     private func bind(_ garment: ZombieClothAsset.Garment, grid: VertexGrid, meshNormals: [SIMD3<Float>], jointInfo: SkeletonJointInfo,
-                      physics: ZombiePhysics, meshToWorld: simd_float4x4, indices: inout [UInt32]) -> Garment?
+                      physics: ZombiePhysics, meshToWorld: simd_float4x4, model: [simd_float4x4], indices: inout [UInt32]) -> Garment?
     {
         let count = garment.particles.count
         func refuse(_ reason: String) -> Garment? {
@@ -933,14 +1103,14 @@ public final class ZombieCloth: @unchecked Sendable {
             }
             guard unmatched == 0 else { return refuse("\(unmatched) of \(count) particles sit on no exported vertex") }
         }
-        var influences: [[JoltSoftBodySkinInfluence]] = []
+        var influences: [[ClothInfluence]] = []
         influences.reserveCapacity(count)
         for pairs in garment.influences {
             guard (1 ... 4).contains(pairs.count) else { return refuse("a particle is pulled by \(pairs.count) joints") }
-            var list: [JoltSoftBodySkinInfluence] = []
+            var list: [ClothInfluence] = []
             for pair in pairs {
                 guard pair.count == 2, let joint = Int(exactly: pair[0]), joint >= 0, joint < garment.jointPaths.count else { return refuse("an influence names no joint") }
-                list.append(JoltSoftBodySkinInfluence(joint: UInt32(joint), weight: pair[1]))
+                list.append(ClothInfluence(joint: UInt32(joint), weight: pair[1]))
             }
             influences.append(list)
         }
@@ -953,129 +1123,73 @@ public final class ZombieCloth: @unchecked Sendable {
             return SIMD3(w.x, w.y, w.z)
         }
         let bindJointWorld = garment.bindMatrices.map { meshToWorld * $0 }
-        var descriptor = JoltSoftBodyDescriptor(
-            vertices: bindWorld.map { $0 - origin },
-            inverseMasses: garment.maxDistance.map { $0 == 0 ? 0 : 1 / configuration.particleMass },
-            faces: faces,
-            compliance: configuration.stretchCompliance, shearCompliance: configuration.shearCompliance, bendCompliance: configuration.bendCompliance
-        )
-        descriptor.bendType = .distance
-        descriptor.position = origin
-        descriptor.layer = awakeLayer(physics)
-        descriptor.iterations = configuration.iterationsPerStep
-        descriptor.linearDamping = configuration.linearDamping
-        descriptor.vertexRadius = configuration.vertexRadius
-        descriptor.friction = configuration.friction
-        descriptor.maxLinearVelocity = configuration.maxLinearVelocity
-        // Jolt never wakes a body for its skin; the sleep rule is ours.
-        descriptor.allowSleeping = false
-        descriptor.oneWayAgainstRagdolls = configuration.oneWayAgainstRagdolls
         // The back-stop lies behind the face; for the particles whose faces
         // point at the body (the rolled cuffs, the inside of the collar)
         // that is away from it, so they get none.
         let bodyFacing = Set(garment.bodyFacingParticles)
-        descriptor.skin = JoltSoftBodySkin(bindJointWorldMatrices: bindJointWorld, vertices: (0 ..< count).map { index in
-            var vertex = JoltSoftBodySkinnedVertex(vertex: UInt32(index), influences: influences[index], maxDistance: garment.maxDistance[index] * configuration.slackScale)
-            vertex.backstopDistance = bodyFacing.contains(index) ? .greatestFiniteMagnitude : garment.backstop
-            return vertex
-        })
-        guard let soft = physics.backend.addSoftBody(descriptor) else { return refuse("Jolt refused the soft body") }
+        let setup = ClothGarmentSetup(
+            name: garment.name, origin: origin, bindPositions: bindWorld.map { $0 - origin }, faces: faces,
+            inverseMasses: garment.maxDistance.map { $0 == 0 ? 0 : 1 / configuration.particleMass }, influences: influences,
+            maxDistance: garment.maxDistance.map { $0 * configuration.slackScale },
+            backstop: (0 ..< count).map { bodyFacing.contains($0) ? .greatestFiniteMagnitude : garment.backstop }, bodyFacing: bodyFacing,
+            bindJointWorld: bindJointWorld,
+            stretchCompliance: configuration.stretchCompliance, shearCompliance: configuration.shearCompliance, bendCompliance: configuration.bendCompliance,
+            linearDamping: configuration.linearDamping, maxLinearVelocity: configuration.maxLinearVelocity, vertexRadius: configuration.vertexRadius,
+            friction: configuration.friction, iterations: configuration.iterationsPerStep, oneWayAgainstRagdolls: configuration.oneWayAgainstRagdolls,
+            layer: awakeLayer(physics)
+        )
+        let hulls = skinHulls(for: garment, jointInfo: jointInfo, physics: physics, model: model, meshToWorld: meshToWorld)
+        let solver = makeSolver(physics: physics)
+        guard solver.build(setup, hulls: hulls.setups) else { return refuse("Jolt refused the soft body") }
+        hulls.report(garment: garment.name, built: solver.hullCount)
         indices.append(contentsOf: garmentIndices)
         return Garment(
-            name: garment.name, soft: soft, bindWorld: bindWorld, restPositions: positions, maxDistance: garment.maxDistance, skeletonJoints: skeletonJoints,
+            name: garment.name, solver: solver, bindWorld: bindWorld, restPositions: positions, maxDistance: garment.maxDistance, skeletonJoints: skeletonJoints,
             inverseBindWorld: bindJointWorld.map(\.inverse), influences: influences, pelvisJoint: pelvisJoint, shell: shell, overrideRanges: ranges
         )
     }
 
-    /// The sidecar's skin colliders into the world, each a kinematic convex
-    /// hull at its joint's current world transform (the product `placeJoints`
-    /// uses; the bind pose when the body has no pose yet) on the skin
-    /// collider layer, frictionless (`skinColliderFriction`). Nothing is built when the
-    /// configuration says so, when the sidecar has none, or under `skinOnly`
-    /// (that cloth sits on the inert layer and meets nothing, so the hulls
-    /// would move for nothing). A collider whose joint the skeleton lacks,
-    /// or whose shape Jolt refuses (not a hull, fewer than four points), is
-    /// skipped; the skips are counted in one line.
-    private func addSkinColliders(body: any ZombieClothBody, physics: ZombiePhysics, jointInfo: SkeletonJointInfo) {
+    /// The solver a garment is built on under `configuration.solver`: Jolt
+    /// for `jolt`, and — until phase 1 of `Docs/GPUCloth.md` lands
+    /// `GPUClothSolver(device:configuration:)` — Jolt standing in for `gpu`
+    /// too, announced once per attach.
+    private func makeSolver(physics: ZombiePhysics) -> any ClothSolver {
+        JoltClothSolver(physics: physics)
+    }
+
+    /// The sidecar's skin colliders for `garment` (`SkinHullPlan`), under
+    /// `model` (skeleton order) and `meshToWorld`.
+    private func skinHulls(for garment: ZombieClothAsset.Garment, jointInfo: SkeletonJointInfo, physics: ZombiePhysics,
+                           model: [simd_float4x4], meshToWorld: simd_float4x4) -> SkinHullPlan
+    {
+        var plan = SkinHullPlan()
         guard configuration.skinColliders, configuration.collisionModel != .skinOnly,
               let colliders = asset.colliders, !colliders.isEmpty
-        else { return }
-        let model = body.jointModelTransforms() ?? jointInfo.bindModelTransforms
-        let meshToWorld = body.entityWorld() * localTransform
-        var missing: [String] = []
-        var refused = 0
+        else { return plan }
+        plan.colliderCount = colliders.count
         for collider in colliders {
             guard let joint = jointInfo.jointPaths.firstIndex(of: collider.joint), joint < model.count else {
-                missing.append(collider.joint)
+                plan.missing.append(collider.joint)
                 continue
             }
-            let frame = Self.frame(of: meshToWorld * model[joint])
-            guard collider.shape == "hull",
-                  let hull = physics.backend.addKinematicConvexHull(
-                      points: collider.pointVectors, position: frame.position, rotation: frame.rotation,
-                      friction: configuration.skinColliderFriction, layer: physics.configuration.skinColliderLayer
-                  )
-            else {
-                refused += 1
+            guard let feedJoint = garment.jointPaths.firstIndex(of: collider.joint) else {
+                plan.unskinned.append(collider.joint)
                 continue
             }
-            skinColliders.append(SkinCollider(body: hull, joint: joint))
+            guard collider.shape == "hull" else {
+                plan.refused += 1
+                continue
+            }
+            plan.setups.append(ClothHullSetup(
+                joint: feedJoint, points: collider.pointVectors, friction: configuration.skinColliderFriction,
+                layer: physics.configuration.skinColliderLayer, world: meshToWorld * model[joint]
+            ))
         }
-        if !missing.isEmpty || refused > 0 {
-            var reasons: [String] = []
-            if !missing.isEmpty { reasons.append("the skeleton has no joint \(missing.joined(separator: ", "))") }
-            if refused > 0 { reasons.append("Jolt refused \(refused) (not a hull of four points or more)") }
-            print("CoolZombie: cloth: \(missing.count + refused) of \(colliders.count) skin colliders skipped: \(reasons.joined(separator: "; "))")
-        }
+        return plan
     }
 
-    /// Every hull onto its joint for `model` (skeleton order) under
-    /// `meshToWorld`: put there at once (`setKinematicTransform`) and then
-    /// targeted there too (`setKinematicTarget`, a move of nothing over the
-    /// step, which sets the body's velocity to nought — a teleport alone
-    /// keeps the velocity of the last move, and the body would drift on
-    /// through the step). Not moved as a kinematic target over the step,
-    /// which the first version did on the idea that the move carried the
-    /// arm's velocity into the fabric: Jolt's soft body never reads a
-    /// kinematic collider's velocity (`skinColliderFriction`), and a target
-    /// is reached over the WHOLE step while the skin feed is complete after
-    /// the first of the three collision steps (the targets interpolate
-    /// previous to current over the first soft-body update's iterations
-    /// alone), so a targeted hull trailed the skin by up to two thirds of
-    /// the frame's joint motion — at the idle's 0.2-0.5 m/s and a 16.7 ms
-    /// frame, 5.6 mm behind in the first collision step — and a hull a
-    /// millimetre inside the skin stood proud on the trailing side of a
-    /// moving arm. Teleported, it stands at this frame's pose for all three
-    /// collision steps, where the skin's targets are; a hard skin needs
-    /// nothing more. Called every step the cloth is attached, asleep or out
-    /// of range as well: ten calls are nothing and the layer never meets a
-    /// resting cloth; and a step that cannot read the pose (no skeleton)
-    /// calls nothing, which is safe, since every move leaves the hull at
-    /// rest.
-    private func moveSkinColliders(model: [simd_float4x4], meshToWorld: simd_float4x4) {
-        guard let physics, !skinColliders.isEmpty else { return }
-        for collider in skinColliders where collider.joint < model.count {
-            let frame = Self.frame(of: meshToWorld * model[collider.joint])
-            physics.backend.setKinematicTransform(collider.body, position: frame.position, rotation: frame.rotation)
-            physics.backend.setKinematicTarget(collider.body, position: frame.position, rotation: frame.rotation)
-        }
-    }
-
-    /// A joint's world transform as a rigid frame for Jolt: its translation
-    /// and the rotation of its normalized axes (a scaled joint would
-    /// otherwise skew the quaternion).
-    private static func frame(of m: simd_float4x4) -> (position: SIMD3<Float>, rotation: simd_quatf) {
-        let rotation = simd_quatf(simd_float3x3(
-            columns: (
-                simd_normalize(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z)),
-                simd_normalize(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z)),
-                simd_normalize(SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
-            )
-        ))
-        return (SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z), simd_normalize(rotation))
-    }
-
-    /// Removes the soft bodies, the hooks and the override, and returns the
+    /// Removes the garments from their solvers (the soft bodies and the
+    /// hulls), the hooks and the override, and returns the
     /// body to its own skinning: the inverse of `attach`, so a detached body
     /// is as it was before the cloth, vertex-shader skinned at that price
     /// (the next attach moves it to compute skinning again). The hooks go
@@ -1084,10 +1198,8 @@ public final class ZombieCloth: @unchecked Sendable {
     /// so a link added after it would come off with it. Frame thread.
     public func detach() {
         guard let physics else { return }
-        for garment in garments { physics.backend.removeSoftBody(garment.soft) }
+        for garment in garments { garment.solver.destroy() }
         garments = []
-        for collider in skinColliders { physics.backend.removeKinematicBody(collider.body) }
-        skinColliders = []
         physics.backend.willStep = previousWillStep
         physics.didReseat = previousDidReseat
         previousWillStep = nil
@@ -1103,7 +1215,6 @@ public final class ZombieCloth: @unchecked Sendable {
         pendingHardSkin = false
         ramp = 1
         skinMultiplier = 1
-        bodyLayer = nil
     }
 
     // MARK: - Events
@@ -1133,9 +1244,15 @@ public final class ZombieCloth: @unchecked Sendable {
 
     /// The top of the game update, right after the physics step: what lies
     /// between `willStep`'s end and here is Jolt's step and the
-    /// coordinator's read-back, reported as the step time.
+    /// coordinator's read-back, reported as the step time. The solvers
+    /// begin their frame here, with the balls as this frame's step left
+    /// them (`sphereProvider`): the GPU solver encodes and commits, the
+    /// Jolt one has stepped already.
     public func beginUpdate() {
         updateBegan = CACurrentMediaTime()
+        guard !garments.isEmpty else { return }
+        let spheres = sphereProvider?() ?? []
+        for garment in garments { garment.solver.beginFrame(spheres: spheres) }
     }
 
     // MARK: - Per frame
@@ -1191,14 +1308,16 @@ public final class ZombieCloth: @unchecked Sendable {
         maxJointMotion = 0
     }
 
+    /// Every particle onto its skinned position at rest, now: the joints
+    /// placed, the hulls moved and the slack shut (`ClothSolver.hardSkin`).
     private func hardSkinNow() {
-        guard let body, let physics, let model = body.jointModelTransforms() else { return }
+        guard let body, let model = body.jointModelTransforms() else { return }
         let meshToWorld = body.entityWorld() * localTransform
         _ = placeJoints(model, meshToWorld: meshToWorld)
-        moveSkinColliders(model: model, meshToWorld: meshToWorld)
         for garment in garments {
-            physics.backend.skinSoftBody(garment.soft, jointWorldMatrices: garment.jointWorld, hardSkinAll: true)
-            physics.backend.setSoftBodySkin(garment.soft, maxDistanceMultiplier: 0)
+            garment.solver.hardSkin(ClothFeed(
+                jointWorld: garment.jointWorld, previousJointWorld: garment.previousJointWorld, multiplier: 0, deltaTime: 0, hard: true
+            ))
         }
         // The feed woke the bodies.
         bodyPutToRest = false
@@ -1207,8 +1326,9 @@ public final class ZombieCloth: @unchecked Sendable {
         hardSkinCount += 1
     }
 
-    /// Inside the physics step, before Jolt runs: this frame's displayed
-    /// pose into the skin, the slack for the step.
+    /// Inside the physics step, before the world advances: this frame's
+    /// displayed pose into the skin, the hulls onto it, the slack for the
+    /// step (`ClothSolver.feed`).
     private func willStep(deltaTime: Float) {
         guard let body, let physics, !garments.isEmpty, let model = body.jointModelTransforms() else { return }
         let started = CACurrentMediaTime()
@@ -1221,17 +1341,17 @@ public final class ZombieCloth: @unchecked Sendable {
         }
         let world = body.entityWorld()
         if placeJoints(model, meshToWorld: world * localTransform) { jointsMoved = true }
-        // The hulls onto this frame's joints, whatever the cloth's state,
-        // where the skin's targets will stand for the step.
-        moveSkinColliders(model: model, meshToWorld: world * localTransform)
         if jointsMoved, asleep {
             asleep = false
             stillTime = 0
             applyBodyRest()
         }
-        // Asleep, Jolt keeps the last feed: the joints have not moved. Out
-        // of range nothing is fed either — the body sleeps where it was and
-        // the return hard skins it — since a feed would wake it.
+        // Asleep, the solver keeps the last feed: the joints have not moved.
+        // Out of range nothing is fed either — the body sleeps where it was
+        // and the return hard skins it — since a feed would wake it. The
+        // hulls go with the feed: a resting cloth's stand where the last
+        // feed left them, on a layer no resting cloth meets, and the feed
+        // that wakes it moves them before the step.
         guard (!asleep && !lodActive) || pendingHardSkin else { return }
         let hard = pendingHardSkin
         pendingHardSkin = false
@@ -1241,12 +1361,6 @@ public final class ZombieCloth: @unchecked Sendable {
         } else {
             ramp = min(ramp + deltaTime / max(configuration.rampDuration, 1e-3), 1)
         }
-        for garment in garments {
-            physics.backend.skinSoftBody(garment.soft, jointWorldMatrices: garment.jointWorld, hardSkinAll: hard)
-        }
-        // The feed woke the bodies (a hard skin reaches a resting one).
-        bodyPutToRest = false
-        skinFeedCount += 1
         // The slack: the ramp's share, shut out of range and in a bind pose
         // the parts have not reached.
         var multiplier = ramp
@@ -1259,9 +1373,16 @@ public final class ZombieCloth: @unchecked Sendable {
             if !bindPoseReached { multiplier = 0 }
         }
         skinMultiplier = multiplier
+        // The hulls onto this frame's joints, where the skin's targets will
+        // stand for the step; the joints into the skin; the slack.
         for garment in garments {
-            physics.backend.setSoftBodySkin(garment.soft, maxDistanceMultiplier: multiplier)
+            garment.solver.feed(ClothFeed(
+                jointWorld: garment.jointWorld, previousJointWorld: garment.previousJointWorld, multiplier: multiplier, deltaTime: deltaTime, hard: hard
+            ))
         }
+        // The feed woke the bodies (a hard skin reaches a resting one).
+        bodyPutToRest = false
+        skinFeedCount += 1
     }
 
     /// The end of the game update: the particles off Jolt, into mesh space,
@@ -1365,7 +1486,8 @@ public final class ZombieCloth: @unchecked Sendable {
         }
     }
 
-    /// The soft bodies follow the cloth's state in Jolt. Awake and in range
+    /// The bodies follow the cloth's state in their solver (`setResting`;
+    /// on Jolt as follows). Awake and in range
     /// they simulate on their model's layer. Asleep they are put to sleep —
     /// Jolt then skips them, which is where the shirt's cost was — on the
     /// resting layer, where only the balls meet them: a ragdoll part inside
@@ -1382,20 +1504,16 @@ public final class ZombieCloth: @unchecked Sendable {
     private func applyBodyRest() {
         guard let physics, !garments.isEmpty else { return }
         let resting = asleep || lodActive
-        let layer: UInt32
+        let layer: ClothRestLayer
         if lodActive || configuration.collisionModel == .skinOnly {
-            layer = physics.configuration.inertLayer
+            layer = .inert(physics.configuration.inertLayer)
         } else {
-            layer = asleep ? physics.configuration.restingClothLayer : awakeLayer(physics)
-        }
-        if layer != bodyLayer {
-            bodyLayer = layer
-            for garment in garments { physics.backend.setSoftBodyLayer(garment.soft, layer) }
+            layer = asleep ? .resting(physics.configuration.restingClothLayer) : .awake(awakeLayer(physics))
         }
         if resting, bodyPutToRest {
-            for garment in garments where physics.backend.isSoftBodyActive(garment.soft) { joltWakeCount += 1 }
+            for garment in garments where garment.solver.isActive { joltWakeCount += 1 }
         }
-        for garment in garments { physics.backend.setSoftBodyActive(garment.soft, !resting) }
+        for garment in garments { garment.solver.setResting(resting, layer: layer) }
         bodyPutToRest = resting
     }
 
@@ -1415,10 +1533,10 @@ public final class ZombieCloth: @unchecked Sendable {
     /// test. A particle that is not a number counts as infinitely fast, so
     /// the full read that follows catches it.
     private func sampleParticleSpeed(deltaTime: Float) -> Float {
-        guard let physics, deltaTime > 0 else { return 0 }
+        guard deltaTime > 0 else { return 0 }
         var maxSpeed: Float = 0
         for garment in garments {
-            let read = physics.backend.readSoftBodyVertices(garment.soft, into: &garment.worldPositions)
+            let read = garment.solver.readPositions(into: &garment.worldPositions)
             guard garment.previousWorldPositions.count == read else {
                 garment.previousWorldPositions = garment.worldPositions
                 continue
@@ -1440,7 +1558,6 @@ public final class ZombieCloth: @unchecked Sendable {
     /// writes its particles and their normals over their own vertices; the
     /// reason, when a particle has run away (nothing is filled then).
     private func expandOverride(toMesh: simd_float4x4, deltaTime: Float) -> String? {
-        guard let physics else { return nil }
         // Normals turn by the inverse transpose of the position transform.
         let m = toMesh
         let normalMatrix = simd_float3x3(
@@ -1452,8 +1569,8 @@ public final class ZombieCloth: @unchecked Sendable {
         var bind: Double = 0
         for garment in garments {
             let read = garment.shell == nil
-                ? physics.backend.readSoftBodyVertices(garment.soft, into: &garment.worldPositions, normals: &garment.worldNormals)
-                : physics.backend.readSoftBodyVertices(garment.soft, into: &garment.worldPositions)
+                ? garment.solver.readPositionsAndNormals(into: &garment.worldPositions, normals: &garment.worldNormals)
+                : garment.solver.readPositions(into: &garment.worldPositions)
             guard read == garment.bindWorld.count else { return "\(garment.name) read \(read) of \(garment.bindWorld.count) particles" }
             let pelvis = garment.pelvisWorld
             let hasPrevious = garment.previousWorldPositions.count == read
@@ -1547,7 +1664,7 @@ public final class ZombieCloth: @unchecked Sendable {
         }
         return String(
             format: "cloth %@: %d particles (%d pins)%@ colliders=%d mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d joltWakes=%d",
-            names, particles, pins, shellDescription, skinColliders.count, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
+            names, particles, pins, shellDescription, skinColliderCount, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
             lastFrameJointMotion * 1000, hardSkinCount, runawayCount, overrideWriteCount, joltWakeCount
         )
     }
@@ -1558,13 +1675,14 @@ public final class ZombieCloth: @unchecked Sendable {
         return vertices > 0 ? " \(vertices) shell vertices" : ""
     }
 
-    /// Awake or asleep, out of range, and whether Jolt has the bodies
-    /// (`jolt=on`) or skips them (`jolt=off`).
+    /// Awake or asleep, out of range, and whether the solver has the bodies
+    /// (`sim=on`) or skips them (`sim=off`; `jolt=` until 2026-11-03, when
+    /// the seam gave the line a name that covers both arms).
     private var stateDescription: String {
         var state = asleep ? "asleep" : "awake"
         if lodActive { state += " out of range" }
-        if let physics, let first = garments.first {
-            state += physics.backend.isSoftBodyActive(first.soft) ? " jolt=on" : " jolt=off"
+        if let first = garments.first {
+            state += first.solver.isActive ? " sim=on" : " sim=off"
         }
         return state
     }
@@ -1595,8 +1713,9 @@ public final class ZombieCloth: @unchecked Sendable {
     public var garmentNames: [String] { garments.map(\.name) }
 
     /// The skin's hulls in the world: the sidecar's colliders whose joints
-    /// the skeleton has, when the configuration builds them.
-    public var skinColliderCount: Int { skinColliders.count }
+    /// the skeleton has, when the configuration builds them, over the
+    /// garments' solvers.
+    public var skinColliderCount: Int { garments.reduce(0) { $0 + $1.solver.hullCount } }
 
     /// The slack per particle of a garment, as built.
     func maxDistances(ofGarment index: Int) -> [Float] {
@@ -1608,18 +1727,18 @@ public final class ZombieCloth: @unchecked Sendable {
         garments.indices.contains(index) ? garments[index].shell : nil
     }
 
-    /// Whether Jolt is simulating a garment's body (false while the cloth
-    /// rests), for the tests.
+    /// Whether the solver is simulating a garment's body (false while the
+    /// cloth rests), for the tests.
     func isSoftBodyActive(ofGarment index: Int) -> Bool {
-        guard garments.indices.contains(index), let physics else { return false }
-        return physics.backend.isSoftBodyActive(garments[index].soft)
+        guard garments.indices.contains(index) else { return false }
+        return garments[index].solver.isActive
     }
 
-    /// The particles of a garment as Jolt has them now, world space.
+    /// The particles of a garment as the solver has them now, world space.
     func particleWorldPositions(ofGarment index: Int) -> [SIMD3<Float>] {
-        guard garments.indices.contains(index), let physics else { return [] }
+        guard garments.indices.contains(index) else { return [] }
         var positions: [SIMD3<Float>] = []
-        physics.backend.readSoftBodyVertices(garments[index].soft, into: &positions)
+        _ = garments[index].solver.readPositions(into: &positions)
         return positions
     }
 

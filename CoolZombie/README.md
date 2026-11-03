@@ -69,10 +69,13 @@ clips loaded):
   seconds, so `swift run CoolZombie -layout wall -play -debugLog` shows in
   its console whether the zombie goes around the wall, and adding
   `-target behindWall` whether it ends up with its hands on it;
-  `-cloth off|skin|world|ragdoll` and `-clothIterations <n>` pick the shirt's
-  simulation and `-collisionSteps <n>` / `-workerThreads <n>` the Jolt
-  world's sub-steps and threads (see Physics; the Cloth dropdown switches
-  the shirt's model live), `-resetEvery <seconds>` resets the zombie
+  `-cloth off|skin|world|ragdoll`, `-clothSolver jolt|gpu` and
+  `-clothIterations <n>` pick the shirt's simulation (the GPU arm's own
+  knobs, `-clothSubsteps <n>` and the rest, are listed under Cloth) and
+  `-collisionSteps <n>` / `-workerThreads <n>` the Jolt
+  world's sub-steps and threads (see Physics; the Cloth and Solver
+  dropdowns switch the shirt's model and solver live), `-resetEvery
+  <seconds>` resets the zombie
   every so often (a fallen one stands up).
 
 ## Assets
@@ -460,10 +463,11 @@ its back-stop alone; `-cloth skin` builds none, since that cloth meets
 nothing. The report prints `colliders=` with the count in the world.
 Measured in ZombieClothTests on the chase's arms-forward idle — the body
 skinned onto the pose, the particles more than 2 mm inside it — the
-back-stop alone leaves 163 particles inside (the armhole band 124, the
-sleeves 28, the yoke 11, the deepest 34.7 mm into the upper arm), and with
-the hulls 83 remain (sleeves 18, armhole band 65, the deepest 22.4 mm at
-the front of an armpit): what no hull rigid on its bone can follow, the
+back-stop alone leaves 154 particles inside (the armhole band 131, the
+yoke 13, the sleeves 10, the deepest 34.3 mm into the upper arm), and with
+the hulls 65 remain (armhole band 60, sleeves 4, yoke 1, the deepest
+19.8 mm at the front of an armpit; 163 and 83 before the cuff roll was
+pinned whole the same day): what no hull rigid on its bone can follow, the
 armpits and the shoulder caps under 68 degrees of swing on blended skin,
 and the armpit's hollow in particular, which the upper arm's hull may not
 fill since at rest the shirt lies in it. The hang and the sway read none
@@ -880,7 +884,8 @@ layer (`restingClothLayer`) that only the balls meet — a ball thrown at a
 still zombie wakes the body in Jolt, the read-back sees the particles
 move and wakes the cloth, which puts the body back on its layer — and an
 out-of-range shirt to the inert layer, where nothing is fed or solved
-until the player returns. The report prints `jolt=on|off` beside the
+until the player returns. The report prints `sim=on|off` (`jolt=` until
+2026-11-03, when the solver seam below gave both arms one name) beside the
 cloth's own state, `joltWakes=` the times Jolt woke a resting body on its
 own (a ball; the parts must never show there, and the tests hold it at
 zero over the powered ragdoll) and `joints<=` the farthest a joint moved
@@ -920,11 +925,21 @@ every free particle's slack (the pins stay pins; at 3 the chest may
 wander 27 cm from its target and the shirt hangs on the hulls and the
 back-stop, the clamp a tunnelling guard alone: the experiment that reads
 how much of the shirt's look is the tether) — and
-`-clothIterations <n>` sets the
-solver's iterations: four by default (the fit tests run at four), one to
-six for the A/B. The same choices switch live: the Mac's Cloth dropdown,
+`-clothIterations <n>` sets
+Jolt's iterations: four by default (the fit tests run at four), one to
+six for the A/B — and `-clothSolver jolt|gpu` picks the solver behind the
+seam (below), with the GPU arm's own knobs beside it: `-clothSubsteps
+<n>` (1 to 32; 16 by default, 0.625 ms each at the headset's 10 ms),
+`-clothGPUIterations <n>` (1 to 4 gathers per substep),
+`-clothRelaxation <r>` (0.5 by default), `-clothAveragedJacobi on|off`,
+`-clothGPUDamping <d>` (unset, Jolt's 4 1/s), `-clothHullFriction <f>`
+(0), `-clothGPUWait on|off` (on) and `-clothSidecar <name>` (the bundled
+one), each left as it was by a value outside its range. The same choices
+switch live: the Mac's Cloth and Solver dropdowns,
 and on the headset the control window's *Cloth* (Off / Skin only / World
-/ Ragdoll too) and *Cloth iterations* (1, 2, 3, 4 or 6) pickers, each
+/ Ragdoll too), *Solver* (Jolt / GPU), *Cloth iterations* (1, 2, 3, 4 or
+6; Jolt's knob) and *GPU substeps* (8, 12, 16 or 24; the GPU's) pickers,
+each
 change taking the shirt off and putting it back on rebuilt
 (`ZombieChaseGame.setCloth`). Off returns the body to its own
 vertex-shader skinning (`ZombieCloth.detach` removes the deformation
@@ -1047,6 +1062,41 @@ cores, about twice slower, would make more than a millisecond of the
 10 ms frame, so the pass stays split. Not a runaway, not a wake Jolt gave
 a resting body and not an error line in any of the three runs.
 
+On 2026-11-03, after the third headset round still read the shirt as
+paper — coarse crumples that do not fall under gravity, skin through the
+sleeves at the arms, and tripling the slack (`-clothSlack 3`) changing
+little, so the tether is not the limit — the owner chose a GPU XPBD solver
+in Metal compute to replace the Jolt soft body, keeping everything else of
+the pipeline (the prep, the body's weights on the proxy, the schedule, the
+hulls, the shell binding, the tests, the hosts), and `Docs/GPUCloth.md` is
+its design: sixteen substeps of 0.625 ms per 10 ms frame over the proxy
+as a CSR graph, the slack and the back-stop applied after the edges so
+they are exact, the hulls as plane sets, a second cook at 16,000
+particles once the solver stands. Phase 0 of it is in: `ZombieCloth` now
+reaches its solver through the `ClothSolver` protocol
+(`ZombieClothSolver.swift`) — the fourteen calls it made into the Jolt
+backend, as the build and the destroy, the feed inside the step, the hard
+skin, the frame's begin, the two position reads, the rest state with its
+layer and the activity — and `JoltClothSolver`
+(`ZombieClothJoltSolver.swift`) carries those calls moved verbatim: the
+soft body's descriptor, the eleven hulls teleported and then targeted at
+every feed, the resting layers. The thousand solver-independent lines
+(the shell, the binding, the joints, the ramp, the sleep, the range, the
+runaway, the report) stay where they were and serve both arms, so the two
+can be A/B'd on the same proxy, hulls, schedule and tests, and the 28
+cloth tests pass unchanged behind the seam with the figures above.
+`Configuration.solver` (`-clothSolver jolt|gpu`, the *Solver* dropdown
+and picker) picks the arm — Jolt by default until the design's gate 2 —
+with the GPU arm's knobs beside it (`gpuSubsteps` 16, `gpuIterations` 1,
+`gpuRelaxation` 0.5 on the raw sum, `gpuDamping` nil for Jolt's 4,
+`gpuHullFriction` 0, `gpuWait` on, `sidecar` nil; the launch arguments
+above), the game hands the cloth its floor and the balls as spheres
+(`floorY` at the slab's height, `sphereProvider` reading
+`ZombieProps`' balls through the Jolt backend's body state after the
+step) for the GPU's contacts, and the diagnostics line prints `sim=on|off`
+for both arms. Until phase 1 lands `GPUClothSolver`, `gpu` falls back to
+Jolt with one printed line.
+
 The package depends on the miolabs fork of the plugin at its
 `feature/zombie_cloth` branch (the character controller, the ragdoll, the
 environment boxes' layers, and the soft bodies skinned to a skeleton with
@@ -1148,10 +1198,11 @@ either platform (`-room none` turns the sample off); launch arguments
 set the engine's pose-timing knobs at launch; the window's *Pose*,
 *Pacing* and *AA* pickers switch the same two and the anti-aliasing live,
 for telling the presentation from the tracking when the body sways against
-the room while its coordinates hold; `-cloth off|skin|ragdoll` and
-`-clothIterations <n>` set the shirt's simulation at launch and the
-*Cloth* and *Cloth quality* pickers switch it live, the footnote's cloth
-and frame lines side by side for each — see Physics)
+the room while its coordinates hold; `-cloth off|skin|ragdoll`,
+`-clothSolver jolt|gpu`, `-clothIterations <n>` and `-clothSubsteps <n>`
+set the shirt's simulation at launch and the *Cloth*, *Solver*, *Cloth
+iterations* and *GPU substeps* pickers switch it live, the footnote's
+cloth and frame lines side by side for each — see Physics)
 without gaze-and-pinch input, for automated runs:
 
 ```bash

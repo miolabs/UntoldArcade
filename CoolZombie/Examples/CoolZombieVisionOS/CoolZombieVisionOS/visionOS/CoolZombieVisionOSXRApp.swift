@@ -231,18 +231,22 @@ final class ZombieXRHolder: @unchecked Sendable {
     }
 
     /// The shirt's simulation: the launch arguments' configuration until
-    /// the window's Cloth and Cloth quality pickers change it. The game
+    /// the window's Cloth, Solver, Cloth iterations and GPU substeps pickers
+    /// change it. The game
     /// starts from it (so a space reopened keeps the choice) and applies a
     /// change on its thread: the garments come off and go back on rebuilt.
     private var clothConfigurationStorage: ZombieCloth.Configuration = {
         var configuration = ZombieCloth.Configuration()
         configuration.apply(launchArguments: ProcessInfo.processInfo.arguments)
-        // The iterations picker offers one to four and six; a launch
-        // argument outside them would show as a choice the shirt is not
-        // running (and one it could not pick again), so the device holds
-        // to the offered counts.
+        // The iterations picker offers one to four and six, the substeps
+        // one 8, 12, 16 and 24; a launch argument outside them would show
+        // as a choice the shirt is not running (and one it could not pick
+        // again), so the device holds to the offered counts.
         if ClothQualityChoice(rawValue: configuration.iterationsPerStep) == nil {
             configuration.iterationsPerStep = ClothQualityChoice.four.rawValue
+        }
+        if ClothSubstepChoice(rawValue: configuration.gpuSubsteps) == nil {
+            configuration.gpuSubsteps = ClothSubstepChoice.sixteen.rawValue
         }
         return configuration
     }()
@@ -382,7 +386,7 @@ enum ClothChoice: String, CaseIterable, Identifiable {
 
 /// The solver's iterations: one to four and six (Jolt runs a pass per
 /// iteration on a sub-step divided by the count, so six is a 0.9 ms solver
-/// step on the device).
+/// step on the device). Jolt's knob alone: the GPU arm takes substeps.
 enum ClothQualityChoice: UInt32, CaseIterable, Identifiable {
     case one = 1, two, three, four, six = 6
     var id: UInt32 { rawValue }
@@ -391,6 +395,47 @@ enum ClothQualityChoice: UInt32, CaseIterable, Identifiable {
     /// The holder keeps the count among the offered.
     init(_ configuration: ZombieCloth.Configuration) {
         self = ClothQualityChoice(rawValue: configuration.iterationsPerStep) ?? .four
+    }
+}
+
+/// Which solver holds the shirt (`ZombieCloth.Configuration.Solver`): the
+/// Jolt soft body, or the GPU XPBD solver of `Docs/GPUCloth.md` — the A/B
+/// on the same proxy, hulls and schedule. Until phase 1 lands, GPU falls
+/// back to Jolt with a printed line.
+enum ClothSolverChoice: String, CaseIterable, Identifiable {
+    case jolt = "Jolt"
+    case gpu = "GPU"
+    var id: String { rawValue }
+
+    init(_ configuration: ZombieCloth.Configuration) {
+        switch configuration.solver {
+        case .jolt: self = .jolt
+        case .gpu: self = .gpu
+        }
+    }
+
+    func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
+        var result = configuration
+        switch self {
+        case .jolt: result.solver = .jolt
+        case .gpu: result.solver = .gpu
+        }
+        return result
+    }
+}
+
+/// The GPU solver's substeps per 10 ms frame: 8, 12, 16 (the default,
+/// 0.625 ms each) or 24, the A/B of the design's budget — about 0.3-0.5 ms
+/// of GPU at 8 against 0.6-0.9 at 16. The GPU arm's knob alone: Jolt takes
+/// iterations.
+enum ClothSubstepChoice: Int, CaseIterable, Identifiable {
+    case eight = 8, twelve = 12, sixteen = 16, twentyFour = 24
+    var id: Int { rawValue }
+    var title: String { "\(rawValue)" }
+
+    /// The holder keeps the count among the offered.
+    init(_ configuration: ZombieCloth.Configuration) {
+        self = ClothSubstepChoice(rawValue: configuration.gpuSubsteps) ?? .sixteen
     }
 }
 
@@ -439,7 +484,9 @@ struct CoolZombieVisionOSXRApp: App {
     @State private var pacing: PacingChoice = .full
     @State private var antiAliasing: AntiAliasingChoice = .taa
     @State private var cloth = ClothChoice(ZombieXRHolder.shared.clothConfiguration)
+    @State private var clothSolver = ClothSolverChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var clothQuality = ClothQualityChoice(ZombieXRHolder.shared.clothConfiguration)
+    @State private var clothSubsteps = ClothSubstepChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var throwHard = false
     private let clipSets = ZombieResources.availableClipSets
 
@@ -592,7 +639,9 @@ struct CoolZombieVisionOSXRApp: App {
                     // The shirt: off (body-skinned), on its skin alone (no
                     // collisions: what they cost), meeting the world (the
                     // balls and the floor; the default) or the ragdoll's
-                    // parts too (the A/B); and the solver's iterations. Each
+                    // parts too (the A/B); the solver (Jolt or the GPU);
+                    // Jolt's iterations and the GPU's substeps, each knob
+                    // live for its own solver alone. Each
                     // change takes the shirt off and puts it back on
                     // rebuilt, so the footnote's cloth line can be read
                     // against the frame line for each.
@@ -607,6 +656,17 @@ struct CoolZombieVisionOSXRApp: App {
                         .onChange(of: cloth) { _, choice in
                             ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
                         }
+                        Picker("Solver", selection: $clothSolver) {
+                            ForEach(ClothSolverChoice.allCases) { choice in
+                                Text(choice.rawValue).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        .disabled(cloth == .off)
+                        .onChange(of: clothSolver) { _, choice in
+                            ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
+                        }
                         Picker("Cloth iterations", selection: $clothQuality) {
                             ForEach(ClothQualityChoice.allCases) { choice in
                                 Text(choice.title).tag(choice)
@@ -614,10 +674,23 @@ struct CoolZombieVisionOSXRApp: App {
                         }
                         .pickerStyle(.segmented)
                         .frame(maxWidth: 420)
-                        .disabled(cloth == .off)
+                        .disabled(cloth == .off || clothSolver == .gpu)
                         .onChange(of: clothQuality) { _, choice in
                             var configuration = ZombieXRHolder.shared.clothConfiguration
                             configuration.iterationsPerStep = choice.rawValue
+                            ZombieXRHolder.shared.requestCloth(configuration)
+                        }
+                        Picker("GPU substeps", selection: $clothSubsteps) {
+                            ForEach(ClothSubstepChoice.allCases) { choice in
+                                Text(choice.title).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        .disabled(cloth == .off || clothSolver == .jolt)
+                        .onChange(of: clothSubsteps) { _, choice in
+                            var configuration = ZombieXRHolder.shared.clothConfiguration
+                            configuration.gpuSubsteps = choice.rawValue
                             ZombieXRHolder.shared.requestCloth(configuration)
                         }
                     }

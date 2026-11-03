@@ -127,6 +127,44 @@
             }
         }
 
+        /// Which solver holds the shirt, switched live like the Cloth
+        /// dropdown (the game takes the garments off and puts them back on
+        /// the other solver): Jolt's soft body, or the GPU XPBD solver of
+        /// `Docs/GPUCloth.md` — the A/B on the same proxy, hulls and
+        /// schedule. The GPU arm's substeps and the rest of its knobs stay
+        /// the launch arguments' (`-clothSubsteps <n>` and the others), as
+        /// Jolt's iterations do; until phase 1 lands, GPU falls back to Jolt
+        /// with a printed line.
+        enum SolverChoice: String, CaseIterable, Identifiable {
+            case jolt, gpu
+
+            var id: String { rawValue }
+
+            var title: String {
+                switch self {
+                case .jolt: return "Jolt"
+                case .gpu: return "GPU"
+                }
+            }
+
+            init(_ configuration: ZombieCloth.Configuration) {
+                switch configuration.solver {
+                case .jolt: self = .jolt
+                case .gpu: self = .gpu
+                }
+            }
+
+            /// `configuration` with this choice applied.
+            func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
+                var result = configuration
+                switch self {
+                case .jolt: result.solver = .jolt
+                case .gpu: result.solver = .gpu
+                }
+                return result
+            }
+        }
+
         /// How high the cube sits: near the floor, or at chest height as a
         /// stand-in for a person — the arms reach for it either way.
         enum TargetHeight: String, CaseIterable, Identifiable {
@@ -212,8 +250,10 @@
                     print("CoolZombie: could not load the room \(arguments[index + 1]) — \(error)")
                 }
             }
-            // The shirt's simulation: `-cloth off|skin|ragdoll` and
-            // `-clothIterations <n>`, as on the headset.
+            // The shirt's simulation: `-cloth off|skin|ragdoll`,
+            // `-clothSolver jolt|gpu`, `-clothIterations <n>` and the GPU
+            // arm's knobs (`-clothSubsteps <n>` and the rest), as on the
+            // headset.
             configuration.cloth.apply(launchArguments: arguments)
             clothConfiguration = configuration.cloth
             roomObstacles = room
@@ -384,6 +424,15 @@
         /// The dropdown's cloth choice: the game swaps the shirt's
         /// simulation on its thread.
         func setClothChoice(_ choice: ClothChoice) {
+            clothConfiguration = choice.apply(to: clothConfiguration)
+            game.setCloth(clothConfiguration)
+        }
+
+        var solverChoice: SolverChoice { SolverChoice(clothConfiguration) }
+
+        /// The dropdown's solver choice: the game swaps the shirt's
+        /// simulation on its thread, as for the cloth choice.
+        func setSolverChoice(_ choice: SolverChoice) {
             clothConfiguration = choice.apply(to: clothConfiguration)
             game.setCloth(clothConfiguration)
         }

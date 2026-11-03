@@ -67,6 +67,10 @@ public final class ZombieProps: @unchecked Sendable {
         balls.contains(entity)
     }
 
+    /// The balls in the world now, oldest first (the cloth's sphere
+    /// provider reads their bodies through the physics backend).
+    public var ballEntities: [EntityID] { balls }
+
     public func removeAll() {
         for ball in balls { destroyEntity(entityId: ball) }
         balls.removeAll()

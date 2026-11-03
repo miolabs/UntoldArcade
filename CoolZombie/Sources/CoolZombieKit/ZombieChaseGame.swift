@@ -279,7 +279,9 @@ public final class ZombieChaseGame: @unchecked Sendable {
         spawnStorage = simd_float3(0, configuration.floorY, -configuration.spawnDistance)
         navigator = ZombieChaseGame.makeNavigator(configuration.obstacles, around: .zero, reach: configuration.spawnDistance)
         if configuration.cloth.enabled, let asset = loadClothAsset() {
-            cloth = ZombieCloth(asset: asset, configuration: configuration.cloth)
+            // The renderer's device is where the GPU solver builds (phase 1
+            // of `Docs/GPUCloth.md`); the Jolt arm ignores it.
+            cloth = ZombieCloth(asset: asset, configuration: configuration.cloth, device: renderInfo.device)
         }
     }
 
@@ -903,8 +905,9 @@ public final class ZombieChaseGame: @unchecked Sendable {
             var position = getPosition(entityId: zombie)
             position.y = floorChange
             translateTo(entityId: zombie, position: position)
-            // The floor slab moves with it.
+            // The floor slab moves with it, and the cloth's floor plane.
             physics?.setObstacles(obstacles, floor: floorChange)
+            cloth?.floorY = floorChange
         }
 
         var zombiePosition = getPosition(entityId: zombie)
@@ -1351,9 +1354,24 @@ public final class ZombieChaseGame: @unchecked Sendable {
     /// physics world over the placed ragdoll. The re-seats reach it through
     /// `ZombiePhysics.didReseat`. A shirt put on during the bind-pose
     /// inspection waits for the parts like one that was there when it
-    /// began.
+    /// began. The GPU solver's world goes with it: the floor at the height
+    /// the slab stands (the applied floor, which follows the host's measured
+    /// one), and the balls as spheres read from the Jolt backend's body
+    /// state after each frame's step — `ZombieProps`' balls, up to its
+    /// capacity of eight, each with the position and velocity Jolt left it
+    /// with, so the kernel can back a 5 m/s ball along its velocity to each
+    /// substep's time. The Jolt arm ignores both: its floor is the slab and
+    /// its balls are the Jolt bodies.
     private func attachCloth() {
         guard let cloth, !cloth.isAttached, let physics, let jointInfo else { return }
+        cloth.floorY = lock.withLock { appliedFloorLevel }
+        cloth.sphereProvider = { [weak self] in
+            guard let self, let physics = self.physics else { return [] }
+            return self.props.ballEntities.compactMap { ball -> ClothSphere? in
+                guard let state = physics.backend.bodyState(for: ball) else { return nil }
+                return ClothSphere(center: state.position, radius: ZombieProps.ballRadius, velocity: state.velocity)
+            }
+        }
         if cloth.attach(entityId: zombie, physics: physics, jointInfo: jointInfo) {
             if lock.withLock({ phaseStorage }) == .bindPose { cloth.setInspectionBindPose(true) }
             print("CoolZombie: \(cloth.report)")
@@ -1371,7 +1389,7 @@ public final class ZombieChaseGame: @unchecked Sendable {
         }
         // The loader says why when it cannot.
         guard let asset = loadClothAsset() else { return }
-        cloth = ZombieCloth(asset: asset, configuration: configuration)
+        cloth = ZombieCloth(asset: asset, configuration: configuration, device: renderInfo.device)
         if !revealPending { attachCloth() }
     }
 

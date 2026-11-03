@@ -70,8 +70,9 @@ final class ZombieXRGame: @unchecked Sendable {
             autoThrowInterval = interval
         }
         // The shirt's simulation: the launch arguments (`-cloth
-        // off|skin|ragdoll`, `-clothIterations <n>`, as in the sandbox) or
-        // what the control window's pickers last chose.
+        // off|skin|ragdoll`, `-clothSolver jolt|gpu`, `-clothIterations <n>`,
+        // `-clothSubsteps <n>` and the GPU arm's knobs, as in the sandbox)
+        // or what the control window's pickers last chose.
         configuration.cloth = ZombieXRHolder.shared.clothConfiguration
         roomSource = "detected"
         if let roomName {
@@ -226,7 +227,7 @@ final class ZombieXRGame: @unchecked Sendable {
         }
         if let cloth = holder.takeClothRequest() {
             game.setCloth(cloth)
-            print("CoolZombie: cloth \(cloth.enabled ? "\(cloth.collisionModel.rawValue), \(cloth.iterationsPerStep) iterations" : "off")")
+            print("CoolZombie: cloth \(cloth.enabled ? "\(cloth.collisionModel.rawValue), \(cloth.solver.rawValue), \(cloth.iterationsPerStep) iterations, \(cloth.gpuSubsteps) substeps" : "off")")
         }
         // Test hooks: `-autoProvoke` starts the chase as soon as the zombie
         // is loaded, so a simulator run shows the chase without walking;

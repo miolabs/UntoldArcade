@@ -62,10 +62,11 @@ final class ZombieClothTests: XCTestCase {
     /// run prints the same count: the hang 0; the sway 0 on the skin alone
     /// and meeting the world, 2 over the ragdoll (the lagging forearm part
     /// pushes two cuff particles 3 mm into the posed skin, as that test
-    /// documents); the arms-forward idle 83 meeting the world (sleeves 18,
-    /// armhole band 65; the deepest 22.4 mm at particle 121, at rest
-    /// (-0.21,1.27,-0.09), the front of the right armpit) and 77 over the
-    /// ragdoll (14 and 63, 22.3 mm). What the hulls leave is where no hull
+    /// documents); the arms-forward idle 65 meeting the world (yoke 1,
+    /// sleeves 4, armhole band 60; the deepest 19.8 mm at particle 1142, at
+    /// rest (-0.20,1.27,-0.10), the front of the right armpit) and 66 over
+    /// the ragdoll (4 and 62, 19.6 mm), the skin alone 154 — the cuff roll
+    /// pinned whole (2026-11-03) took the sleeves' share from 18 to 4. What the hulls leave is where no hull
     /// rigid on its bone can follow the skin: the armpits and the shoulder
     /// caps, 68 degrees of swing on blended skin, and the armpit's hollow
     /// in particular, which the upper arm's hull may not fill — filled, it
@@ -74,7 +75,7 @@ final class ZombieClothTests: XCTestCase {
     /// 61 here, sleeves 6, and 3.2 mm of push at the back without gravity).
     /// The arms themselves are clear. Held to the measurement and a few
     /// particles; and the hulls must take at least two fifths of the
-    /// control's count away (they take half).
+    /// control's count away (they take well over half).
     private let hangPenetrationBound = 0
     private let swayPenetrationBound: [String: Int] = ["skin only": 0, "world": 0, "ragdoll and skin": 4]
     /// Per model; the skin-only run is the control, held above the world's.
@@ -1976,7 +1977,7 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertEqual(farthest["skin only"] ?? 0, farthest["ragdoll and skin"] ?? 1, accuracy: 0.01, "the capsules change the arms-forward armhole figure: \(farthest)")
         // The control: the back-stop alone leaves the headset's patches (163
         // particles inside), and the hulls take half of them away
-        // (83 against 163, 2026-11-03): held to two fifths.
+        // (65 against 154, 2026-11-03, the cuff roll pinned whole; 83 against 163 before): held to two fifths.
         XCTAssertGreaterThan(insideByModel["skin only"] ?? 0, 100, "the skin-only control no longer shows the patches the hulls are for: \(insideByModel)")
         XCTAssertLessThan(Float(insideByModel["world"] ?? Int.max) / Float(max(insideByModel["skin only"] ?? 1, 1)), 0.6, "the skin's hulls take less than two fifths of the particles inside the posed skin away: \(insideByModel)")
     }
@@ -1988,15 +1989,19 @@ final class ZombieClothTests: XCTestCase {
     /// move with the joints by teleport-and-target each step
     /// (`moveSkinColliders`), so the hull stands where the skin's targets
     /// stand for the whole step, and they are frictionless. Measured
-    /// 2026-11-03 on the default model: during the swing at most 21
-    /// particles more than 2 mm inside the posed skin (frame 29, the end of
-    /// the swing), the deepest 11.9 mm; held, 26-28 inside, 15.4 mm deep
-    /// (particle 1468, the armhole, the right armpit); the worst excess past
-    /// the slack 8.4 mm; the sleeves' farthest particle 49.7 mm off the skin
-    /// (48.3 on the skin alone: the hulls lift the sleeve no farther than
-    /// the fabric swings by itself). The skin-only control reads 62 inside
-    /// at the swing's end and 62-65 held, 30.8 mm deep. Bounds: the
-    /// measurement and a margin of a few particles and a millimetre. The
+    /// 2026-11-03 on the default model, with the cuff roll pinned whole:
+    /// during the swing at most 9 particles more than 2 mm inside the posed
+    /// skin (frame 29, the end of the swing), the deepest 9.2 mm; held,
+    /// 13-14 inside, 14.2 mm deep (particle 1468, the armhole, the right
+    /// armpit); the worst excess past the slack 6.8 mm; the sleeves'
+    /// farthest particle 50.0 mm off the skin (48.2 on the skin alone: the
+    /// hulls lift the sleeve no farther than the fabric swings by itself).
+    /// The skin-only control reads 48 inside at the swing's end and 46-51
+    /// held, 31.0 mm deep. (Before the cuffs were pinned whole, the same
+    /// day: 21 and 26-28 inside, 62-65 on the skin alone — the free sleeve
+    /// end under the roll was most of the sleeve's share.) Bounds: the
+    /// measurement of the earlier cook and a margin of a few particles and
+    /// a millimetre, so they hold both. The
     /// pre-fix variants (targeted moves, friction 0.5) were not measured
     /// against this test: their runs were cut short when the round closed.
     func testASwingingArmKeepsTheSleeveOnItsHull() throws {
@@ -2178,7 +2183,12 @@ final class ZombieClothTests: XCTestCase {
     /// pinned too — the material the headset round of 2026-10-31 settled
     /// on (a few percent of in-plane give, air drag, a 3 mm particle
     /// against the skin's hulls, which are on by default), since the fit
-    /// tests measure against them.
+    /// tests measure against them; and since 2026-11-03 the solver switch
+    /// and the GPU arm's knobs of `Docs/GPUCloth.md` — Jolt by default
+    /// until the design's gate 2 flips it, 16 substeps, one gather, the
+    /// raw-sum relaxation at 0.5, Jolt's damping, frictionless hulls, the
+    /// read waiting for the frame, the bundled sidecar — each flag with its
+    /// bounds, and a bad value leaving the knob as it was.
     func testTheLaunchArgumentsSetTheClothConfiguration() {
         let defaults = ZombieCloth.Configuration()
         XCTAssertTrue(defaults.skinColliders, "the skin's hulls are built by default")
@@ -2234,5 +2244,114 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertEqual(configuration.slackScale, 3, "a scale of nought would pin the whole shirt; ignored")
         configuration.apply(launchArguments: ["-clothSlack", "loose"])
         XCTAssertEqual(configuration.slackScale, 3, "an unknown value leaves the scale as it was")
+        // The solver and the GPU arm's knobs: the defaults of the design.
+        XCTAssertEqual(defaults.solver, .jolt, "Jolt holds the shirt until gate 2")
+        XCTAssertEqual(defaults.gpuSubsteps, 16, "0.625 ms substeps at the headset's 10 ms")
+        XCTAssertEqual(defaults.gpuIterations, 1, "one gather per substep")
+        XCTAssertEqual(defaults.gpuRelaxation, 0.5, "CoolCloth's factor on the raw sum")
+        XCTAssertFalse(defaults.gpuAveragedJacobi, "the raw sum, not the average")
+        XCTAssertNil(defaults.gpuDamping, "nil is Jolt's linearDamping, so the first A/B is like for like")
+        XCTAssertEqual(defaults.gpuHullFriction, 0, "frictionless hulls, as on Jolt")
+        XCTAssertTrue(defaults.gpuWait, "the read waits for the frame's command buffer")
+        XCTAssertNil(defaults.sidecar, "the bundled sidecar")
+        configuration = defaults
+        configuration.apply(launchArguments: [])
+        XCTAssertEqual(configuration.solver, .jolt)
+        XCTAssertEqual(configuration.gpuSubsteps, 16)
+        configuration.apply(launchArguments: ["-clothSolver", "gpu", "-clothSubsteps", "8", "-clothGPUIterations", "2", "-clothRelaxation", "1.5",
+                                              "-clothAveragedJacobi", "on", "-clothGPUDamping", "1", "-clothHullFriction", "0.2", "-clothGPUWait", "off",
+                                              "-clothSidecar", "Zombie.cloth16k"])
+        XCTAssertEqual(configuration.solver, .gpu, "-clothSolver gpu picks the GPU arm")
+        XCTAssertEqual(configuration.gpuSubsteps, 8)
+        XCTAssertEqual(configuration.gpuIterations, 2)
+        XCTAssertEqual(configuration.gpuRelaxation, 1.5)
+        XCTAssertTrue(configuration.gpuAveragedJacobi)
+        XCTAssertEqual(configuration.gpuDamping, 1)
+        XCTAssertEqual(configuration.gpuHullFriction, 0.2)
+        XCTAssertFalse(configuration.gpuWait)
+        XCTAssertEqual(configuration.sidecar, "Zombie.cloth16k")
+        XCTAssertEqual(configuration.collisionModel, .skinAndWorld, "the model is orthogonal to the solver")
+        XCTAssertEqual(configuration.iterationsPerStep, 4, "and so are Jolt's iterations")
+        configuration.apply(launchArguments: ["-clothSolver", "jolt", "-clothAveragedJacobi", "off", "-clothGPUWait", "on", "-clothGPUDamping", "0", "-clothHullFriction", "0"])
+        XCTAssertEqual(configuration.solver, .jolt)
+        XCTAssertFalse(configuration.gpuAveragedJacobi)
+        XCTAssertTrue(configuration.gpuWait)
+        XCTAssertEqual(configuration.gpuDamping, 0, "nought is a damping (no drag), unlike nil")
+        XCTAssertEqual(configuration.gpuHullFriction, 0)
+        XCTAssertEqual(configuration.gpuSubsteps, 8, "the other knobs stayed")
+        // The bounds: the substeps 1 to 32, the gathers 1 to 4.
+        configuration.apply(launchArguments: ["-clothSubsteps", "32", "-clothGPUIterations", "4"])
+        XCTAssertEqual(configuration.gpuSubsteps, 32)
+        XCTAssertEqual(configuration.gpuIterations, 4)
+        configuration.apply(launchArguments: ["-clothSubsteps", "1", "-clothGPUIterations", "1"])
+        XCTAssertEqual(configuration.gpuSubsteps, 1)
+        XCTAssertEqual(configuration.gpuIterations, 1)
+        configuration.apply(launchArguments: ["-clothSubsteps", "33", "-clothGPUIterations", "5"])
+        XCTAssertEqual(configuration.gpuSubsteps, 1, "33 substeps is past the cap; ignored")
+        XCTAssertEqual(configuration.gpuIterations, 1, "five gathers is past the cap; ignored")
+        configuration.apply(launchArguments: ["-clothSubsteps", "0", "-clothGPUIterations", "0"])
+        XCTAssertEqual(configuration.gpuSubsteps, 1, "nought substeps is not a count")
+        XCTAssertEqual(configuration.gpuIterations, 1, "nor nought gathers")
+        // The bad values: a word, a negative, nought where it would divide
+        // by it, an infinity, an unknown switch value, a flag with no value
+        // or with the next flag for one.
+        configuration = defaults
+        configuration.apply(launchArguments: ["-clothSolver", "cpu", "-clothSubsteps", "many", "-clothGPUIterations", "two", "-clothRelaxation", "0",
+                                              "-clothAveragedJacobi", "maybe", "-clothGPUDamping", "-1", "-clothHullFriction", "-0.5", "-clothGPUWait", "later",
+                                              "-clothSidecar", "-play"])
+        XCTAssertEqual(configuration.solver, .jolt, "an unknown solver changes nothing")
+        XCTAssertEqual(configuration.gpuSubsteps, 16, "a word is not a count")
+        XCTAssertEqual(configuration.gpuIterations, 1)
+        XCTAssertEqual(configuration.gpuRelaxation, 0.5, "a relaxation of nought would freeze the edges; ignored")
+        XCTAssertFalse(configuration.gpuAveragedJacobi, "an unknown value leaves the form as it was")
+        XCTAssertNil(configuration.gpuDamping, "a negative damping is not one")
+        XCTAssertEqual(configuration.gpuHullFriction, 0, "nor a negative friction")
+        XCTAssertTrue(configuration.gpuWait, "an unknown value leaves the wait as it was")
+        XCTAssertNil(configuration.sidecar, "the next flag is not a sidecar's name")
+        configuration.apply(launchArguments: ["-clothRelaxation", "-0.5", "-clothGPUDamping", "inf", "-clothHullFriction", "nan"])
+        XCTAssertEqual(configuration.gpuRelaxation, 0.5, "a negative relaxation would undo the corrections; ignored")
+        XCTAssertNil(configuration.gpuDamping, "an infinity is not a damping")
+        XCTAssertEqual(configuration.gpuHullFriction, 0, "nor is not-a-number a friction")
+        configuration.apply(launchArguments: ["-clothSolver", "-clothSubsteps", "-clothGPUIterations", "-clothRelaxation", "-clothAveragedJacobi",
+                                              "-clothGPUDamping", "-clothHullFriction", "-clothGPUWait", "-clothSidecar"])
+        XCTAssertEqual(configuration.solver, .jolt, "a flag with no value is ignored")
+        XCTAssertEqual(configuration.gpuSubsteps, 16)
+        XCTAssertEqual(configuration.gpuIterations, 1)
+        XCTAssertEqual(configuration.gpuRelaxation, 0.5)
+        XCTAssertFalse(configuration.gpuAveragedJacobi)
+        XCTAssertNil(configuration.gpuDamping)
+        XCTAssertEqual(configuration.gpuHullFriction, 0)
+        XCTAssertTrue(configuration.gpuWait)
+        XCTAssertNil(configuration.sidecar)
+    }
+
+    // MARK: - The solver switch
+
+    /// `Configuration.solver` set to `gpu` before phase 1 of
+    /// `Docs/GPUCloth.md` has a `GPUClothSolver` to build: the attach says
+    /// once that Jolt stands in and then builds what the default builds —
+    /// the Jolt soft body and the sidecar's eleven hulls — so the hosts'
+    /// Solver pickers and `-clothSolver gpu` are safe to flip today, and the
+    /// world holds the floor slab, the twenty parts, the shirt and the hulls
+    /// exactly as on the Jolt arm; the configuration keeps the pick (nothing
+    /// in the report names the solver until phase 1's `[gpu]` tag), and the
+    /// shirt simulates and writes its override as before. Phase 1 turns this
+    /// into the design's `testTheGPUSolverIsRefusedWithoutADevice`: the same
+    /// attach, with no Metal device to build the GPU solver on.
+    func testTheGPUPickStandsOnJoltUntilTheGPUSolverIsBuilt() throws {
+        guard let colliders = Self.asset?.colliders, !colliders.isEmpty else { throw XCTSkip("the sidecar carries no skin colliders") }
+        var gpu = ZombieCloth.Configuration()
+        gpu.solver = .gpu
+        let h = try makeHarness(configuration: gpu)
+        XCTAssertTrue(h.cloth.isAttached, "the GPU pick attaches on Jolt")
+        XCTAssertEqual(h.cloth.configuration.solver, .gpu, "the pick is kept; only the solver built is Jolt's")
+        XCTAssertEqual(h.cloth.skinColliderCount, colliders.count, "the stand-in builds the hulls as the default does")
+        XCTAssertEqual(h.physics.backend.bodyCount, 1 + 20 + 1 + colliders.count, "the floor slab, twenty parts, the shirt and the hulls, as on the Jolt arm")
+        XCTAssertTrue(h.cloth.report.contains("colliders=\(colliders.count)"), h.cloth.report)
+        XCTAssertTrue(h.cloth.report.contains("sim=on"), h.cloth.report)
+        let writes = h.body.overrideWrites
+        h.frames(5)
+        XCTAssertGreaterThan(h.body.overrideWrites, writes, "the shirt simulates and writes its override as before")
+        XCTAssertEqual(h.cloth.runawayCount, 0)
     }
 }
