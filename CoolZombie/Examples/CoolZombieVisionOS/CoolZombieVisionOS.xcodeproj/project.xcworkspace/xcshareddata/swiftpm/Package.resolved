@@ -1,5 +1,5 @@
 {
-  "originHash" : "7f8797d4c7874140726a6f8cc32bfe220e8f410cf17034c04e3a7017882019a5",
+  "originHash" : "05fb758f0d209d8b438da4fa85d25dc3ec299ca31c71a4863651020be572cc3e",
   "pins" : [
     {
       "identity" : "joltphysics",
@@ -16,7 +16,7 @@
       "location" : "https://github.com/miolabs/UntoldEngine",
       "state" : {
         "branch" : "develop",
-        "revision" : "b2571c3734188af9db788d6f6b20c3c71fc777a4"
+        "revision" : "d4ee77772ea935338ca410288f7cebf837cbe044"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/miolabs/UntoldJoltPhysics.git",
       "state" : {
-        "branch" : "feature/ragdoll",
-        "revision" : "8b084f5449968fc5308e31448fccf1c686999473"
+        "branch" : "feature/zombie_cloth",
+        "revision" : "abb4517d42935117189fce23b804b3b427cc6c8a"
       }
     }
   ],

@@ -28,11 +28,13 @@ let package = Package(
         // the commit.
         .package(url: "https://github.com/miolabs/UntoldEngine.git", branch: "develop"),
         // The Jolt physics plugin: the room as static boxes on their own
-        // layer, the zombie as a character controller and a powered
-        // ragdoll. Those live on the fork's feature/ragdoll until upstream
-        // takes them. To work on the plugin and the demo together:
-        // `swift package edit UntoldJoltPhysics --path ../../UntoldJoltPhysics-ragdoll`.
-        .package(url: "https://github.com/miolabs/UntoldJoltPhysics.git", branch: "feature/ragdoll"),
+        // layer, the zombie as a character controller, a powered ragdoll,
+        // and the shirt as a soft body skinned to the skeleton. Those live
+        // on the fork's feature/zombie_cloth (feature/ragdoll plus the
+        // skinned soft bodies) until upstream takes them. To work on the
+        // plugin and the demo together:
+        // `swift package edit UntoldJoltPhysics --path ../../UntoldJoltPhysics-cloth`.
+        .package(url: "https://github.com/miolabs/UntoldJoltPhysics.git", branch: "feature/zombie_cloth"),
     ],
     targets: [
         .target(
