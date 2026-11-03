@@ -63,3 +63,4 @@ CoolWeb/Sources/CoolWeb/Resources/Models/palm_*.png
 
 # Per-developer team and bundle prefix (UntoldViewer/Config/Config.xcconfig)
 Local.xcconfig
+*.tmp.md

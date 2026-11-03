@@ -70,8 +70,7 @@ open CoolMirror/Examples/CoolMirror/CoolMirror.xcodeproj   # CoolMirrorVisionOS 
 
 ### 🏀 CoolBasket — *visionOS · Physics Backend*
 
-<!-- MEDIA: docs/media/CoolBasket/demo.gif -->
-<!-- ![CoolBasket demo](docs/media/CoolBasket/demo.gif) -->
+![CoolBasket demo](docs/media/CoolBasket/demo.gif)
 
 Mixed-reality basketball, and the first consumer of the engine's physics backend plugin seam: a pure-Swift `PhysicsBackend` simulates the ball against your real floor, walls and furniture (ARKit plane detection), the hoop you place in your room, and your hands. Look at the floor and pinch to place the hoop, pinch near the ball to pick it up, flick to throw — a shot only counts when it comes down through the rim.
 
@@ -85,13 +84,22 @@ open CoolBasket/Examples/CoolBasketVisionOS/CoolBasketVisionOS.xcodeproj
 
 ### 🎳 CoolBowling — *visionOS · Jolt Physics*
 
-<!-- MEDIA: docs/media/CoolBowling/demo.gif -->
-<!-- ![CoolBowling demo](docs/media/CoolBowling/demo.gif) -->
+![CoolBowling demo](docs/media/CoolBowling/demo.gif)
 
 Mixed-reality bowling on the shared Jolt Physics plugin — the demo that needs a real rigid-body solver. Look at your floor to lay a lane, pinch to pick up the ball and roll it; ten pins (lathe meshes with convex-hull colliders) stack, wobble, topple and knock each other over, and the pins down are counted from their poses.
 
 ```bash
 open CoolBowling/Examples/CoolBowlingVisionOS/CoolBowlingVisionOS.xcodeproj
+```
+
+### ⚽ ImmersiveGol — *visionOS · Jolt Physics*
+
+![ImmersiveGol demo](docs/media/ImmersiveGol/demo.gif)
+
+Mixed-reality penalty shootout: pinch the real ground to calibrate the floor, then face off against an animated shooter who jogs up, strikes the ball at frame 13 of its kick animation, and sends it toward one of your tracked palms — 25% dead-on, the rest scattered just wide of it so a save actually takes a reach. The shooter's jog/idle/kick blending, root-motion correction, and randomized kick marks run on the same Jolt rigid-body ball and floor as CoolBowling.
+
+```bash
+open ImmersiveGol/ImmersiveGol.xcodeproj
 ```
 
 ### 🪞 CoolMirror — *visionOS + iPhone · Character Deformation · Motion Capture*
@@ -251,6 +259,7 @@ UntoldArcade/
 ├── CoolWeb/             # Rendering Extension — Spider-Man web-shooter demo
 ├── CoolBasket/          # Physics Backend — mixed-reality basketball on the plugin seam, on either backend
 ├── CoolBowling/         # visionOS — bowling on the Jolt Physics plugin
+├── ImmersiveGol/        # visionOS — penalty shootout on the Jolt Physics plugin
 ├── CoolMirror/          # visionOS + iPhone — virtual mirror on the character-deformation stack
 ├── CoolFutbol/          # visionOS — mixed-reality tabletop soccer + PSVR2 controls
 ├── ArchvizViewer/       # visionOS — Blender archviz scene in mixed reality
