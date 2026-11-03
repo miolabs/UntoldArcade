@@ -284,6 +284,13 @@ public final class ZombieCloth: @unchecked Sendable {
         /// resolved overlap can put into the body.
         public var maxLinearVelocity: Float = 4
         public var skinColliders = true
+        /// Scale on every free particle's slack (the sidecar's maxDistance;
+        /// the pins stay pins): an experiment knob, `-clothSlack <scale>`,
+        /// to read how much of the shirt's look is the tether. At 1 the
+        /// schedule stands; at 3 the chest may wander 27 cm from its target
+        /// and the fabric hangs on the hulls and the back-stop, the clamp a
+        /// tunnelling guard alone.
+        public var slackScale: Float = 1
         /// The cloth's friction against the world and the balls (Jolt
         /// combines it with the other body's as the geometric mean).
         public var friction: Float = 0.5
@@ -361,6 +368,10 @@ public final class ZombieCloth: @unchecked Sendable {
             }
             // The skin's hulls, for the A/B of what they cost and add: on by
             // default; `-clothColliders off` runs the back-stop alone.
+            if let index = arguments.firstIndex(of: "-clothSlack"), index + 1 < arguments.count,
+               let scale = Float(arguments[index + 1]), scale > 0 {
+                slackScale = scale
+            }
             if let index = arguments.firstIndex(of: "-clothColliders"), index + 1 < arguments.count {
                 switch arguments[index + 1] {
                 case "on": skinColliders = true
@@ -964,7 +975,7 @@ public final class ZombieCloth: @unchecked Sendable {
         // that is away from it, so they get none.
         let bodyFacing = Set(garment.bodyFacingParticles)
         descriptor.skin = JoltSoftBodySkin(bindJointWorldMatrices: bindJointWorld, vertices: (0 ..< count).map { index in
-            var vertex = JoltSoftBodySkinnedVertex(vertex: UInt32(index), influences: influences[index], maxDistance: garment.maxDistance[index])
+            var vertex = JoltSoftBodySkinnedVertex(vertex: UInt32(index), influences: influences[index], maxDistance: garment.maxDistance[index] * configuration.slackScale)
             vertex.backstopDistance = bodyFacing.contains(index) ? .greatestFiniteMagnitude : garment.backstop
             return vertex
         })

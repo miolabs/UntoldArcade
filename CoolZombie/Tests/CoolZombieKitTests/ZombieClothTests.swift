@@ -2225,5 +2225,14 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertTrue(configuration.skinColliders, "an unknown value leaves the hulls as they were")
         configuration.apply(launchArguments: ["-clothColliders"])
         XCTAssertTrue(configuration.skinColliders, "a flag with no value is ignored")
+        // The tether experiment: how much of the shirt's look is the slack.
+        configuration = defaults
+        XCTAssertEqual(defaults.slackScale, 1, "the schedule stands by default")
+        configuration.apply(launchArguments: ["-clothSlack", "3"])
+        XCTAssertEqual(configuration.slackScale, 3, "-clothSlack 3 triples every free particle's slack")
+        configuration.apply(launchArguments: ["-clothSlack", "0"])
+        XCTAssertEqual(configuration.slackScale, 3, "a scale of nought would pin the whole shirt; ignored")
+        configuration.apply(launchArguments: ["-clothSlack", "loose"])
+        XCTAssertEqual(configuration.slackScale, 3, "an unknown value leaves the scale as it was")
     }
 }

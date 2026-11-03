@@ -904,7 +904,11 @@ too (one way, on a layer of its own) for the A/B — `-clothColliders off`
 leaves the skin's hulls out of any model, the back-stop alone (what the
 hulls cost and add: on the Mac's release build the Jolt step's median is
 3.4 ms with the eleven hulls against 1.7 ms without them, the same build,
-idle and chase alike, 2026-11-02) — and
+idle and chase alike, 2026-11-02) — `-clothSlack <scale>` multiplies
+every free particle's slack (the pins stay pins; at 3 the chest may
+wander 27 cm from its target and the shirt hangs on the hulls and the
+back-stop, the clamp a tunnelling guard alone: the experiment that reads
+how much of the shirt's look is the tether) — and
 `-clothIterations <n>` sets the
 solver's iterations: four by default (the fit tests run at four), one to
 six for the A/B. The same choices switch live: the Mac's Cloth dropdown,
