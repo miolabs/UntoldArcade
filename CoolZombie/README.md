@@ -930,11 +930,17 @@ Jolt's iterations: four by default (the fit tests run at four), one to
 six for the A/B — and `-clothSolver jolt|gpu` picks the solver behind the
 seam (below), with the GPU arm's own knobs beside it: `-clothSubsteps
 <n>` (1 to 32; 16 by default, 0.625 ms each at the headset's 10 ms),
-`-clothGPUIterations <n>` (1 to 4 gathers per substep),
-`-clothRelaxation <r>` (0.5 by default), `-clothAveragedJacobi on|off`,
-`-clothGPUDamping <d>` (unset, Jolt's 4 1/s), `-clothHullFriction <f>`
-(0), `-clothGPUWait on|off` (on) and `-clothSidecar <name>` (the bundled
-one), each left as it was by a value outside its range. The same choices
+`-clothGPUIterations <n>` (1 to 4 gathers per substep; 2 by default,
+the residual test's verdict below), `-clothRelaxation <r>` (0.5 by
+default), `-clothAveragedJacobi on|off`, `-clothGPUDamping <d>` (unset,
+Jolt's 4 1/s), `-clothHullFriction <f>` (0), `-clothGPUWait on|off` (on)
+and `-clothSidecar <name>` (the bundled one), each left as it was by a
+value outside its range. The GPU launch lines are `swift run CoolZombie
+-play -inspect idle -debugLog -clothSolver gpu -clothSubsteps 16` on the
+Mac (`-clothGPUIterations 1` for the 33-dispatch frame, `-clothGPUWait
+off` for the one-frame-lag mode, `-clothColliders off` for the hulls'
+cost) and `xcrun simctl launch <udid> com.miolabs.CoolZombieVisionOS
+-autoOpenSpace -clothSolver gpu` on the headset. The same choices
 switch live: the Mac's Cloth and Solver dropdowns,
 and on the headset the control window's *Cloth* (Off / Skin only / World
 / Ragdoll too), *Solver* (Jolt / GPU), *Cloth iterations* (1, 2, 3, 4 or
@@ -1083,19 +1089,203 @@ soft body's descriptor, the eleven hulls teleported and then targeted at
 every feed, the resting layers. The thousand solver-independent lines
 (the shell, the binding, the joints, the ramp, the sleep, the range, the
 runaway, the report) stay where they were and serve both arms, so the two
-can be A/B'd on the same proxy, hulls, schedule and tests, and the 28
+can be A/B'd on the same proxy, hulls, schedule and tests, and the 29
 cloth tests pass unchanged behind the seam with the figures above.
 `Configuration.solver` (`-clothSolver jolt|gpu`, the *Solver* dropdown
 and picker) picks the arm — Jolt by default until the design's gate 2 —
-with the GPU arm's knobs beside it (`gpuSubsteps` 16, `gpuIterations` 1,
+with the GPU arm's knobs beside it (`gpuSubsteps` 16, `gpuIterations` 2,
 `gpuRelaxation` 0.5 on the raw sum, `gpuDamping` nil for Jolt's 4,
 `gpuHullFriction` 0, `gpuWait` on, `sidecar` nil; the launch arguments
 above), the game hands the cloth its floor and the balls as spheres
 (`floorY` at the slab's height, `sphereProvider` reading
 `ZombieProps`' balls through the Jolt backend's body state after the
 step) for the GPU's contacts, and the diagnostics line prints `sim=on|off`
-for both arms. Until phase 1 lands `GPUClothSolver`, `gpu` falls back to
-Jolt with one printed line.
+for both arms.
+
+Phase 1 of the design landed the same day, 2026-11-03: `GPUClothSolver`
+(`ZombieClothGPUSolver.swift`) behind the seam, its three kernels in
+`Sources/CoolZombieKit/Shaders/ZombieClothGPU.metal` — excluded from the
+SwiftPM target, as the engine and CoolCloth ship theirs, and compiled by
+`Scripts/build-cloth-metallib.sh` (two seconds) into the five committed
+`Resources/Shaders/ZombieCloth-{macos,ios,iossim,xros,xrossim}.metallib`,
+24 KB each, against the package's own minimums (macOS 14, iOS 17,
+visionOS 2) because a lib built against the SDK's OS is refused on an
+older device — with the C header `ZombieClothGPUShaderTypes.h` as the
+ABI (`ZCParams` 256 B, `ZCEntry` 8, `ZCInfluence` 16, `ZCHullHeader` 48,
+`ZCSphere` 32, `ZCStats` 64; nineteen buffer roles, five more reserved for
+phase 2), pinned on the Metal side by `static_assert` at every metallib
+build and on the Swift side by `ZCLayout.mismatches()` in the tests. The
+kit loads the platform's lib from `Bundle.module` through the engine's
+suffix rule (`xros` / `xrossim` on the headset, `macos` on the Mac), and
+`gpu` falls back to Jolt with one printed line only when the renderer has
+no device or the bundle lacks the lib. At attach the solver derives
+Jolt's constraint set from the sidecar's faces as a CSR graph — 11,849
+edges of which 1,424 pin-pin are dropped, 11,707 cross pairs of which
+1,282, 10,425 stretch and 10,425 bend constraints (1,556 of the pairs
+quad-like under Jolt's 8 degrees and on the shear compliance), 41,700
+entries, 22 at most and 10.44 on average per particle, rest lengths
+8.5-39.1 mm, every figure the design gave — the eleven hulls as plane
+sets by the design's brute force (87 / 83 / 82 / 88 / 66 / 84 / 82 / 66 /
+70 / 60 / 64 = 832 planes, every one of the 446 points inside at 1e-5),
+the area-weighted rest normals, the influences and the slack. Per frame
+it is fed inside `willStep` (the joints, the multiplier, the delta
+accumulated over a long frame's several calls), encodes at `beginUpdate`
+— after Jolt's step, so the balls it sees are this frame's — one command
+buffer on its own queue, S x (`zcPredict` + two `zcSolve`) + `zcStats` =
+49 dispatches at sixteen substeps in one serial encoder, and waits for it
+once at the first read in `readBack`, so the game's own step overlaps the
+GPU; `-clothGPUWait off` blits the positions into a three-slot ring
+instead and reads the last completed one, a frame late (`lag=1f`), and
+since that ring and the four-slot stats ring are read with no fence the
+encode keeps at most two frames in flight behind its own (the review of
+3 November found the input ring's guard alone allowed four, where a GPU
+three frames behind would blit over the slot being read). A game frame
+without a physics step feeds nothing and encodes nothing — the shirt
+stands on the last frame's positions, as Jolt's does — where the first
+cut simulated the last feed's delta again and replayed its joint motion
+from the pose before it; the hosts' per-frame stepping only reaches that
+on a frame under 1/250 s, the engine's fixed stepping two frames in five
+at 100 Hz. The
+predict kernel blends up to four skin matrices, slerped per substep by the
+CPU with the matrix's residual carried so the last substep reproduces the
+fed pose to the bit, into the target and the rotated rest normal; the
+solve kernel runs the CSR gather (CoolCloth's XPBD formula over Jolt's
+compliances), then the back-stop plane, the hulls as the most-facing-plane
+push-out in the hull's rigid frame (a particle enters the plane loop only
+inside the hull's box in its joint frame, the points' extent plus twice
+the vertex radius — the design's bounding sphere held most of the shirt
+for a torso hull, so `ZCHullHeader` carries a box and is 48 B — and the
+loop leaves at the first plane that reads the particle outside: without
+the two the eleven hulls cost 2.7-7.0 ms of GPU per Mac frame against
+0.7-1.6 with them off, measured in the release host the same day) with the optional friction
+against the hull's own motion between the two bound frames, the floor
+with the 0.4 xz mix, the balls backed along their velocity to the
+substep's time, and the slack ball LAST so it is exact, then on the last
+gather v = (x - prev) / dt capped at 4 m/s; the stats kernel reduces the
+bounds, the top speed, the NaN and on-clamp counts in one threadgroup. A
+hard skin is a CPU write of the skinned targets into the position,
+previous and velocity buffers after a wait for anything in flight
+(exact: 0.0 m against `skinnedTargets`); asleep or out of range the
+solver encodes nothing (the particle bytes bitwise equal across sleeping
+frames) and a ball's swept box against the last stats' bounds wakes it.
+
+What the solver measures, in `ZombieClothGPUTests` (30 tests, skipped
+without a Metal device; the fit scenarios hoisted out of
+`ZombieClothTests` into `ClothFitScenarios.swift`, `ClothMetrics.swift`
+and `ClothTestHarness.swift` so both arms run the same bodies with their
+own bounds, the Jolt figure lines byte for byte what they were) on the
+M4 Max, 2026-11-03, a debug build: the pins sit on their targets within
+2.9e-6 m and the free particles within 1.4e-7 m of their slack after 300
+idle frames — the first run read 0.50 mm and 0.19 mm, because the
+influence weights travel as `half4` and their rounded sum was off one by
+up to 3.5e-4, half a millimetre at a metre from the origin, so `zcPredict`
+now divides the blend by the rounded weights' sum — the back-stop holds
+1.25 mm behind the skin at the worst (Jolt 3.14), nothing sits inside the
+posed skin after the hang or the sway on any model (Jolt 0 / 0 / 4), the
+hang sags 9.4 mm (Jolt 10.5), the arms-forward armhole band rests
+143.4 mm from its target on its 150 mm ball where Jolt's edges held it
+at 67.0 against an inexact clamp, with 12 particles inside the posed skin
+with the hulls and 18 without (Jolt 65 and 154: the exact back-stop does
+most of the hulls' old work, and what is left sits where the convex hulls
+are inside the concave back and armhole, phase 4's gap capsules), the
+swing leaves none inside at any read frame (Jolt 9), a thrown ball dents
+the chest 50 mm (Jolt's bound 20), the shirt sleeps after 177 still
+frames and a ball wakes it in 10, two solvers are bitwise equal over 120
+frames, a NaN in a free particle hard-skins the shirt the next frame (a
+pin cannot run away: the kernel rewrites its target every substep), and
+`onClamp` reads 1-2 % of the free particles on their slack ball at 9.8
+and at 50 m/s^2 alike — the design expected nine in ten at 50, and the
+figure says the shirt is edge-bound, not slack-bound, which is what the
+`-clothSlack 3` experiment could only guess at. The stretch residual at
+rest (`testStretchResidualAtRest`, the design's gate: under 1 % on
+average and 3 % at the 99th percentile at 16 substeps, 2 % / 6 % at 8)
+decided `gpuIterations`' default: one gather of the raw sum at 0.5 gives
+0.73 % / 3.38 % at 16 and 12.6 % / 41.9 % at 8, the averaged Jacobi at
+1.5 is worse at both (2.53 % / 10.1 %, 5.5 % / 22.0 %, three and a half
+times weaker per pass at the proxy's degree as the design computed), and
+two gathers meet the gate at both (0.40 % / 2.09 %, 0.80 % / 3.84 %), so
+two is the default — 49 dispatches a frame instead of 33, the second
+gather skipping the predict and the blend — and `-clothGPUIterations 1`
+is the A/B back. The second gather recomputes its delta-lambda from
+scratch (no XPBD lambda is carried between gathers) and the speed cap is
+applied every substep where Jolt's is once per step, both slightly on the
+stiff side of Jolt; at a compliance of 1e-2 the physical equilibrium
+stretch is 0.03 % (m g c = 4.9 um on a 17 mm edge), so the 0.4-0.7 %
+residuals are under-convergence, not compliance, and the gather count is
+the right lever. In the same debug build (`testGPUTimingsOverThreeHundredFrames`,
+300 frames of the sway at 100 Hz) the GPU takes 2.48 ms median (2.80 mean,
+7.83 max) per 16-substep frame of 49 dispatches, the wait after the game's
+step 2.78 ms median, the feed 0.32 ms, the read-back 13.3 ms and the shell
+8.7 ms of it, debug code; the release figures are the sweep's below.
+
+The Mac sweep the design asked for (section 7, the day-4 sweeps) ran on
+2026-11-03 in the release host (`swift build -c release --product
+CoolZombie`, the M4 Max, 60 Hz, so every GPU run cuts its 16.7 ms frame
+into 27 substeps of 0.625 ms by the design's rule, 27 x (1 + 2) + 1 = 82
+dispatches at two gathers), 35 seconds each with the once-a-second
+`-debugLog` line, the idle inspect (`-play -inspect idle -debugLog`) and
+the chase (`-play -debugLog`), the medians over the awake in-range lines
+(13-14 of them in the idle, which walks out of range after 15 s; 22-28 in
+the chase), the maximum in brackets; `step=` is the Jolt world's own step,
+which on the GPU arm has neither the soft body nor the eleven kinematic
+hulls in it:
+
+| run (`-clothSolver gpu` unless Jolt) | gpu= | wait= | feed= | read= | bind= | step= | speed<= | onClamp |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Jolt, idle | — | — | — | 596 us | 467 us | 3410 us | 0.50 m/s | — |
+| GPU, idle, 16 substeps (27 on the Mac), 2 gathers | 4.67 ms (6.70) | 4799 us (6860) | 75 us | 6093 us | 499 us | 245 us | 1.48 | 1 % |
+| Jolt, chase | — | — | — | 600 us | 473 us | 3487 us | 5.19 | — |
+| GPU, chase | 4.81 ms (8.68) | 4875 us (8768) | 76 us | 5699 us | 504 us | 263 us | 2.78 | 1 % |
+| GPU, chase, `-throwBall 8 -resetEvery 12` | 5.88 ms (8.77) | 5928 us (8883) | 74 us | 6557 us | 484 us | 214 us | 4.04 | 2 % |
+| GPU, idle, `-clothSubsteps 8` (14 on the Mac) | 2.28 ms (4.17) | 2426 us (4299) | 57 us | 3010 us | 467 us | 210 us | 0.65 | 2 % |
+| GPU, idle, `-clothSubsteps 12` (21) | 3.69 ms (5.76) | 4013 us (5916) | 66 us | 4639 us | 475 us | 236 us | 0.41 | 1 % |
+| GPU, idle, `-clothSubsteps 24` (the cap, 32) | 6.81 ms (7.46) | 7138 us (7850) | 79 us | 7734 us | 482 us | 242 us | 0.96 | 1 % |
+| GPU, idle, `-clothGPUIterations 1` (55 dispatches) | 3.96 ms (5.68) | 4122 us (5870) | 74 us | 5342 us | 523 us | 178 us | 0.92 | 1 % |
+| GPU, idle, `-clothAveragedJacobi on -clothRelaxation 1.5` | 5.58 ms (8.76) | 6083 us (8938) | 82 us | 6748 us | 496 us | 238 us | 1.18 | 2 % |
+| GPU, idle, `-clothGPUDamping 1` | 4.73 ms (7.45) | 4943 us (7578) | 72 us | 6185 us | 487 us | 259 us | 0.63 | 1 % |
+| GPU, idle, `-clothHullFriction 0.2` | 5.67 ms (8.65) | 5828 us (8803) | 74 us | 6466 us | 482 us | 181 us | 0.87 | 1 % |
+| GPU, idle, `-clothGPUWait off` (`lag=1f`) | 6.30 ms (8.24) | 0 | 92 us | 586 us | 470 us | 240 us | 0.87 | 1 % |
+| GPU, idle, `-clothColliders off` (no hulls) | 2.40 ms (3.65) | 2536 us (4142) | 72 us | 3152 us | 462 us | 233 us | 0.46 | 1 % |
+
+No run printed a runaway, a warning or an error, the override writes
+counted once per awake frame in every run (816-819 in the idle, 1,706 in
+the chase, 1,388 with the eight balls and the resets' thirteen hard
+skins), and the chase with the eight balls topped out at 4.04 m/s, the
+cap. What the table says, and what it does not. The feed — the 27 x 13
+slerps, the 28 x 11 hull frames, the 26 KB of uploads and the encode of
+82 dispatches — is 57-92 us, inside the design's 60-100 us; the read-back
+with the wait taken out of it (`-clothGPUWait off`, 586 us) is the Jolt
+arm's 596-600 us to the microsecond, since it is the same shell
+evaluation and override write; and the Jolt world's step falls from
+3.4-3.5 ms to 0.18-0.26 ms when the soft body and the hulls leave it. But
+the GPU's own time is the design's estimate several times over: 4.7 ms
+median at 27 substeps where section 8 budgeted about 1.0 ms for the Mac's
+27, and 2.5 ms at exactly 16 substeps in the debug test above, against
+gate 1's 1.0 ms on the headset; and because the Mac's game step is
+0.2 ms, the wait covers nearly the whole of it, so the frame thread pays
+`gpu=` plus 0.1-0.4 ms where the Jolt arm paid its 3.4 ms step — the GPU
+arm costs the Mac's frame more wall time than Jolt did, not less. The
+levers measured: the eleven hulls are half of it (2.40 ms without them,
+even after the box cull and the plane loop's early out took them from the
+2.7-7.0 ms of the solver's first day), the second gather 0.7 ms (3.96 at
+one), and the substeps nearly linearly (2.28 / 3.69 / 4.67 / 6.81 at 14 /
+21 / 27 / 32), so 8 substeps with two gathers — which the residual test
+holds to the design's 2 % / 6 % gate — is the cheapest frame that passes
+a test today. The figures swing two to one from frame to frame at the
+same substep count (3.0 to 6.7 ms inside one idle run), consistent with a
+GPU that clocks down between 5 ms bursts, and the wait-off run's `gpu=`
+reading higher than the waited one's (6.30 against 4.67) says the same:
+the headset's figures at 16 substeps, where the display's 10 ms leaves
+the GPU no idle, are the gate's, and nothing here predicts them. The
+averaged Jacobi, the damping at 1 and the hull friction at 0.2 cost
+nothing measurable beyond the noise; what they do to the look is the
+headset's to judge. Left for gate 1, in the order the design names them:
+the hull plane sets (the design's 24-point hulls or a 3-degree coplanar
+merge would roughly halve the 832 planes; a tighter cull than the box is
+the other half), the choice between one gather at 16 substeps (3.38 %
+p99 residual, 33 dispatches) and two at 8 (3.84 %, 25 dispatches), and
+`-clothGPUWait off` re-gated first if the headset's cost fails on the
+wait, as section 7 says.
 
 The package depends on the miolabs fork of the plugin at its
 `feature/zombie_cloth` branch (the character controller, the ragdoll, the

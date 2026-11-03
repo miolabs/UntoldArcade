@@ -133,8 +133,9 @@
         /// `Docs/GPUCloth.md` — the A/B on the same proxy, hulls and
         /// schedule. The GPU arm's substeps and the rest of its knobs stay
         /// the launch arguments' (`-clothSubsteps <n>` and the others), as
-        /// Jolt's iterations do; until phase 1 lands, GPU falls back to Jolt
-        /// with a printed line.
+        /// Jolt's iterations do; GPU falls back to Jolt with a printed line
+        /// only when the renderer has no Metal device or the bundle lacks
+        /// the platform's `ZombieCloth-<platform>.metallib`.
         enum SolverChoice: String, CaseIterable, Identifiable {
             case jolt, gpu
 

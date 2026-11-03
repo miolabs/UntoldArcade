@@ -224,9 +224,11 @@ public final class ZombieCloth: @unchecked Sendable {
         /// edges on one thread per body so four times the particles is four
         /// times its 3.4 ms step, and its skin constraint runs before the
         /// edges, so neither the slack nor the back-stop is exact at a
-        /// pass's end. The GPU solver is phase 1 of the design; until it
-        /// lands, `gpu` falls back to Jolt with one printed line, and the
-        /// default stays `jolt` until the design's gate 2 flips it.
+        /// pass's end. The GPU solver (`GPUClothSolver`, phase 1 of the
+        /// design) needs the renderer's device and its metallib in the
+        /// bundle; without either, `gpu` falls back to Jolt with one
+        /// printed line, and the default stays `jolt` until the design's
+        /// gate 2 flips it.
         public enum Solver: String, Sendable {
             case jolt
             case gpu
@@ -241,10 +243,20 @@ public final class ZombieCloth: @unchecked Sendable {
         /// substep against Jolt's Gauss-Seidel passes; 8, 12, 16 and 24 are
         /// the A/B (the headset's picker), 1 to 32 the launch argument's range.
         public var gpuSubsteps = 16
-        /// GPU arm: edge gathers per substep, 1 to 4. A second gather is the
-        /// cheaper lever than more substeps when the stretch residual at
-        /// rest says the edges are not held (the design's 1 % gate).
-        public var gpuIterations = 1
+        /// GPU arm: edge gathers per substep, 1 to 4. Two by default since
+        /// 2026-11-03, the residual test's verdict (`testStretchResidualAtRest`,
+        /// the design's gate: the stretch edges' residual at rest under 1 %
+        /// on average and 3 % at the 99th percentile at 16 substeps, 2 % /
+        /// 6 % at 8): one gather of the raw sum at 0.5 gives 0.73 % / 3.38 %
+        /// at 16 substeps and leaves the shirt 12.6 % stretched on average
+        /// at 8, the averaged form is worse at both counts (2.53 % / 10.1 %
+        /// and 5.5 % / 22 %), and two gathers meet the gate at both (0.40 %
+        /// / 2.09 % and 0.80 % / 3.84 %) for 49 dispatches a frame instead
+        /// of 33 (`-clothGPUIterations 1` is the 33-dispatch frame for the
+        /// A/B). The second gather is the design's own fallback before more
+        /// substeps: it skips the predict and the matrix blend, so it costs
+        /// about half a substep.
+        public var gpuIterations = 2
         /// GPU arm: the factor on a particle's summed edge corrections per
         /// gather — CoolCloth's 0.5 on the raw sum, tuned there for twelve
         /// grid neighbours where the shirt has up to 22 and 10.44 on
@@ -670,8 +682,11 @@ public final class ZombieCloth: @unchecked Sendable {
     /// One garment's solver and its binding to the mesh.
     private final class Garment {
         let name: String
-        /// The solver holding the proxy and the skin's hulls (`ClothSolver`).
+        /// The solver holding the proxy and the skin's hulls (`ClothSolver`),
+        /// and which arm it is — Jolt's, or the GPU's; `jolt` under a `gpu`
+        /// pick the GPU solver could not be built for.
         let solver: any ClothSolver
+        let solverKind: Configuration.Solver
         /// The particles at the bind pose, world space of the attach, and
         /// as the sidecar has them (model space), for the report.
         let bindWorld: [SIMD3<Float>]
@@ -709,11 +724,13 @@ public final class ZombieCloth: @unchecked Sendable {
         var worldNormals: [SIMD3<Float>] = []
         var previousWorldPositions: [SIMD3<Float>] = []
 
-        init(name: String, solver: any ClothSolver, bindWorld: [SIMD3<Float>], restPositions: [SIMD3<Float>], maxDistance: [Float], skeletonJoints: [Int],
-             inverseBindWorld: [simd_float4x4], influences: [[ClothInfluence]], pelvisJoint: Int, shell: RenderShell?, overrideRanges: [Range<Int>])
+        init(name: String, solver: any ClothSolver, solverKind: Configuration.Solver, bindWorld: [SIMD3<Float>], restPositions: [SIMD3<Float>],
+             maxDistance: [Float], skeletonJoints: [Int], inverseBindWorld: [simd_float4x4], influences: [[ClothInfluence]], pelvisJoint: Int,
+             shell: RenderShell?, overrideRanges: [Range<Int>])
         {
             self.name = name
             self.solver = solver
+            self.solverKind = solverKind
             self.bindWorld = bindWorld
             self.restPositions = restPositions
             self.maxDistance = maxDistance
@@ -779,7 +796,7 @@ public final class ZombieCloth: @unchecked Sendable {
             var reasons: [String] = []
             if !missing.isEmpty { reasons.append("the skeleton has no joint \(missing.joined(separator: ", "))") }
             if !unskinned.isEmpty { reasons.append("\(garment) is not skinned to \(unskinned.joined(separator: ", "))") }
-            if refused > 0 { reasons.append("Jolt refused \(refused) (not a hull of four points or more)") }
+            if refused > 0 { reasons.append("the solver refused \(refused) (not a hull of four points or more)") }
             print("CoolZombie: cloth: \(missing.count + unskinned.count + refused) of \(colliderCount) skin colliders skipped: \(reasons.joined(separator: "; "))")
         }
     }
@@ -835,9 +852,11 @@ public final class ZombieCloth: @unchecked Sendable {
     /// solver ignores them (its balls are Jolt bodies). Game thread.
     public var sphereProvider: (() -> [ClothSphere])?
     /// The floor's top, world space, for the GPU solver's floor plane
-    /// (`ZombieChaseGame` keeps it at its slab's height); the Jolt arm meets
-    /// the slab itself.
-    public var floorY: Float = 0
+    /// (`ZombieChaseGame` keeps it at its slab's height, and moves it with a
+    /// measured floor); the Jolt arm meets the slab itself.
+    public var floorY: Float = 0 {
+        didSet { for garment in garments { (garment.solver as? GPUClothSolver)?.floorY = floorY } }
+    }
     /// The mesh's own matrix on top of the entity's (identity for the
     /// zombie), folded into every model-to-world.
     private var localTransform = matrix_identity_float4x4
@@ -946,10 +965,12 @@ public final class ZombieCloth: @unchecked Sendable {
             print("CoolZombie: cloth: the mesh gives \(geometry.normals.count) normals for \(geometry.positions.count) vertices; the garments stay body-skinned")
             return false
         }
-        if configuration.solver == .gpu {
-            // Phase 1 replaces this with `GPUClothSolver(device:configuration:)`,
-            // Jolt standing in only when that cannot be built.
-            print("CoolZombie: cloth: the GPU solver is not built yet; Jolt stands in")
+        if configuration.solver == .gpu, device == nil {
+            // The one line of the fallback for a host without a device (the
+            // tests' harness); a device that cannot build the solver — no
+            // metallib, a kernel missing — is announced by the solver's own
+            // init, once per garment.
+            print("CoolZombie: cloth: the GPU solver needs a Metal device and none was given; Jolt stands in")
         }
         // The pose the hulls are built at (the bind pose before the body
         // has one); the attach's hard skin moves them at once.
@@ -1136,25 +1157,34 @@ public final class ZombieCloth: @unchecked Sendable {
             stretchCompliance: configuration.stretchCompliance, shearCompliance: configuration.shearCompliance, bendCompliance: configuration.bendCompliance,
             linearDamping: configuration.linearDamping, maxLinearVelocity: configuration.maxLinearVelocity, vertexRadius: configuration.vertexRadius,
             friction: configuration.friction, iterations: configuration.iterationsPerStep, oneWayAgainstRagdolls: configuration.oneWayAgainstRagdolls,
-            layer: awakeLayer(physics)
+            layer: awakeLayer(physics), pelvisJoint: pelvisJoint, gravity: PhysicsCoordinator.shared.worldConfiguration().gravity
         )
         let hulls = skinHulls(for: garment, jointInfo: jointInfo, physics: physics, model: model, meshToWorld: meshToWorld)
-        let solver = makeSolver(physics: physics)
-        guard solver.build(setup, hulls: hulls.setups) else { return refuse("Jolt refused the soft body") }
+        let (solver, kind) = makeSolver(physics: physics)
+        guard solver.build(setup, hulls: hulls.setups) else { return refuse(kind == .gpu ? "the GPU solver refused the garment" : "Jolt refused the soft body") }
+        (solver as? GPUClothSolver)?.floorY = floorY
         hulls.report(garment: garment.name, built: solver.hullCount)
         indices.append(contentsOf: garmentIndices)
         return Garment(
-            name: garment.name, solver: solver, bindWorld: bindWorld, restPositions: positions, maxDistance: garment.maxDistance, skeletonJoints: skeletonJoints,
-            inverseBindWorld: bindJointWorld.map(\.inverse), influences: influences, pelvisJoint: pelvisJoint, shell: shell, overrideRanges: ranges
+            name: garment.name, solver: solver, solverKind: kind, bindWorld: bindWorld, restPositions: positions, maxDistance: garment.maxDistance,
+            skeletonJoints: skeletonJoints, inverseBindWorld: bindJointWorld.map(\.inverse), influences: influences, pelvisJoint: pelvisJoint, shell: shell,
+            overrideRanges: ranges
         )
     }
 
-    /// The solver a garment is built on under `configuration.solver`: Jolt
-    /// for `jolt`, and — until phase 1 of `Docs/GPUCloth.md` lands
-    /// `GPUClothSolver(device:configuration:)` — Jolt standing in for `gpu`
-    /// too, announced once per attach.
-    private func makeSolver(physics: ZombiePhysics) -> any ClothSolver {
-        JoltClothSolver(physics: physics)
+    /// The solver a garment is built on under `configuration.solver`, and
+    /// which arm it is: Jolt for `jolt`; for `gpu`, `GPUClothSolver(device:
+    /// configuration:)` on the device the cloth was given — the renderer's
+    /// in the hosts — and Jolt standing in when there is no device or the
+    /// solver cannot be built (no metallib for the platform, a kernel
+    /// missing from a stale one, a pipeline refused), each announced in
+    /// one printed line (`attach` for the missing device, the solver's init
+    /// for the rest), so the picker's choice is never silently another.
+    private func makeSolver(physics: ZombiePhysics) -> (solver: any ClothSolver, kind: Configuration.Solver) {
+        if configuration.solver == .gpu, let device, let gpu = GPUClothSolver(device: device, configuration: configuration) {
+            return (gpu, .gpu)
+        }
+        return (JoltClothSolver(physics: physics), .jolt)
     }
 
     /// The sidecar's skin colliders for `garment` (`SkinHullPlan`), under
@@ -1638,7 +1668,7 @@ public final class ZombieCloth: @unchecked Sendable {
     /// readout refreshed every frame takes `summary`.
     public var report: String {
         guard isAttached else { return "cloth: none" }
-        let names = garments.map(\.name).joined(separator: "+")
+        let names = garmentDescription
         let particles = garments.reduce(0) { $0 + $1.bindWorld.count }
         let pins = garments.reduce(0) { $0 + $1.pinCount }
         // The particles were last read while awake and in range; asleep or
@@ -1662,11 +1692,39 @@ public final class ZombieCloth: @unchecked Sendable {
             }
             farthest = String(format: "%.3fm@(%.2f,%.2f,%.2f)", worst, at.x, at.y, at.z)
         }
-        return String(
-            format: "cloth %@: %d particles (%d pins)%@ colliders=%d mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d joltWakes=%d",
+        var line = String(
+            format: "cloth %@: %d particles (%d pins)%@ colliders=%d mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d",
             names, particles, pins, shellDescription, skinColliderCount, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
-            lastFrameJointMotion * 1000, hardSkinCount, runawayCount, overrideWriteCount, joltWakeCount
+            lastFrameJointMotion * 1000, hardSkinCount, runawayCount, overrideWriteCount
         )
+        if let gpu = gpuSolvers.first {
+            // The GPU arm's own: the hulls as plane sets, the constraints as
+            // built (Jolt's set: 10,425 + 10,425 on the shirt), the frame's
+            // GPU time and wait, and the share of free particles sitting on
+            // their slack ball at the frame's end — whether the look is
+            // bounded by the schedule or by the solver, which the
+            // `-clothSlack 3` experiment could only guess at on Jolt's
+            // inexact clamp.
+            let stats = gpu.stats
+            line += String(
+                format: " hulls=%d planes=%d stretch=%d bend=%d sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df onClamp=%d%%",
+                gpu.hullCount, gpu.planeCount, gpu.constraintGraph?.stretchConstraintCount ?? 0, gpu.constraintGraph?.bendConstraintCount ?? 0,
+                stats.substeps, GPUClothSolver.gatherCount(configured: configuration.gpuIterations), stats.feedMicroseconds, stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames,
+                Int((stats.onClampShare * 100).rounded())
+            )
+        } else {
+            line += " joltWakes=\(joltWakeCount)"
+        }
+        return line
+    }
+
+    /// The GPU solvers among the garments' (none on the Jolt arm).
+    private var gpuSolvers: [GPUClothSolver] { garments.compactMap { $0.solver as? GPUClothSolver } }
+
+    /// The garments by name with the arm they run on: `shirt[gpu]`, or
+    /// `shirt` on Jolt as the line always read.
+    private var garmentDescription: String {
+        garments.map { $0.solverKind == .gpu ? "\($0.name)[gpu]" : $0.name }.joined(separator: "+")
     }
 
     /// The shell vertices the garments carry, when any does.
@@ -1693,8 +1751,21 @@ public final class ZombieCloth: @unchecked Sendable {
     /// particles.
     public var summary: String {
         guard isAttached else { return "cloth: none" }
-        let names = garments.map(\.name).joined(separator: "+")
+        let names = garmentDescription
         let particles = garments.reduce(0) { $0 + $1.bindWorld.count }
+        if let gpu = gpuSolvers.first {
+            // The GPU path's line (`Docs/GPUCloth.md`, the diagnostics
+            // line): the substeps and gathers, the solver's CPU at the
+            // frame's begin, the GPU's time from its own stamps (which
+            // work in release, where the engine's frame stats are zeros),
+            // what the first read waited, and the lag mode.
+            let stats = gpu.stats
+            return String(
+                format: "cloth %@: %d particles%@ mult=%.2f %@ sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df read=%.0fus bind=%.0fus hard=%d runaway=%d writes=%d",
+                names, particles, shellDescription, skinMultiplier, stateDescription, stats.substeps, GPUClothSolver.gatherCount(configured: configuration.gpuIterations), stats.feedMicroseconds,
+                stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames, readBackMicroseconds, bindMicroseconds, hardSkinCount, runawayCount, overrideWriteCount
+            )
+        }
         return String(
             format: "cloth %@: %d particles%@ mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus hard=%d runaway=%d writes=%d",
             names, particles, shellDescription, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds,
@@ -1711,6 +1782,19 @@ public final class ZombieCloth: @unchecked Sendable {
 
     /// The garments by name, for the tests and the report.
     public var garmentNames: [String] { garments.map(\.name) }
+
+    /// The arm the first garment runs on: `jolt` under a `gpu` pick when
+    /// the GPU solver could not be built (no device, no metallib); nil
+    /// before the attach.
+    public var activeSolver: Configuration.Solver? { garments.first?.solverKind }
+
+    /// A garment's solver as the GPU one, for the tests' reads of the
+    /// constraint graph, the planes, the rings and the buffers; nil on the
+    /// Jolt arm.
+    public func gpuSolver(ofGarment index: Int) -> GPUClothSolver? {
+        guard garments.indices.contains(index) else { return nil }
+        return garments[index].solver as? GPUClothSolver
+    }
 
     /// The skin's hulls in the world: the sidecar's colliders whose joints
     /// the skeleton has, when the configuration builds them, over the

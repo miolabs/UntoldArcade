@@ -158,11 +158,18 @@ public struct ClothGarmentSetup: Sendable {
     public var oneWayAgainstRagdolls: Bool
     /// The engine collision layer the awake, in-range body is built on.
     public var layer: UInt32
+    /// The feed joint that is the pelvis (the runaway reference the GPU
+    /// solver's stats kernel measures from; Jolt has no use for it).
+    public var pelvisJoint: Int
+    /// The world's gravity, m/s^2, for a solver that integrates its own
+    /// particles (the GPU arm; Jolt's bodies take the world's).
+    public var gravity: SIMD3<Float>
 
     public init(name: String, origin: SIMD3<Float>, bindPositions: [SIMD3<Float>], faces: [SIMD3<UInt32>], inverseMasses: [Float],
                 influences: [[ClothInfluence]], maxDistance: [Float], backstop: [Float], bodyFacing: Set<Int>, bindJointWorld: [simd_float4x4],
                 stretchCompliance: Float, shearCompliance: Float, bendCompliance: Float, linearDamping: Float, maxLinearVelocity: Float,
-                vertexRadius: Float, friction: Float, iterations: UInt32, oneWayAgainstRagdolls: Bool, layer: UInt32)
+                vertexRadius: Float, friction: Float, iterations: UInt32, oneWayAgainstRagdolls: Bool, layer: UInt32,
+                pelvisJoint: Int = 0, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0))
     {
         self.name = name
         self.origin = origin
@@ -184,6 +191,8 @@ public struct ClothGarmentSetup: Sendable {
         self.iterations = iterations
         self.oneWayAgainstRagdolls = oneWayAgainstRagdolls
         self.layer = layer
+        self.pelvisJoint = pelvisJoint
+        self.gravity = gravity
     }
 }
 
@@ -287,6 +296,13 @@ public struct ClothSolverStats: Sendable {
     public var lagFrames: Int = 0
     /// Kernel dispatches this frame (none asleep or out of range).
     public var dispatches: Int = 0
+    /// The substeps the frame was cut into (16 at the headset's 10 ms, 27
+    /// at the Mac's 16.7 ms on the GPU arm; 0 when nothing was encoded).
+    public var substeps: Int = 0
+    /// The solver's own CPU time at the frame's begin, microseconds: the
+    /// joint and hull slerps, the ring uploads, the params and the encode
+    /// of the frame's dispatches (`feed=` in the diagnostics line).
+    public var feedMicroseconds: Double = 0
     /// The share of free particles sitting on their slack ball at the
     /// frame's end, 0 to 1: whether the look is bounded by the schedule or
     /// by the solver.

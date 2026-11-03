@@ -43,11 +43,21 @@ let package = Package(
                 .product(name: "UntoldEngine", package: "UntoldEngine"),
                 .product(name: "UntoldJoltPhysics", package: "UntoldJoltPhysics"),
             ],
+            // The GPU cloth kernels (`Shaders/ZombieClothGPU.metal`) are not
+            // compiled by SwiftPM: `Scripts/build-cloth-metallib.sh` builds
+            // them into the five committed `Resources/Shaders/ZombieCloth-
+            // <platform>.metallib`, one per OS and simulator at the minimums
+            // above, as the engine and CoolCloth ship theirs, because a
+            // metallib built against the SDK's own OS is refused on an
+            // older device and no runtime shader compilation exists in
+            // either tree (`Docs/GPUCloth.md`).
+            exclude: ["Shaders"],
             resources: [
                 .copy("Resources/Models"),
                 .copy("Resources/Animations"),
                 .copy("Resources/HDR"),
                 .copy("Resources/Rooms"),
+                .copy("Resources/Shaders"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

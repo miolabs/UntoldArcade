@@ -400,8 +400,9 @@ enum ClothQualityChoice: UInt32, CaseIterable, Identifiable {
 
 /// Which solver holds the shirt (`ZombieCloth.Configuration.Solver`): the
 /// Jolt soft body, or the GPU XPBD solver of `Docs/GPUCloth.md` — the A/B
-/// on the same proxy, hulls and schedule. Until phase 1 lands, GPU falls
-/// back to Jolt with a printed line.
+/// on the same proxy, hulls and schedule. GPU falls back to Jolt with a
+/// printed line only when the renderer has no Metal device or the bundle
+/// lacks the platform's `ZombieCloth-<platform>.metallib`.
 enum ClothSolverChoice: String, CaseIterable, Identifiable {
     case jolt = "Jolt"
     case gpu = "GPU"
