@@ -152,7 +152,8 @@ final class ExampleModel {
         if let index = arguments.firstIndex(of: "--foveation"), index + 1 < arguments.count {
             return arguments[index + 1].lowercased() == "equiangular"
         }
-        return UserDefaults.standard.bool(forKey: "rateMap")
+        // The probe's apps start with the map ON, the setting of the readings compared.
+        return UserDefaults.standard.object(forKey: "rateMap") as? Bool ?? true
     }
 
     /// The configuration of the next space opened: the launch arguments', then the window's
@@ -214,6 +215,13 @@ final class ExampleModel {
         spaceOpen = true
         describeSettings()
         log.notice("\(self.materialLine, privacy: .public)")
+        // The GPU-cost probe: the lines to a file, one GPU trace of the engine's queue 20 s in.
+        GPUCostProbe.log("space opened: \(materialLine)")
+        GPUCostProbe.log(GPUCostProbe.describeRenderer())
+        let queue = renderInfo.commandQueue!
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+            GPUCostProbe.capture(queue: queue, seconds: 0.03)
+        }
         // Once a second while the space is open, whether or not the window is (a hidden window
         // ends its own tasks).
         refreshTask = Task { [weak self] in
@@ -257,6 +265,8 @@ final class ExampleModel {
             numbers.gpuMsAverage, numbers.gpuMsMax, numbers.engineGPUMsAverage, numbers.thermalStateName, scene.tapCount
         )
         log.notice("\(self.statusLine, privacy: .public)")
+        GPUCostProbe.log(statusLine)
+        GPUCostProbe.log(GPUCostProbe.describeRenderer() + "; " + GPUCostProbe.describePasses())
     }
 }
 

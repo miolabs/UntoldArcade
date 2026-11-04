@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>RK Presenter</string>
+	<string>$(RK_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -20,6 +20,8 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>MetalCaptureEnabled</key>
+	<true/>
 	<key>NSWorldSensingUsageDescription</key>
 	<string>The engine reads the headset's pose through ARKit to pose each frame.</string>
 	<key>UIApplicationSceneManifest</key>
