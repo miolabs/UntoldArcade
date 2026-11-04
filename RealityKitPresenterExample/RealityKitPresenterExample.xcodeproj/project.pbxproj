@@ -20,6 +20,7 @@
 /* Begin PBXFileReference section */
 		2E1B37DAB6C1CEB741B38764 /* SwimProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwimProbe.swift; sourceTree = "<group>"; };
 		46F18CC0AB31E7FE4EBD7F00 /* RealityKitPresenterExample.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RealityKitPresenterExample.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		993D7FD6E815C09499D919A4 /* UntoldEngine */ = {isa = PBXFileReference; lastKnownFileType = folder; name = UntoldEngine; path = "../../../../../../tmp/claude-501/-Users-godshadow-Projects-Untold/2d12d9e8-8deb-422a-b03f-7203b9448df2/scratchpad/engine/UntoldEngine"; sourceTree = SOURCE_ROOT; };
 		A75FE4B3994BB810BE798569 /* ExampleScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExampleScene.swift; sourceTree = "<group>"; };
 		B0BBA340844FB06491C01CEF /* ControlCube.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlCube.swift; sourceTree = "<group>"; };
 		C50D6B7CBCB80A809D116139 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
@@ -61,6 +62,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		A3FD03CAEE3DE89B581D221A /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				993D7FD6E815C09499D919A4 /* UntoldEngine */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
 		AD2AE50D1B625AA2ED0A4034 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -73,6 +82,7 @@
 			isa = PBXGroup;
 			children = (
 				BDDA0B50EBEE6AB5C34BD6F1 /* Config */,
+				A3FD03CAEE3DE89B581D221A /* Packages */,
 				AD2AE50D1B625AA2ED0A4034 /* Sources */,
 				A24AEAA5C90B32EC07B64965 /* Products */,
 			);
@@ -134,7 +144,7 @@
 			mainGroup = AF117F943026AC4C7EF57E17;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */,
+				98C3B9561F69B39BD733E46F /* XCLocalSwiftPackageReference "/private/tmp/claude-501/-Users-godshadow-Projects-Untold/2d12d9e8-8deb-422a-b03f-7203b9448df2/scratchpad/engine/UntoldEngine" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A24AEAA5C90B32EC07B64965 /* Products */;
@@ -243,7 +253,7 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 7;
-				UNTOLD_ENGINE_PACKAGE_ROOT = "$(BUILD_DIR)/../../SourcePackages/checkouts/UntoldEngine";
+				UNTOLD_ENGINE_PACKAGE_ROOT = "/private/tmp/claude-501/-Users-godshadow-Projects-Untold/2d12d9e8-8deb-422a-b03f-7203b9448df2/scratchpad/engine/UntoldEngine";
 			};
 			name = Release;
 		};
@@ -321,7 +331,7 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 7;
-				UNTOLD_ENGINE_PACKAGE_ROOT = "$(BUILD_DIR)/../../SourcePackages/checkouts/UntoldEngine";
+				UNTOLD_ENGINE_PACKAGE_ROOT = "/private/tmp/claude-501/-Users-godshadow-Projects-Untold/2d12d9e8-8deb-422a-b03f-7203b9448df2/scratchpad/engine/UntoldEngine";
 			};
 			name = Debug;
 		};
@@ -348,31 +358,24 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/miolabs/UntoldEngine.git";
-			requirement = {
-				branch = feature/xr_realitykit_presenter;
-				kind = branch;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		98C3B9561F69B39BD733E46F /* XCLocalSwiftPackageReference "/private/tmp/claude-501/-Users-godshadow-Projects-Untold/2d12d9e8-8deb-422a-b03f-7203b9448df2/scratchpad/engine/UntoldEngine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "/private/tmp/claude-501/-Users-godshadow-Projects-Untold/2d12d9e8-8deb-422a-b03f-7203b9448df2/scratchpad/engine/UntoldEngine";
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		4DEB0970B2ACA5F4272630BD /* UntoldEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngine;
 		};
 		649A49056892574529B80646 /* UntoldEngineXRRealityKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngineXRRealityKit;
 		};
 		8ADDC08B052DA3A7843EBC09 /* UntoldEngineXR */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7BC756665CB36C44257CADCD /* XCRemoteSwiftPackageReference "UntoldEngine" */;
 			productName = UntoldEngineXR;
 		};
 /* End XCSwiftPackageProductDependency section */
