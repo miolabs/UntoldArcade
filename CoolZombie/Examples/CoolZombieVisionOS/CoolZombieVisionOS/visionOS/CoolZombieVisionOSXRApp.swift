@@ -231,8 +231,8 @@ final class ZombieXRHolder: @unchecked Sendable {
     }
 
     /// The shirt's simulation: the launch arguments' configuration until
-    /// the window's Cloth, Solver, Cloth iterations and GPU substeps pickers
-    /// change it. The game
+    /// the window's Cloth, Solver, Proxy, Cloth iterations and GPU substeps
+    /// pickers change it. The game
     /// starts from it (so a space reopened keeps the choice) and applies a
     /// change on its thread: the garments come off and go back on rebuilt.
     private var clothConfigurationStorage: ZombieCloth.Configuration = {
@@ -247,6 +247,11 @@ final class ZombieXRHolder: @unchecked Sendable {
         }
         if ClothSubstepChoice(rawValue: configuration.gpuSubsteps) == nil {
             configuration.gpuSubsteps = ClothSubstepChoice.sixteen.rawValue
+        }
+        // The Proxy picker offers the two cooks; a `-clothSidecar` naming
+        // another file would show as 4k while running something else.
+        if configuration.sidecar != nil, ClothProxyChoice(configuration) == .fourK {
+            configuration.sidecar = nil
         }
         return configuration
     }()
@@ -425,6 +430,38 @@ enum ClothSolverChoice: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which proxy the shirt is simulated on (`ZombieCloth.Configuration.
+/// sidecar`): the 3,995-particle cook, `Zombie.cloth`, the default until
+/// the design's gate 2, or the 16,000-particle one of phase 2,
+/// `Zombie.cloth16k`, whose 8.4 mm spacing shows the folds the drawn
+/// shell's 8.25 mm edge can (`Docs/GPUCloth.md`, "The sim mesh and the
+/// shell"). The GPU arm's knob alone: the Jolt arm keeps the 4k whatever
+/// is picked (its one-thread edge pass at 16k is four times its 3.4 ms
+/// step), so the picker is live for the GPU and the switch is the live
+/// A/B of "GPU 4k" against "GPU 16k" — the garments come off and go back
+/// on the other sidecar, as the Solver picker rebuilds them on the other
+/// solver. A 16k pick on a checkout without the cook runs the 4k, with the
+/// game's printed line.
+enum ClothProxyChoice: String, CaseIterable, Identifiable {
+    case fourK = "4k"
+    case sixteenK = "16k"
+    var id: String { rawValue }
+
+    init(_ configuration: ZombieCloth.Configuration) {
+        if let name = configuration.sidecar, ZombieClothAsset.sidecarFileName(name) == ZombieClothAsset.sidecarFileName(ZombieClothAsset.sidecar16kName) {
+            self = .sixteenK
+        } else {
+            self = .fourK
+        }
+    }
+
+    func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
+        var result = configuration
+        result.sidecar = self == .sixteenK ? ZombieClothAsset.sidecar16kName : nil
+        return result
+    }
+}
+
 /// The GPU solver's substeps per 10 ms frame: 8, 12, 16 (the default,
 /// 0.625 ms each) or 24, the A/B of the design's budget — about 0.3-0.5 ms
 /// of GPU at 8 against 0.6-0.9 at 16. The GPU arm's knob alone: Jolt takes
@@ -486,6 +523,7 @@ struct CoolZombieVisionOSXRApp: App {
     @State private var antiAliasing: AntiAliasingChoice = .taa
     @State private var cloth = ClothChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var clothSolver = ClothSolverChoice(ZombieXRHolder.shared.clothConfiguration)
+    @State private var clothProxy = ClothProxyChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var clothQuality = ClothQualityChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var clothSubsteps = ClothSubstepChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var throwHard = false
@@ -641,7 +679,9 @@ struct CoolZombieVisionOSXRApp: App {
                     // collisions: what they cost), meeting the world (the
                     // balls and the floor; the default) or the ragdoll's
                     // parts too (the A/B); the solver (Jolt or the GPU);
-                    // Jolt's iterations and the GPU's substeps, each knob
+                    // the proxy (the 4k cook or phase 2's 16k, the GPU's
+                    // alone, since Jolt keeps the 4k); Jolt's iterations
+                    // and the GPU's substeps, each knob
                     // live for its own solver alone. Each
                     // change takes the shirt off and puts it back on
                     // rebuilt, so the footnote's cloth line can be read
@@ -666,6 +706,17 @@ struct CoolZombieVisionOSXRApp: App {
                         .frame(maxWidth: 420)
                         .disabled(cloth == .off)
                         .onChange(of: clothSolver) { _, choice in
+                            ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
+                        }
+                        Picker("Proxy", selection: $clothProxy) {
+                            ForEach(ClothProxyChoice.allCases) { choice in
+                                Text(choice.rawValue).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        .disabled(cloth == .off || clothSolver == .jolt)
+                        .onChange(of: clothProxy) { _, choice in
                             ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
                         }
                         Picker("Cloth iterations", selection: $clothQuality) {

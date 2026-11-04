@@ -14,9 +14,12 @@
 // back-stop applied after the edges so they are exact, the thirteen joints
 // slerped per substep, the eleven skin hulls as plane sets, the floor and
 // the balls as CoolCloth's plane and spheres — as `Docs/GPUCloth.md`
-// section 4 lays them out. The three kernels run as 1-D dispatches inside
-// one serial compute encoder per frame, 32 + 1 = 33 dispatches at sixteen
-// substeps and one gather. This file is excluded from the SwiftPM target
+// section 4 lays them out — and, since phase 2, the drawn shell's
+// evaluation (`zcTriangleFrames`, `zcShell`), which moves `RenderShell`'s
+// half-millisecond of CPU per frame to two dispatches after the substeps.
+// The five kernels run as 1-D dispatches inside one serial compute encoder
+// per frame, 32 + 1 + 2 = 35 dispatches at sixteen substeps and one
+// gather. This file is excluded from the SwiftPM target
 // and compiled by `Scripts/build-cloth-metallib.sh` into the five
 // committed metallibs under `Resources/Shaders/`; the kit loads the
 // platform's one through `Bundle.module` (the header says how).
@@ -84,6 +87,16 @@ static_assert(sizeof(ZCSphere) == 32 && alignof(ZCSphere) == 16 && ZC_OFFSET(ZCS
 static_assert(sizeof(ZCStats) == 64 && alignof(ZCStats) == 16 && ZC_OFFSET(ZCStats, boundsMin) == 0 && ZC_OFFSET(ZCStats, boundsMax) == 16
                   && ZC_OFFSET(ZCStats, counts) == 32 && ZC_OFFSET(ZCStats, reserved) == 48,
               "ZCStats: 64 B");
+static_assert(sizeof(ZCShellParams) == 128 && alignof(ZCShellParams) == 16 && ZC_OFFSET(ZCShellParams, toMesh) == 0
+                  && ZC_OFFSET(ZCShellParams, origin) == 64 && ZC_OFFSET(ZCShellParams, counts) == 80
+                  && ZC_OFFSET(ZCShellParams, reserved0) == 96 && ZC_OFFSET(ZCShellParams, reserved1) == 112,
+              "ZCShellParams: 128 B");
+static_assert(sizeof(ZCTriangleFrame) == 48 && alignof(ZCTriangleFrame) == 16 && ZC_OFFSET(ZCTriangleFrame, e1) == 0
+                  && ZC_OFFSET(ZCTriangleFrame, n) == 16 && ZC_OFFSET(ZCTriangleFrame, t) == 32,
+              "ZCTriangleFrame: 48 B");
+static_assert(sizeof(ZCShellBinding) == 48 && alignof(ZCShellBinding) == 16 && ZC_OFFSET(ZCShellBinding, barycentric) == 0
+                  && ZC_OFFSET(ZCShellBinding, offset) == 16 && ZC_OFFSET(ZCShellBinding, normal) == 32,
+              "ZCShellBinding: 48 B");
 #undef ZC_OFFSET
 
 // ===========================================================================
@@ -629,4 +642,172 @@ kernel void zcStats(constant ZCParams &params [[buffer(ZCParamsIndex)]],
         out.reserved = uint4(0u);
         stats[0] = out;
     }
+}
+
+// ===========================================================================
+// The GPU shell (phase 2). Two kernels after the frame's last substep and
+// the stats, in the same serial encoder, reading the frame's final
+// positions at ZCPositionInIndex, that are `ZombieCloth.RenderShell` moved
+// off the cores: `frames(of:particles:into:)` becomes `zcTriangleFrames`
+// and `evaluate(particles:)` becomes `zcShell`, each line kept, so the
+// 29,402 shell vertices (32,530 driven exported copies in the game) come
+// out where the CPU put them to the float arithmetic — the design's
+// `testTheGPUShellMatchesTheCPUShell` holds them within 1e-5 m and 0.05
+// degrees at the bind pose and in a swayed frame — and the CPU's part of
+// the shirt's frame shrinks from the shell's 503 us median (1,008 max,
+// M4 Max; about a millisecond on the headset) to a copy of the two
+// `float4` streams into the override arrays, 100-150 us, until phase 3
+// hands the engine the buffers themselves.
+//
+// Spaces: the solver simulates in the garment frame (world minus the
+// origin) and the shell is drawn in MESH space, because the engine's
+// deformation pass applies the override after the skin in the mesh's own
+// space; `expandOverride` converted every particle with `toMesh * (p + origin, 1)`
+// before the CPU shell saw it, and the kernels do the same per corner
+// (three conversions per slot, 32,530 x 3, cached since a triangle's
+// corners serve its four slots) rather than carrying the converted corners
+// in the frame buffer, which the design sized at three lanes. The frame is
+// built in mesh space, not built in the garment frame and rotated, because
+// `toMesh` may scale (an entity scaled at the attach) and the rest offsets
+// were expressed in the mesh-space frame by the prep.
+// ===========================================================================
+
+/// A particle out of the garment frame into mesh space, the CPU's order:
+/// the origin added first (that is the world position `readPositions`
+/// returns), the matrix second. The product is written out by hand with
+/// contraction and reassociation off, because the frames kernel's
+/// collapse test is a difference of two such conversions: under the
+/// default fast math the compiler contracted the three corners' products
+/// into fused multiply-adds differently after inlining, and two corners
+/// with the SAME garment position came out 1e-8 m apart in mesh space
+/// under a scaled `toMesh` — over the 1e-9 m line the CPU rule draws — so
+/// an exactly collapsed triangle got a frame built from rounding instead of
+/// keeping its last one (the scratch check, 2026-11-04; exact under the
+/// identity, where no grouping changes a rounding). The pragma does not
+/// reach the standard library's `float4x4 * float4`, whose inlined
+/// instructions keep their own flags, which is why the four columns are
+/// summed here; with the flags off identical inputs give identical outputs
+/// and the rule matches the CPU's. The cost is nothing measurable on
+/// 32,530 x 3 conversions.
+static inline float3 zcMeshPoint(constant ZCShellParams &shell, float3 p) {
+#pragma clang fp reassociate(off) contract(off)
+    const float3 world = p + shell.origin.xyz;
+    const float4 mesh = shell.toMesh[0] * world.x + shell.toMesh[1] * world.y + shell.toMesh[2] * world.z + shell.toMesh[3];
+    return mesh.xyz;
+}
+
+// ===========================================================================
+// zcTriangleFrames — once per frame, T threads in groups of
+// ZCThreadgroupSize.
+//
+// In: positionIn (the frame's final positions, garment frame), triangles,
+// shell params (toMesh, origin, counts.y = T). Out: frames[t] = (e1, n, t)
+// of triangle t in mesh space, w lanes 0, for every triangle that is not
+// collapsed; a collapsed one is left as it was.
+//
+// Per triangle, `RenderShell.frames(of:particles:into:)` line for line:
+// the three corners into mesh space, ab = b - a, cross = ab x (c - a) (the
+// un-normalised edge, so the normal's direction is the face's winding and
+// its length the parallelogram's area), and unless |ab| > 1e-9 m and
+// |cross| > 1e-12 m^2 the thread returns without writing, which keeps the
+// frame the buffer held — the CPU's `guard ... else { continue }` on a
+// triangle collapsed to a line or a point, which never happens on the
+// shirt (the proxy's angles are 8 degrees and more at rest, 10.2 on the
+// 16k cook) but must not turn into a NaN frame that NaNs its slots; the
+// comparison is written so a NaN corner also fails it and keeps the
+// frame. Then e1 = ab / |ab|, n = cross / |cross|, t = n x e1: a
+// right-handed orthonormal frame, which is why a shell vertex rides it
+// rigidly and a button keeps its shape. The CPU also stores the corners
+// in its `Frame`; here `zcShell` reads them from the positions itself.
+// ===========================================================================
+kernel void zcTriangleFrames(constant ZCShellParams &shell [[buffer(ZCShellParamsIndex)]],
+                             device const float4 *positionIn [[buffer(ZCPositionInIndex)]],
+                             device const uint4 *triangles [[buffer(ZCTrianglesIndex)]],
+                             device ZCTriangleFrame *frames [[buffer(ZCTriangleFramesIndex)]],
+                             uint gid [[thread_position_in_grid]]) {
+    if (gid >= shell.counts.y) {
+        return;
+    }
+    const uint4 tri = triangles[gid];
+    const float3 a = zcMeshPoint(shell, positionIn[tri.x].xyz);
+    const float3 b = zcMeshPoint(shell, positionIn[tri.y].xyz);
+    const float3 c = zcMeshPoint(shell, positionIn[tri.z].xyz);
+    const float3 ab = b - a;
+    const float3 crossProduct = cross(ab, c - a);
+    const float lab = length(ab);
+    const float lcross = length(crossProduct);
+    if (!(lab > 1e-9f && lcross > 1e-12f)) {
+        // Collapsed (or not a number): the last frame stands.
+        return;
+    }
+    const float3 e1 = ab / lab;
+    const float3 n = crossProduct / lcross;
+    ZCTriangleFrame frame;
+    frame.e1 = float4(e1, 0.0f);
+    frame.n = float4(n, 0.0f);
+    frame.t = float4(cross(n, e1), 0.0f);
+    frames[gid] = frame;
+}
+
+// ===========================================================================
+// zcShell — once per frame after zcTriangleFrames, slots threads in groups
+// of ZCThreadgroupSize.
+//
+// In: positionIn (the frame's final positions, garment frame), triangles,
+// frames (this frame's, from zcTriangleFrames), bindings, shell params
+// (toMesh, origin, counts.x = slots, counts.y = T). Out: shellOut[s] =
+// (position, 1) and shellOut[slots + s] = (normal, 0) for slot s, mesh
+// space — the planar pair `deformOverride` consumes.
+//
+// Per slot, `RenderShell.evaluate` line for line: the binding's triangle
+// (from `barycentric.w`), its three corners into mesh space as the frames
+// kernel converted them, its frame, then pos = w.x a + w.y b + w.z c + o.x
+// e1 + o.y n + o.z t and normal = r.x e1 + r.y n + r.z t, with w the
+// barycentric weights, o the rest offset and r the exported copy's unit
+// rest normal, both in the bind frame. The normal is not re-normalised,
+// as the CPU's is not: r is unit and the frame orthonormal, so the result
+// is unit to the arithmetic, and a re-normalisation would move it off the
+// CPU's by a rounding the equality test need not absorb. The position's w
+// is 1 and the normal's 0 because `deformOverride` writes `float4(p.xyz,
+// 1)` and `float4(n.xyz, 0)` and phase 3 hands it these streams as they
+// are. A binding whose triangle is past T (the asset's `isConsistent`
+// refuses one before the attach) leaves its slot as it was rather than
+// read past the buffer.
+//
+// Why the corners come from the positions and not the frame buffer: a
+// frame of three lanes is the design's size; the three corner reads are
+// 48 B a slot against 48 more a triangle, and the corners of a triangle
+// serve its four slots on average from the cache. The rigid islands need
+// no branch here either (the header says why): every vertex of a button
+// binds to one triangle, so the formula carries the island whole.
+// ===========================================================================
+kernel void zcShell(constant ZCShellParams &shell [[buffer(ZCShellParamsIndex)]],
+                    device const float4 *positionIn [[buffer(ZCPositionInIndex)]],
+                    device const uint4 *triangles [[buffer(ZCTrianglesIndex)]],
+                    device const ZCTriangleFrame *frames [[buffer(ZCTriangleFramesIndex)]],
+                    device const ZCShellBinding *bindings [[buffer(ZCShellBindingsIndex)]],
+                    device float4 *shellOut [[buffer(ZCShellOutIndex)]],
+                    uint gid [[thread_position_in_grid]]) {
+    const uint slotCount = shell.counts.x;
+    if (gid >= slotCount) {
+        return;
+    }
+    const ZCShellBinding binding = bindings[gid];
+    const uint triangle = uint(binding.barycentric.w);
+    if (triangle >= shell.counts.y) {
+        return;
+    }
+    const uint4 tri = triangles[triangle];
+    const float3 a = zcMeshPoint(shell, positionIn[tri.x].xyz);
+    const float3 b = zcMeshPoint(shell, positionIn[tri.y].xyz);
+    const float3 c = zcMeshPoint(shell, positionIn[tri.z].xyz);
+    const ZCTriangleFrame frame = frames[triangle];
+    const float3 e1 = frame.e1.xyz, n = frame.n.xyz, t = frame.t.xyz;
+    const float3 w = binding.barycentric.xyz;
+    const float3 o = binding.offset.xyz;
+    const float3 r = binding.normal.xyz;
+    const float3 position = w.x * a + w.y * b + w.z * c + o.x * e1 + o.y * n + o.z * t;
+    const float3 normal = r.x * e1 + r.y * n + r.z * t;
+    shellOut[gid] = float4(position, 1.0f);
+    shellOut[slotCount + gid] = float4(normal, 0.0f);
 }

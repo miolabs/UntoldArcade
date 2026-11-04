@@ -77,19 +77,40 @@ final class ClothHarness {
     let joints: SkeletonJointInfo
     let shirt: ZombieClothAsset.Garment
     let attached: Bool
+    /// The sidecar the shirt was built from: the bundled `Zombie.cloth.json`
+    /// (3,995 particles) unless the test named another (`sidecar:`), the
+    /// phase-2 `Zombie.cloth16k.json` of `Docs/GPUCloth.md`.
+    let sidecarName: String
     var time: Float = 0
     /// The balls the test added (`addBall`), which the GPU solver meets as
     /// spheres through `backend.bodyState(for:)` after every step; the Jolt
     /// solver ignores the list, its balls being Jolt bodies on the ball layer.
     private var balls: [(entity: EntityID, radius: Float)] = []
 
+    /// `sidecar` names a second cook of the same export under
+    /// `Models/Zombie/` to build the shirt from in place of `asset` (the
+    /// design's `Zombie.cloth16k.json`, 2026-11-04); the caller checks it is
+    /// bundled first (`ClothFixtures.sidecar(named:)`), since a name that
+    /// does not load falls back to `asset` here and says so once.
     init(dt: Float, asset: ZombieClothAsset, joints: SkeletonJointInfo, configuration: ZombieCloth.Configuration = ZombieCloth.Configuration(),
          world: simd_float4x4 = ClothFixtures.standing, ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil,
          normals: [SIMD3<Float>]? = nil, acceptsOverride: Bool = true, pose: [simd_float4x4]? = nil, collisionSteps: Int32 = 3,
-         gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), solver: ZombieCloth.Configuration.Solver? = nil, device: MTLDevice? = nil)
+         gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), solver: ZombieCloth.Configuration.Solver? = nil, device: MTLDevice? = nil,
+         sidecar: String? = nil)
     {
         self.dt = dt
         self.joints = joints
+        var asset = asset
+        var sidecarName = ClothFixtures.bundledSidecarName
+        if let sidecar {
+            if let named = ClothFixtures.sidecar(named: sidecar) {
+                asset = named
+                sidecarName = sidecar
+            } else {
+                print("CoolZombie tests: the sidecar \(sidecar) is not bundled; the harness runs on \(sidecarName)")
+            }
+        }
+        self.sidecarName = sidecarName
         shirt = asset.garment(named: "shirt")!
         var settings = JoltWorldSettings()
         settings.workerThreads = 0
@@ -231,6 +252,45 @@ enum ClothFixtures {
         }
         return try? ZombieClothAsset.loadBundled()
     }()
+
+    /// The bundled sidecar's file name, and the design's name for the
+    /// phase-2 cook at 16,000 particles (`Docs/GPUCloth.md`, "The sim mesh
+    /// and the shell"): a second file beside the first, the same shell bound
+    /// to a four-times-finer proxy, the same colliders and trousers.
+    static let bundledSidecarName = "Zombie.cloth.json"
+    static let sidecar16kName = "Zombie.cloth16k.json"
+
+    /// Another sidecar under `Models/Zombie/` by file name, decoded once per
+    /// process (the 16k file is about 4 MB of JSON); nil when it is not
+    /// bundled or does not decode, which the tests turn into a skip.
+    static func sidecar(named name: String) -> ZombieClothAsset? {
+        sidecars.asset(named: name)
+    }
+
+    /// The URL a named sidecar would have beside the model.
+    static func sidecarURL(named name: String) -> URL? {
+        ZombieResources.baseURL?.appendingPathComponent("Models/Zombie/\(name)")
+    }
+
+    /// The decoded sidecars by name, under a lock (the tests run on one
+    /// thread, the fixtures are statics all the same).
+    private final class SidecarCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var loaded: [String: ZombieClothAsset?] = [:]
+
+        func asset(named name: String) -> ZombieClothAsset? {
+            lock.lock(); defer { lock.unlock() }
+            if let cached = loaded[name] { return cached }
+            var asset: ZombieClothAsset?
+            if let url = ClothFixtures.sidecarURL(named: name), FileManager.default.fileExists(atPath: url.path) {
+                asset = try? ZombieClothAsset.load(from: url)
+            }
+            loaded[name] = asset
+            return asset
+        }
+    }
+
+    private static let sidecars = SidecarCache()
 
     /// The exported mesh's vertices and normals, read off the asset's vertex
     /// data the way the model tests read it (pbrStaticV1: the position's three

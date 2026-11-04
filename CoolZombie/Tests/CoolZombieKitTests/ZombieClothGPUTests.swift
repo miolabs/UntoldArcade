@@ -25,6 +25,14 @@
 //  25 %, as the design allows for a first commit) and were re-pinned the
 //  same day from the green runs' printed figures, at two gathers with the
 //  weights renormalised in the kernel (`gpuBounds` says what they are).
+//  Phase 2 (2026-11-04) added the shell's two kernels and the 16k proxy:
+//  the GPU shell against the CPU shell on the same frame, the drape figure
+//  on both proxies (`ClothMetrics.Drape`), the fit scenarios on
+//  `Zombie.cloth16k.json` with bounds of their own (`gpuBounds16k`), the
+//  16k proxy at rest against the posed skin, the Jolt arm's refusal of it,
+//  and the 16k cost; the hull counts were re-pinned the same day to the
+//  phase-2 cook's colliders (816 planes on 438 points, where the design
+//  counted 832 on 446).
 //
 
 @testable import CoolZombieKit
@@ -85,6 +93,38 @@ final class ZombieClothGPUTests: XCTestCase {
     /// in on that arm, which the exact clamp does not allow here).
     private let swayPenetrationBound: [String: Int] = ["skin only": 0, "world": 0, "ragdoll and skin": 0]
 
+    /// The GPU arm's fit bounds on the 16k proxy (`Zombie.cloth16k.json`,
+    /// the phase-2 cook of `Docs/GPUCloth.md`: 15,979 particles, 1,848
+    /// pins, 42,440 + 42,424 constraints), the same scenarios at the same
+    /// 16 substeps and two gathers, measured 2026-11-04 on the M4 Max (a
+    /// debug build) the day the cook landed and pinned with the 4k rows'
+    /// margins. The finer shirt hangs lower, as a shirt does: the chest and
+    /// the back sag 22.9 mm (9.4 at 4k) with the hem band's mean 16.7 mm
+    /// over the yoke's 2.8 (7.8 over 1.3 at 4k), nothing past its slack by
+    /// more than 2e-6 m in the hang or the sway, the pins within 3.2e-6 m,
+    /// 1.67 mm behind the skin at the worst (1.25 at 4k; the clamp and the
+    /// back-stop as exact as before), the nearest particle 1.73 mm off the
+    /// surface under the shirt (2.12), nothing inside the posed skin after
+    /// the hang or the sway, 0.0 mm of sag without gravity; in the
+    /// arms-forward idle the armhole band's farthest particle sits ON its
+    /// 150 mm slack ball (150.004 mm, where the 4k's rested 143.4 inside
+    /// it), 13.2 mm behind its skinned plane, 30 particles inside the posed
+    /// skin with the hulls (armhole 19, sleeves 5, chest 4, yoke 2, 4.4 mm
+    /// deep; 12 at 4k) and 71 without (8.4 mm deep; 18 at 4k) — four times
+    /// the particles read about twice the count, and the hulls take three
+    /// fifths away; the arm swing leaves at most 9 inside at a read frame
+    /// (frame 37; none at 4k), 5.2 mm deep at the worst (1.1), 0.0 mm past
+    /// the slack, the sleeves 50.0 mm off the skin as at 4k. Re-pin from
+    /// the printed lines when the solver or the cook changes.
+    private static let gpuBounds16k = ClothFitBounds(
+        hang: .init(penetration: 0, sag: 0.005, hemOverYoke: 0.005, excess: 0.001, pins: 1e-5, clearance: 0.001, inward: 0.0022, rigid: 1e-4, controlSag: 0.001),
+        idle: .init(excess: 0.001, pins: 1e-5),
+        sway: .init(penetration: 0, excess: 0.001, excessOverLaggingParts: 0.005, pins: 1e-5),
+        dent: .init(dent: 0.02),
+        armsForward: .init(penetration: 36, armhole: 0.151, excess: 0.001, inward: 0.025),
+        swing: .init(inside: 12, deepest: 0.0065, excess: 0.001, lift: 0.055)
+    )
+
     // MARK: - The harness
 
     /// The Jolt harness on the GPU solver: the configuration's `solver` set
@@ -96,15 +136,26 @@ final class ZombieClothGPUTests: XCTestCase {
     /// the coordinator's world configuration, not the harness's backend.
     private func makeHarness(configuration: ZombieCloth.Configuration = ZombieCloth.Configuration(), world: simd_float4x4 = ClothFixtures.standing,
                              ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil, normals: [SIMD3<Float>]? = nil,
-                             pose: [simd_float4x4]? = nil, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), device: MTLDevice? = nil) throws -> ClothHarness
+                             pose: [simd_float4x4]? = nil, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), device: MTLDevice? = nil, sidecar: String? = nil) throws -> ClothHarness
     {
         guard let asset = ClothFixtures.asset, let joints = ClothFixtures.skeleton else { throw XCTSkip("Models/Zombie is not bundled") }
+        if let sidecar, ClothFixtures.sidecar(named: sidecar) == nil { throw XCTSkip("Models/Zombie/\(sidecar) is not bundled (the phase-2 cook)") }
         let harness = ClothHarness(dt: dt, asset: asset, joints: joints, configuration: configuration, world: world, ragdoll: ragdoll, obstacles: obstacles, mesh: mesh,
-                                   normals: normals, pose: pose, gravity: gravity, solver: .gpu, device: device ?? self.device)
+                                   normals: normals, pose: pose, gravity: gravity, solver: .gpu, device: device ?? self.device, sidecar: sidecar)
         XCTAssertTrue(harness.attached, "the shirt attached")
         XCTAssertEqual(harness.cloth.activeSolver, .gpu, "the shirt is not on the GPU solver (\(harness.cloth.report))")
         if gravity != SIMD3(0, -9.8, 0) { harness.cloth.gpuSolver(ofGarment: 0)?.gravity = gravity }
         return harness
+    }
+
+    /// The harness on the phase-2 sidecar, `Zombie.cloth16k.json`, or a skip
+    /// while the cook has not landed.
+    private func makeHarness16k(configuration: ZombieCloth.Configuration, world: simd_float4x4 = ClothFixtures.standing, ragdoll: Bool = true,
+                                pose: [simd_float4x4]? = nil, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0)) throws -> ClothHarness
+    {
+        let h = try makeHarness(configuration: configuration, world: world, ragdoll: ragdoll, pose: pose, gravity: gravity, sidecar: ClothFixtures.sidecar16kName)
+        XCTAssertGreaterThan(h.shirt.particles.count, 12000, "the harness is not on the 16k proxy (\(h.sidecarName), \(h.shirt.particles.count) particles)")
+        return h
     }
 
     /// The default configuration with the GPU arm's knobs set.
@@ -128,6 +179,14 @@ final class ZombieClothGPUTests: XCTestCase {
     /// The shirt's GPU solver.
     private func gpu(_ h: ClothHarness) throws -> GPUClothSolver {
         try XCTUnwrap(h.cloth.gpuSolver(ofGarment: 0), "the shirt is not on the GPU solver")
+    }
+
+    /// The dispatches a frame carries beyond its substeps and the stats:
+    /// the shell's two (`zcTriangleFrames` + `zcShell`, phase 2) when the
+    /// garment was handed its shell, none with `gpuShell` off or on a
+    /// garment without one (the cube and floor sheets).
+    private func shellDispatches(_ h: ClothHarness) throws -> Int {
+        try gpu(h).hasGPUShell ? 2 : 0
     }
 
     /// The shirt's unique edges with a movable end, as Jolt's
@@ -162,17 +221,21 @@ final class ZombieClothGPUTests: XCTestCase {
     /// quieter. The Swift mirrors of the Metal structs have the header's
     /// strides — 256, 8, 48 (the hull header, a box since 2026-11-03) and
     /// 64 B, with the two per-entry structs the ABI named, `ZCInfluence`
-    /// 16 B and `ZCSphere` 32 B — and
-    /// `ZCLayout.mismatches()` pins every member's offset and alignment. The
-    /// design's `zcTriangleFrames` and `zcShell` are phase 2 and are checked
-    /// there.
+    /// 16 B and `ZCSphere` 32 B, and since phase 2 (2026-11-04) the shell's
+    /// three, `ZCShellParams` 128 B, `ZCTriangleFrame` 48 and
+    /// `ZCShellBinding` 48 — and `ZCLayout.mismatches()` pins every
+    /// member's offset and alignment. The design's `zcTriangleFrames` and
+    /// `zcShell` are the fourth and fifth kernels since phase 2.
     func testTheMetallibExposesTheKernels() throws {
         let name = RenderShaderLibraryPlatformResource.resourceName(baseName: "ZombieCloth")
         let url = try XCTUnwrap(GPUClothSolver.metallibURL, "\(name).metallib is not in the kit's Shaders resources")
         XCTAssertEqual(url.lastPathComponent, "\(name).metallib")
         let library = try device.makeLibrary(URL: url)
         let names = Set(library.functionNames)
-        XCTAssertEqual(GPUClothSolver.kernelNames, ["zcPredict", "zcSolve", "zcStats"])
+        XCTAssertEqual(GPUClothSolver.kernelNames, ["zcPredict", "zcSolve", "zcStats", "zcTriangleFrames", "zcShell"])
+        XCTAssertEqual(MemoryLayout<ZCShellParams>.stride, 128)
+        XCTAssertEqual(MemoryLayout<ZCTriangleFrame>.stride, 48)
+        XCTAssertEqual(MemoryLayout<ZCShellBinding>.stride, 48)
         for kernel in GPUClothSolver.kernelNames {
             XCTAssertTrue(names.contains(kernel), "\(name).metallib has no \(kernel) (\(library.functionNames))")
             let function = try XCTUnwrap(library.makeFunction(name: kernel), kernel)
@@ -265,21 +328,24 @@ final class ZombieClothGPUTests: XCTestCase {
         print("cloth gpu graph: \(graph.edgeCount) edges (\(graph.boundaryEdgeCount) boundary, \(graph.pinPinEdgesDropped) pin-pin dropped), \(graph.bendPairCount) cross pairs (\(graph.pinPinBendPairsDropped) pin-pin dropped, \(graph.shearPairCount) shear), \(graph.stretchConstraintCount) + \(graph.bendConstraintCount) constraints, \(graph.entryCount) entries, degree \(graph.maxEntriesPerParticle) at most and \(String(format: "%.2f", graph.meanEntriesPerParticle)) on average, stretch rest \(String(format: "%.4f-%.4f", graph.restLengthRange.lowerBound, graph.restLengthRange.upperBound)) m, entries stretch \(families[0]) shear \(families[1]) bend \(families[2]), regions \(graph.regionSlack)")
     }
 
-    /// The sidecar's eleven hulls (32 to 48 points each, 446 in all) as plane
+    /// The sidecar's eleven hulls (28 to 48 points each, 438 in all) as plane
     /// sets: every triple's plane kept when all the hull's points lie on one
     /// side of it, deduplicated at 1e-4 on the normal's components and the
-    /// offset, which gives 87, 83, 82, 88, 66, 84, 82, 66, 70, 60 and 64
+    /// offset, which gives 87, 83, 82, 88, 52, 84, 82, 66, 72, 60 and 60
     /// planes for the pelvis, the three spine links, the neck, the two
-    /// clavicles, the two upper arms and the two forearms — 832 in all,
-    /// under the 2n - 4 bound of 848 (judge_counts.py over the sidecar,
-    /// 2026-11-03). Every point of a hull reads inside all its planes within
-    /// 1e-5 m, a point moved 3 mm out along a plane's normal reads outside
-    /// that plane by 3 mm, the bounding sphere holds every point and is
-    /// inflated by the vertex radius, and the attached solver counts the
-    /// same 832.
+    /// clavicles, the two upper arms and the two forearms — 816 in all,
+    /// under the 2n - 4 bound of 832 (numpy over the sidecar as the phase-2
+    /// cook of 2026-11-04 rewrote it, scratchpad tests16k/measure16k.py;
+    /// the cook of 2026-11-03 had 35, 37 and 34 points on the neck and the
+    /// right arm's two hulls for 66, 70 and 64 planes, 446 points and 832
+    /// planes, the design's figures, and the shirt itself is unchanged).
+    /// Every point of a hull reads inside all its planes within 1e-5 m, a
+    /// point moved 3 mm out along a plane's normal reads outside that plane
+    /// by 3 mm, the bounding sphere holds every point and is inflated by the
+    /// vertex radius, and the attached solver counts the same 816.
     func testTheHullPlanesEncloseTheirPoints() throws {
         guard let colliders = ClothFixtures.asset?.colliders, colliders.count == 11 else { throw XCTSkip("the sidecar carries no skin colliders") }
-        let expected = [87, 83, 82, 88, 66, 84, 82, 66, 70, 60, 64]
+        let expected = [87, 83, 82, 88, 52, 84, 82, 66, 72, 60, 60]
         var total = 0
         var counts: [Int] = []
         for (index, collider) in colliders.enumerated() {
@@ -315,11 +381,11 @@ final class ZombieClothGPUTests: XCTestCase {
             XCTAssertFalse(hull.contains(outside, tolerance: 0.001), "\(collider.joint): a point 3 mm outside reads inside the hull")
             XCTAssertEqual(hull.planeCount, expected[index], "\(collider.joint): \(hull.planeCount) planes, \(expected[index]) measured off the sidecar")
         }
-        XCTAssertEqual(total, 832, "planes in all: \(counts)")
+        XCTAssertEqual(total, 816, "planes in all: \(counts)")
         let h = try makeHarness(configuration: gpuConfiguration())
         let solver = try gpu(h)
         XCTAssertEqual(solver.hullCount, 11)
-        XCTAssertEqual(solver.planeCount, 832, "the attached solver's planes")
+        XCTAssertEqual(solver.planeCount, 816, "the attached solver's planes")
         XCTAssertEqual(solver.hullPlaneSets.map(\.planeCount), expected)
         print("cloth gpu hulls: \(counts) planes, \(total) in all over \(colliders.reduce(0) { $0 + $1.pointVectors.count }) points; \(h.cloth.report)")
     }
@@ -497,10 +563,65 @@ final class ZombieClothGPUTests: XCTestCase {
             XCTAssertLessThan(p99, p99Bound, "\(label): the 99th-percentile stretch residual is \(p99 * 100)%")
             XCTAssertEqual(h.cloth.runawayCount, 0)
             XCTAssertEqual(try gpu(h).ringState.substeps, substeps)
-            XCTAssertEqual(try gpu(h).ringState.dispatches, substeps * (1 + gathers) + 1, "\(label): the last encoded frame's dispatches")
+            XCTAssertEqual(try gpu(h).ringState.dispatches, substeps * (1 + gathers) + 1 + (try shellDispatches(h)), "\(label): the last encoded frame's dispatches")
             measured += 1
         }
         XCTAssertEqual(measured, 6)
+    }
+
+    /// The gate's rows at 16k (raw sum 0.5, 16 substeps, two gathers — the
+    /// default — and four, the parser's cap), which phase 2 did not run
+    /// until its first review asked why the finer shirt hung lower. The
+    /// answer is here: the edges are the sidecar's 47,662 less the 5,222
+    /// pin-pin ones, 42,440, and after 200 frames of the hang their
+    /// residual is mean 1.37 %, p99 5.99 %, worst 15.3 % (a yoke edge of
+    /// 5.2 mm) with 5,376 edges over 3 % at two gathers, and 0.73 % / 3.50 %
+    /// / 8.4 % with 882 over 3 % at four (2026-11-04, the M4 Max) — the
+    /// design's 1 % / 3 % NOT met at either, where the 4k meets it at two
+    /// (0.40 % / 2.09 %). The solver gives back the same fraction of a
+    /// violation per pass on either proxy (the mass and the compliances
+    /// enter only as their product, `Configuration.particleMass`), so a
+    /// mesh twice as fine is half as converged across the sheet after the
+    /// same 32 passes, and that unconverged stretch is the finer shirt's
+    /// extra sag (22.9 mm against 9.4 at the hang) — not a weight: the
+    /// per-area mass the review proposed (12.6 mg a particle, four times
+    /// stiffer per pass) read 1.03 % / 8.07 % / 28.1 % here and bridged
+    /// the armpit in the arms-forward idle (100 mm behind the skin, 49.7
+    /// mm inside it against 4.4), and was withdrawn the same day. Held to
+    /// the measurements with the 4k rows' quarter of margin; what the 16k
+    /// needs to meet the gate — gathers beyond four, or the per-pass
+    /// fractions retuned for the spacing — is the owner's at gate 2, and
+    /// `gpu=` on the four-gather row (3.2 ms here in debug against 2.4 at
+    /// two) is the cost of the first.
+    func testStretchResidualAtRestAt16k() throws {
+        guard let shirt = ClothFixtures.sidecar(named: ClothFixtures.sidecar16kName)?.garment(named: "shirt") else { throw XCTSkip("Models/Zombie/\(ClothFixtures.sidecar16kName) is not bundled (the phase-2 cook)") }
+        let edges = Self.stretchEdges(of: shirt)
+        XCTAssertEqual(edges.count, 42440)
+        let rest = edges.map { simd_distance(shirt.positions[$0.0], shirt.positions[$0.1]) }
+        var measured = 0
+        for (label, gathers, meanBound, p99Bound) in [
+            ("16 substeps, 2 gathers", 2, Float(0.0175), Float(0.075)),
+            ("16 substeps, 4 gathers", 4, 0.0095, 0.045),
+        ] {
+            let h = try makeHarness16k(configuration: gpuConfiguration(iterations: gathers))
+            h.frames(200)
+            let p = h.particles
+            var residuals = edges.indices.map { (abs(simd_distance(p[edges[$0].0], p[edges[$0].1]) - rest[$0]) / rest[$0], $0) }
+            residuals.sort { $0.0 < $1.0 }
+            let mean = residuals.reduce(0) { $0 + $1.0 } / Float(residuals.count)
+            let p99 = residuals[Int(Float(residuals.count - 1) * 0.99)].0
+            let worst = residuals.last ?? (0, 0)
+            let worstEdge = edges[worst.1]
+            let over3 = residuals.reversed().prefix { $0.0 > 0.03 }.count
+            print(String(format: "cloth gpu stretch residual, 16k, raw sum 0.5, %@: mean %.2f%%, p99 %.2f%%, worst %.2f%% (particles %d-%d, %@-%@, rest %.1f mm) over %d edges, %d over 3%%; the design's gate (1%% / 3%%) %@; %@",
+                         label, mean * 100, p99 * 100, worst.0 * 100, worstEdge.0, worstEdge.1, ClothMetrics.regionName(slack: shirt.maxDistance[worstEdge.0]), ClothMetrics.regionName(slack: shirt.maxDistance[worstEdge.1]),
+                         rest[worst.1] * 1000, edges.count, over3, mean < 0.01 && p99 < 0.03 ? "met" : "NOT met", h.cloth.report))
+            XCTAssertLessThan(mean, meanBound, "\(label): the mean stretch residual at 16k is \(mean * 100)%")
+            XCTAssertLessThan(p99, p99Bound, "\(label): the 99th-percentile stretch residual at 16k is \(p99 * 100)%")
+            XCTAssertEqual(h.cloth.runawayCount, 0)
+            measured += 1
+        }
+        XCTAssertEqual(measured, 2)
     }
 
     // MARK: - The substeps
@@ -512,7 +633,8 @@ final class ZombieClothGPUTests: XCTestCase {
     /// at 5 ms, 32 at 50 ms (a 30 fps hitch), and `gpuSubsteps` 8 gives 8
     /// at 10 ms and 14 at 16.7 ms. A frame of the harness's 10 ms encodes
     /// 16 substeps of 0.625 ms, 49 dispatches (a predict and the default's
-    /// two gathers each, the stats once), 17 at 8 substeps and one gather.
+    /// two gathers each, the stats once) plus the GPU shell's two since
+    /// phase 2 (51), 17 + 2 at 8 substeps and one gather.
     func testTheSubstepRuleFollowsTheFrame() throws {
         XCTAssertEqual(GPUClothSolver.substepLength(substeps: 16), 0.000625)
         XCTAssertEqual(GPUClothSolver.substepCount(frameDelta: 0.010, substeps: 16), 16)
@@ -532,12 +654,12 @@ final class ZombieClothGPUTests: XCTestCase {
         XCTAssertEqual(solver.ringState.substeps, 16)
         XCTAssertEqual(solver.lastSubstepSeconds, 0.000625)
         XCTAssertEqual(solver.stats.substeps, 16)
-        XCTAssertEqual(solver.stats.dispatches, 49, "16 substeps of a predict and two gathers, and the stats")
+        XCTAssertEqual(solver.stats.dispatches, 49 + (try shellDispatches(h)), "16 substeps of a predict and two gathers, the stats, and the shell's two")
         XCTAssertTrue(h.cloth.report.contains("sub=16 it=2"), h.cloth.report)
         let eight = try makeHarness(configuration: gpuConfiguration(substeps: 8, iterations: 1))
         eight.frames(2)
         XCTAssertEqual(try gpu(eight).ringState.substeps, 8)
-        XCTAssertEqual(try gpu(eight).stats.dispatches, 8 * 2 + 1, "8 substeps of a predict and one gather, and the stats")
+        XCTAssertEqual(try gpu(eight).stats.dispatches, 8 * 2 + 1 + (try shellDispatches(eight)), "8 substeps of a predict and one gather, the stats, and the shell's two")
         XCTAssertTrue(eight.cloth.report.contains("sub=8 it=1"), eight.cloth.report)
     }
 
@@ -894,7 +1016,8 @@ final class ZombieClothGPUTests: XCTestCase {
     /// between them leave the encoded-frame count and the dispatch total
     /// where they were, report `sub=0` with `gpu=0`, keep the solver awake
     /// and the particles bitwise where the last frame put them; the next
-    /// stepped frame encodes one frame of 49 dispatches again.
+    /// stepped frame encodes one frame of 49 dispatches (51 with the GPU
+    /// shell's two, phase 2) again.
     func testAFrameWithoutAStepEncodesNothing() throws {
         let h = try makeHarness(configuration: gpuConfiguration())
         h.frames(5)
@@ -913,7 +1036,7 @@ final class ZombieClothGPUTests: XCTestCase {
         XCTAssertEqual(h.particles, before, "a particle moved on a frame without a step")
         h.frame()
         XCTAssertEqual(solver.ringState.encodedFrames, frames + 1, "the stepped frame after it did not encode")
-        XCTAssertEqual(solver.stats.dispatches, 49)
+        XCTAssertEqual(solver.stats.dispatches, 49 + (try shellDispatches(h)))
         XCTAssertGreaterThan(solver.stats.gpuMilliseconds, 0)
         print("cloth gpu no-step frame: \(frames) frames and \(dispatches) dispatches before and after it; \(h.cloth.report)")
     }
@@ -1011,7 +1134,7 @@ final class ZombieClothGPUTests: XCTestCase {
     /// only the floor slab and the twenty parts (no soft body, no kinematic
     /// hulls); `-clothColliders off` gives 0 hulls and the same world; the
     /// report names the arm (`shirt[gpu]`) and counts them as `colliders=`,
-    /// `hulls=` and `planes=` beside the constraints.
+    /// `hulls=` and `planes=` (816 on the cook of 2026-11-04) beside the constraints.
     func testTheSkinCollidersAreCountedOnTheGPUPath() throws {
         guard let colliders = ClothFixtures.asset?.colliders, !colliders.isEmpty else { throw XCTSkip("the sidecar carries no skin colliders") }
         let world = try makeHarness(configuration: gpuConfiguration())
@@ -1019,7 +1142,7 @@ final class ZombieClothGPUTests: XCTestCase {
         XCTAssertEqual(world.physics.backend.bodyCount, 1 + 20, "the floor slab and the twenty parts: no Jolt soft body, no Jolt hulls")
         XCTAssertTrue(world.cloth.report.hasPrefix("cloth shirt[gpu]:"), world.cloth.report)
         XCTAssertTrue(world.cloth.report.contains("colliders=\(colliders.count)"), world.cloth.report)
-        XCTAssertTrue(world.cloth.report.contains("hulls=11 planes=832 stretch=10425 bend=10425"), world.cloth.report)
+        XCTAssertTrue(world.cloth.report.contains("hulls=11 planes=816 stretch=10425 bend=10425"), world.cloth.report)
         XCTAssertTrue(world.cloth.report.contains("sim=on"), world.cloth.report)
         XCTAssertTrue(world.cloth.summary.contains("lag=0f"), world.cloth.summary)
         var off = gpuConfiguration()
@@ -1189,7 +1312,389 @@ final class ZombieClothGPUTests: XCTestCase {
         }
         print("cloth gpu timing (300 frames, 100 Hz, \(h.cloth.configuration.gpuSubsteps) substeps asked, \(substeps) encoded, \(dispatches) dispatches, \(h.shirt.particles.count) particles, \(h.shirt.render?.vertexCount ?? 0) shell vertices, \(device.name)): skin \(stats(skin)); feed \(stats(feed)); gpu \(stats(gpuTime)); wait \(stats(wait)); read-back \(stats(read)); bind \(stats(bind)); \(h.cloth.summary)")
         XCTAssertEqual(h.body.overrideWrites, 300)
-        XCTAssertEqual(dispatches, 3 * 16 + 1, "16 substeps at 10 ms, two gathers each, plus the stats kernel")
+        XCTAssertEqual(dispatches, 3 * 16 + 1 + (try gpu(h).hasGPUShell ? 2 : 0), "16 substeps at 10 ms, two gathers each, plus the stats kernel and the shell's two")
+        XCTAssertEqual(substeps, 16)
+        XCTAssertEqual(h.cloth.runawayCount, 0)
+    }
+
+    // MARK: - Phase 2: the GPU shell
+
+    /// The shell evaluated on the GPU (`zcTriangleFrames` + `zcShell`, phase
+    /// 2 of `Docs/GPUCloth.md`) against `RenderShell.evaluate` on the cores,
+    /// the same frame both ways: the frame's final particles, read back and
+    /// taken into mesh space, through the CPU shell, against the solver's
+    /// `shellOutput` for that frame in the same space — at the bind pose
+    /// after the first frame, and in a swayed frame a second in — over all
+    /// 29,402 slots of the tests' shell-only mesh, the positions within
+    /// 1e-5 m and the normals within 0.05 degrees (the design's bounds:
+    /// float arithmetic in another order over coordinates of a metre or
+    /// two, nothing more). The override the cloth wrote that frame is the
+    /// same shell (within the same bounds), the cloth counts the frame as a
+    /// GPU-shell frame (`gpuShellFrames`), and the frame carries 51
+    /// dispatches, the shell's two after the stats. With `gpuShell` off the
+    /// cloth evaluates on the cores as in phase 1, counts no GPU-shell frame
+    /// and the solver has no shell to read. Written 2026-11-04 against the
+    /// solver's `hasGPUShell` / `shellOutput(meshFromWorld:)` and the cloth's
+    /// `gpuShellFrames` (the design named the kernels and left the accessor
+    /// to the code).
+    func testTheGPUShellMatchesTheCPUShell() throws {
+        let h = try makeHarness(configuration: gpuConfiguration())
+        let solver = try gpu(h)
+        guard solver.hasGPUShell else { throw XCTSkip("the cloth did not hand the GPU solver its shell (gpuShell \(h.cloth.configuration.gpuShell)); the CPU shell stands") }
+        let shell = try XCTUnwrap(h.cloth.renderShell(ofGarment: 0))
+        XCTAssertEqual(solver.shellSlotCount, shell.slotCount, "the solver's slots are not the shell's")
+        XCTAssertEqual(shell.slotCount, 29402, "the tests' shell-only mesh drives one exported vertex per shell vertex")
+        // The angle in double precision: in single, acos near 1 resolves no
+        // finer than 0.03 degrees, which would read as a difference that
+        // is not there.
+        func angle(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+            let u = simd_normalize(SIMD3<Double>(a)), v = simd_normalize(SIMD3<Double>(b))
+            return Float(acos(min(1, max(-1, simd_dot(u, v)))) * 180 / .pi)
+        }
+        var compared = 0
+        func compare(_ label: String) throws {
+            let toMesh = h.body.world.inverse
+            let particles = h.meshParticles
+            let gpu = try XCTUnwrap(solver.shellOutput(meshFromWorld: toMesh), "\(label): the solver had no shell output for the frame")
+            shell.evaluate(particles: particles)
+            XCTAssertEqual(gpu.positions.count, shell.slotCount)
+            var worstPosition: Float = 0, worstNormal: Float = 0, worstWritten: Float = 0, worstWrittenNormal: Float = 0, worstUnit: Float = 0
+            for s in 0 ..< shell.slotCount {
+                worstPosition = max(worstPosition, simd_distance(gpu.positions[s], shell.positions[s]))
+                worstNormal = max(worstNormal, angle(gpu.normals[s], shell.normals[s]))
+                worstUnit = max(worstUnit, abs(simd_length(gpu.normals[s]) - 1))
+                worstWritten = max(worstWritten, simd_distance(h.body.positions[s], shell.positions[s]))
+                worstWrittenNormal = max(worstWrittenNormal, angle(h.body.normals[s], shell.normals[s]))
+            }
+            print(String(format: "cloth gpu shell, %@: %d slots, the GPU shell within %.2e m and %.4f degrees of the CPU shell (normals within %.1e of unit); the frame's override within %.2e m and %.4f degrees; %@",
+                         label, shell.slotCount, worstPosition, worstNormal, worstUnit, worstWritten, worstWrittenNormal, h.cloth.summary))
+            XCTAssertLessThan(worstPosition, 1e-5, "\(label): a slot's GPU position is \(worstPosition) m off the CPU shell's")
+            XCTAssertLessThan(worstNormal, 0.05, "\(label): a slot's GPU normal is \(worstNormal) degrees off the CPU shell's")
+            XCTAssertLessThan(worstUnit, 1e-3, "\(label): a GPU normal is \(worstUnit) off unit length")
+            XCTAssertLessThan(worstWritten, 1e-5, "\(label): the override written is \(worstWritten) m off the CPU shell")
+            XCTAssertLessThan(worstWrittenNormal, 0.05, "\(label): the override's normals are \(worstWrittenNormal) degrees off the CPU shell's")
+            compared += 1
+        }
+        h.frame()
+        XCTAssertEqual(solver.stats.dispatches, 3 * 16 + 1 + 2, "16 substeps of a predict and two gathers, the stats, the triangle frames and the shell")
+        XCTAssertEqual(h.cloth.gpuShellFrames, 1, "the first frame's override did not come from the GPU shell")
+        try compare("bind pose, frame 1")
+        for _ in 0 ..< 100 {
+            let t = h.time + h.dt
+            h.body.pose = h.pose(offset: SIMD3(0.1 * sin(2 * Float.pi * t), 0, 0))
+            h.frame()
+        }
+        XCTAssertEqual(h.cloth.gpuShellFrames, 101, "a swaying frame's override did not come from the GPU shell")
+        try compare("sway, frame 101")
+        // The entity moved inside the frame (the game's controller does it
+        // on most chase frames: `translateTo` syncs the world transform
+        // eagerly between the cloth's `beginUpdate` and its `readBack`):
+        // the kernels wrote the frame's begin matrix's space, the copy
+        // re-expresses through the read's — a translation and a turn here,
+        // so the normals' inverse-transpose is exercised too — and the
+        // CPU shell on the particles taken through the read's matrix is
+        // the judge; the output read through the old matrix is the same
+        // shell carried by the rigid change of frame, which is the proof
+        // the re-expression ran and not a copy (added 2026-11-04, review).
+        let before = h.body.world
+        let moved = before * Self.translation(SIMD3(0.05, 0, -0.03)) * simd_float4x4(simd_quatf(angle: 0.1, axis: SIMD3(0, 1, 0)))
+        let old = try XCTUnwrap(solver.shellOutput(meshFromWorld: before.inverse))
+        h.frame(beforeUpdate: { h.body.world = moved })
+        XCTAssertEqual(h.cloth.gpuShellFrames, 102, "the moved frame's override did not come from the GPU shell (fell back \(h.cloth.cpuShellFallbacks) times)")
+        try compare("moved inside the frame, frame 102")
+        let fresh = try XCTUnwrap(solver.shellOutput(meshFromWorld: before.inverse))
+        let delta = moved.inverse * before
+        var worstCarried: Float = 0
+        for s in 0 ..< shell.slotCount {
+            let carried = delta * SIMD4(fresh.positions[s], 1)
+            worstCarried = max(worstCarried, simd_distance(h.body.positions[s], SIMD3(carried.x, carried.y, carried.z)))
+        }
+        XCTAssertLessThan(worstCarried, 1e-5, "the re-expressed shell is \(worstCarried) m off the frame's shell carried by the change of frame")
+        XCTAssertGreaterThan(simd_distance(old.positions[0], h.body.positions[0]), 0.01, "the moved frame's override is where the unmoved one's was: the re-expression did not run")
+        h.body.world = before
+        XCTAssertEqual(compared, 3)
+        XCTAssertEqual(h.cloth.runawayCount, 0)
+        // The A/B back: the CPU shell on the GPU arm.
+        var cpu = gpuConfiguration()
+        cpu.gpuShell = false
+        let c = try makeHarness(configuration: cpu)
+        c.frames(3)
+        XCTAssertFalse(try gpu(c).hasGPUShell, "with gpuShell off the solver was handed a shell")
+        XCTAssertEqual(c.cloth.gpuShellFrames, 0)
+        XCTAssertEqual(try gpu(c).stats.dispatches, 3 * 16 + 1)
+        XCTAssertNil(try gpu(c).shellOutput(meshFromWorld: c.body.world.inverse))
+        XCTAssertEqual(c.body.overrideWrites, 3, "the CPU shell still writes the override")
+    }
+
+    // MARK: - Phase 2: the 16k proxy
+
+    /// The drape figure on the 4k and the 16k proxy side by side, the hang
+    /// and the sway on the GPU (`ClothMetrics.Drape`, the design's section
+    /// 6 `testTheHangReportsItsFolds`): the hem band's mean absolute
+    /// dihedral per edge and the band's mean absolute curvature (1/m, the
+    /// resolution-free form), and the fold alternations around the hem
+    /// loop through a 2 cm window, per metre of hem. Printed for the
+    /// owner's gate-2 verdict and not pinned until it is in; what is held
+    /// is that both proxies read (a band of edges, a closed hem loop) and
+    /// that the finer proxy's hem loop is the same hem within 5 cm of
+    /// length, since the two cooks cut the same shell. Each figure is
+    /// printed beside the same shirt's at the sidecar's bind pose and as
+    /// the change from it (`ClothMetrics.restDrape`, `Drape.against`),
+    /// because the artist's hem has folds of its own that the finer loop
+    /// resolves and the coarser cannot: the first day's count (12 and 26
+    /// alternations, "the alternations double") was mostly that — 21 of
+    /// the 16k's 22.9 per metre were there before either solver ran, read
+    /// through a window that smoothed the 4k loop vertex to vertex and the
+    /// 16k's over three; the fold profile is resampled at 5 mm now. Measured
+    /// 2026-11-04 on the M4 Max with the resample: at rest the 4k hem band
+    /// (430 particles, 1,097 interior edges, 1,108 cm^2) reads 4.67 degrees
+    /// per edge, 15.53 1/m and 6 alternations on its 1.162 m loop (5.2 per
+    /// metre), the 16k band (1,731 particles, 4,816 edges, 1,141 cm^2)
+    /// 2.35 degrees, 16.61 1/m and 6 on 1.125 m (5.3 per metre) — the same
+    /// hem on one scale, as the curvature definition promises. After the
+    /// hang the 4k reads 16.45 1/m and 5.2 per metre, +0.92 1/m (+6 %) and
+    /// no new alternation; the 16k 27.09 1/m and 8.8 per metre, +10.48 1/m
+    /// (+63 %) and +3.5 per metre: the hang folds the finer hem and leaves
+    /// the coarser as the artist drew it. After the sway +0.67 1/m and +0
+    /// at 4k, +9.26 1/m (+56 %) and +5.2 per metre at 16k. The curvature
+    /// rise carries the finer proxy's unconverged stretch too
+    /// (`testStretchResidualAtRestAt16k`): to this solver mass and
+    /// compliance are one product, and the per-area mass tried that day
+    /// read +8.15 1/m (+49 %) for the same hang before it was withdrawn.
+    func testTheHangReportsItsFoldsOnBothProxies() throws {
+        var figures: [String: ClothMetrics.Drape] = [:], rests: [String: ClothMetrics.Drape] = [:]
+        for (label, sidecar) in [("4k", nil), ("16k", ClothFixtures.sidecar16kName)] {
+            let h = try makeHarness(configuration: gpuConfiguration(), sidecar: sidecar)
+            h.frames(200)
+            let rest = try XCTUnwrap(ClothMetrics.restDrape(of: h), "\(label): the hem band or the hem loop could not be read at the bind pose")
+            print("cloth drape, rest, \(label) (\(h.shirt.particles.count) particles): \(rest)")
+            let hang = try XCTUnwrap(ClothMetrics.drape(of: h), "\(label): the hem band or the hem loop could not be read")
+            print("cloth drape, hang 2 s, gpu \(label) (\(h.shirt.particles.count) particles): \(hang); \(hang.against(rest))")
+            for _ in 0 ..< 300 {
+                let t = h.time + h.dt
+                h.body.pose = h.pose(offset: SIMD3(0.1 * sin(2 * Float.pi * t), 0, 0))
+                h.frame()
+            }
+            let sway = try XCTUnwrap(ClothMetrics.drape(of: h), "\(label): the hem band or the hem loop could not be read after the sway")
+            print("cloth drape, sway 3 s, gpu \(label) (\(h.shirt.particles.count) particles): \(sway); \(sway.against(rest))")
+            XCTAssertGreaterThan(hang.bandEdges, 100)
+            XCTAssertTrue(hang.curvature.isFinite && sway.curvature.isFinite)
+            XCTAssertEqual(h.cloth.runawayCount, 0)
+            figures[label] = hang
+            rests[label] = rest
+        }
+        if let four = figures["4k"], let sixteen = figures["16k"] {
+            XCTAssertEqual(four.loopLength, sixteen.loopLength, accuracy: 0.05, "the two proxies' hem loops differ in length: \(four.loopLength) against \(sixteen.loopLength) m")
+            XCTAssertGreaterThan(sixteen.bandEdges, four.bandEdges * 3, "the 16k hem band has \(sixteen.bandEdges) interior edges against the 4k's \(four.bandEdges)")
+            print(String(format: "cloth drape, 4k against 16k after the hang: curvature %.2f against %.2f 1/m, alternations %.1f against %.1f per metre, mean |dihedral| %.2f against %.2f degrees per edge; from the rest pose: curvature %+.2f against %+.2f 1/m, alternations %+.1f against %+.1f per metre",
+                         four.curvature, sixteen.curvature, four.alternationsPerMetre, sixteen.alternationsPerMetre, four.meanDihedralDegrees, sixteen.meanDihedralDegrees,
+                         four.curvature - (rests["4k"]?.curvature ?? 0), sixteen.curvature - (rests["16k"]?.curvature ?? 0),
+                         four.alternationsPerMetre - (rests["4k"]?.alternationsPerMetre ?? 0), sixteen.alternationsPerMetre - (rests["16k"]?.alternationsPerMetre ?? 0)))
+        }
+    }
+
+    /// The Jolt arm refuses the 16k proxy with one printed line and builds
+    /// nothing (`ZombieCloth.joltParticleLimit`, 8,000: Jolt solves its
+    /// edges on one thread, so the finer proxy would be four times its
+    /// 3.4 ms step), so the phase-2 A/B is Jolt at 4k against the GPU at 16k
+    /// by construction, as the design has it; the body is left to its own
+    /// skinning and the Jolt world holds the floor slab and the twenty parts
+    /// alone. The GPU arm on the same sidecar attaches and simulates.
+    func testJoltRefusesThe16kProxyAndTheGPUTakesIt() throws {
+        guard let asset = ClothFixtures.asset, let joints = ClothFixtures.skeleton else { throw XCTSkip("Models/Zombie is not bundled") }
+        guard let sixteen = ClothFixtures.sidecar(named: ClothFixtures.sidecar16kName) else { throw XCTSkip("Models/Zombie/\(ClothFixtures.sidecar16kName) is not bundled (the phase-2 cook)") }
+        XCTAssertGreaterThan(sixteen.garment(named: "shirt")?.particles.count ?? 0, ZombieCloth.joltParticleLimit)
+        let jolt = ClothHarness(dt: dt, asset: asset, joints: joints, solver: .jolt, sidecar: ClothFixtures.sidecar16kName)
+        XCTAssertEqual(jolt.sidecarName, ClothFixtures.sidecar16kName)
+        XCTAssertFalse(jolt.attached, "Jolt took the 16k proxy")
+        XCTAssertNil(jolt.cloth.activeSolver)
+        XCTAssertEqual(jolt.physics.backend.bodyCount, 1 + 20, "the floor slab and the twenty parts: no soft body, no hulls")
+        jolt.frames(3)
+        XCTAssertEqual(jolt.body.overrideWrites, 0, "a refused shirt wrote an override")
+        XCTAssertEqual(jolt.cloth.report, "cloth: none")
+        let gpu = try makeHarness16k(configuration: gpuConfiguration())
+        gpu.frames(3)
+        XCTAssertEqual(gpu.body.overrideWrites, 3)
+        XCTAssertTrue(gpu.cloth.report.hasPrefix("cloth shirt[gpu]: \(gpu.shirt.particles.count) particles"), gpu.cloth.report)
+        print("cloth 16k on Jolt: refused (\(jolt.cloth.report)); on the GPU: \(gpu.cloth.report)")
+    }
+
+    /// The game picks the sidecar by the arm the shirt will really run on
+    /// (`ZombieChaseGame.clothSidecar(for:device:)`, 2026-11-04, after the
+    /// review of phase 2): the 16k only for a GPU pick on a device the GPU
+    /// solver can be built on (`ZombieCloth.gpuAvailable`), the 4k with a
+    /// line for the Jolt arm, for a GPU pick with no device — the headset's
+    /// renderer gone, a metallib missing — and for a cook not in the
+    /// bundle, the default with no line when nothing is named. Until then
+    /// the pick went by the configuration alone and a GPU pick that fell
+    /// back to Jolt at the attach lost the shirt to `joltParticleLimit`.
+    /// The cloth's own fallback is held beside it: a GPU pick with no
+    /// device attaches the 4k on Jolt.
+    func testTheGamePicksTheSidecarTheArmCanTake() throws {
+        var gpu = gpuConfiguration()
+        gpu.sidecar = ZombieClothAsset.sidecar16kName
+        let noDevice = ZombieChaseGame.clothSidecar(for: gpu, device: nil)
+        XCTAssertEqual(noDevice.name, ZombieClothAsset.defaultSidecarName)
+        XCTAssertTrue(noDevice.line?.contains("Jolt stands in") == true, noDevice.line ?? "no line")
+        XCTAssertFalse(ZombieCloth.gpuAvailable(device: nil, configuration: gpu))
+        var jolt = gpu
+        jolt.solver = .jolt
+        let onJolt = ZombieChaseGame.clothSidecar(for: jolt, device: device)
+        XCTAssertEqual(onJolt.name, ZombieClothAsset.defaultSidecarName)
+        XCTAssertTrue(onJolt.line?.contains("the Jolt arm keeps") == true, onJolt.line ?? "no line")
+        XCTAssertTrue(ZombieCloth.gpuAvailable(device: device, configuration: gpu), "the GPU solver cannot be built on \(device.name)")
+        let onGPU = ZombieChaseGame.clothSidecar(for: gpu, device: device)
+        if ZombieClothAsset.isBundled(named: ZombieClothAsset.sidecar16kName) {
+            XCTAssertEqual(onGPU.name, ZombieClothAsset.sidecar16kName)
+            XCTAssertNil(onGPU.line)
+        } else {
+            XCTAssertEqual(onGPU.name, ZombieClothAsset.defaultSidecarName)
+            XCTAssertTrue(onGPU.line?.contains("not cooked yet") == true, onGPU.line ?? "no line")
+        }
+        let plain = ZombieChaseGame.clothSidecar(for: gpuConfiguration(), device: device)
+        XCTAssertEqual(plain.name, ZombieClothAsset.defaultSidecarName)
+        XCTAssertNil(plain.line)
+        print("cloth sidecar choice: no device -> \(noDevice.name) (\(noDevice.line ?? "")); Jolt -> \(onJolt.name); GPU on \(device.name) -> \(onGPU.name)")
+        // The cloth with the 4k and no device: Jolt stands in and attaches.
+        guard let asset = ClothFixtures.asset, let joints = ClothFixtures.skeleton else { throw XCTSkip("Models/Zombie is not bundled") }
+        let fallen = ClothHarness(dt: dt, asset: asset, joints: joints, configuration: gpuConfiguration(), solver: .gpu, device: nil)
+        XCTAssertTrue(fallen.attached, "a GPU pick with no device did not attach the 4k on Jolt")
+        XCTAssertEqual(fallen.cloth.activeSolver, .jolt)
+        fallen.frames(2)
+        XCTAssertEqual(fallen.body.overrideWrites, 2)
+    }
+
+    /// The 16k proxy at rest against the posed skin (the metric the fit
+    /// tests read the shirt against, `ClothMetrics.penetration`): on the
+    /// bind pose every one of the finer proxy's particles with skin within
+    /// 5 cm reads OUTSIDE it — the cook's push-out leaves the proxy 2 mm off
+    /// the body, as the 4k one's does (ZombieClothTests'
+    /// `testThePosedBodyReadsTheRestShirtAsOutside`: 3,666 of 3,995 read,
+    /// the nearest 2.45 mm) — so the penetration counts the 16k scenarios
+    /// print start from zero at rest. The nearest particle and its region
+    /// are printed; a cook whose refinement crossed the skin would show
+    /// here before any scenario.
+    func testThePosedSkinReadsTheRest16kShirtAsOutside() throws {
+        let h = try makeHarness16k(configuration: gpuConfiguration())
+        let penetration = try XCTUnwrap(ClothMetrics.penetration(of: h), "the posed skin could not be built")
+        let distances = try XCTUnwrap(ClothMetrics.skinDistances(of: h))
+        var nearest = (distance: Float.greatestFiniteMagnitude, index: 0)
+        for (index, d) in distances.enumerated() { if let d, d < nearest.distance { nearest = (d, index) } }
+        let at = h.shirt.positions[nearest.index]
+        print(String(format: "cloth 16k at rest: %@; the nearest particle to the skin is %d (%@) at (%.2f,%.2f,%.2f), %.2f mm outside", penetration.description,
+                     nearest.index, ClothMetrics.regionName(slack: h.shirt.maxDistance[nearest.index]), at.x, at.y, at.z, nearest.distance * 1000))
+        XCTAssertGreaterThan(penetration.measured, h.shirt.particles.count * 8 / 10, "only \(penetration.measured) of \(h.shirt.particles.count) particles have skin within 5 cm")
+        XCTAssertEqual(penetration.inside, 0, "\(penetration.inside) particles of the resting 16k proxy sit more than 2 mm inside the posed skin")
+        XCTAssertGreaterThan(nearest.distance, 0, "particle \(nearest.index) of the resting 16k proxy reads \(nearest.distance) m: inside the skin")
+    }
+
+    /// The hang on the GPU at 16k (`ClothFitScenarios.hang`), the same
+    /// scenario and figures as the 4k row, with the report's graph and
+    /// plane counts printed. Bounds `gpuBounds16k.hang` (measured
+    /// 2026-11-04: the sag 22.9 mm, the hem 16.7 mm over the yoke's 2.8,
+    /// the back-stop 1.67 mm, the clearance 1.73 mm, none inside the posed
+    /// skin). The sag and hem floors are the 4k row's 5 mm, a shirt that
+    /// hangs at all, not the 18 and 10 mm first pinned on the day's
+    /// measurement: the finer shirt's extra sag over the 4k's 9.4 mm is
+    /// its unconverged stretch (`testStretchResidualAtRestAt16k`), a figure
+    /// for gate 2 to tune and not a target to hold. The drape figure
+    /// beside it, read against the rest pose: curvature +10.5 1/m (+63 %)
+    /// and +3.5 fold alternations per metre of hem, where the 4k's hang
+    /// adds +0.9 1/m (+6 %) and no alternation.
+    func testTheGPUShirtHangsFromTheShouldersAt16k() throws {
+        let h = try makeHarness16k(configuration: gpuConfiguration())
+        let control = try makeHarness16k(configuration: gpuConfiguration(), gravity: .zero)
+        let solver = try gpu(h)
+        print("cloth gpu 16k attach: \(h.shirt.particles.count) particles, \(solver.constraintGraph?.entryCount ?? 0) CSR entries, \(solver.hullCount) hulls, \(solver.planeCount) planes; \(h.cloth.report)")
+        XCTAssertEqual(solver.hullCount, 11)
+        XCTAssertEqual(solver.planeCount, 816, "the colliders are the 4k file's: 816 planes on the cook of 2026-11-04")
+        try ClothFitScenarios.hang(h, control: control, bounds: Self.gpuBounds16k.hang)
+    }
+
+    /// The sway on the GPU at 16k (`ClothFitScenarios.sway`) on the world
+    /// model. Bounds `gpuBounds16k.sway` (measured 2026-11-04: excess
+    /// 1.6e-6 m, pins 3.2e-6 m, none inside the posed skin at the last
+    /// frame, the drape 25.9 1/m and 17.6 alternations per metre).
+    func testTheGPUSwayingBodyKeepsTheShirtWithinItsSlackAt16k() throws {
+        let h = try makeHarness16k(configuration: gpuConfiguration())
+        try ClothFitScenarios.sway(h, label: "world, 16k", lagBound: false, bounds: Self.gpuBounds16k.sway)
+    }
+
+    /// The arms-forward idle on the GPU at 16k (`ClothFitScenarios.
+    /// armsForwardIdle`) on the world model and the skin-only control, the
+    /// posed-skin penetration counted on both. Bounds `gpuBounds16k.
+    /// armsForward` (measured 2026-11-04: the band's farthest particle on
+    /// its 150 mm ball, 30 inside with the hulls and 71 without, 13.2 and
+    /// 16.4 mm behind the skin); the control is held to a dozen at least
+    /// and the hulls to under three quarters of it, as the 4k row holds
+    /// them (they take three fifths away here).
+    func testTheGPUArmsForwardIdleKeepsTheArmholeNearItsTargetAt16k() throws {
+        guard let pose = try ClothFixtures.clipPose(ZombieResources.waitingClip, at: 1.0) else { throw XCTSkip("the idle clip is not bundled") }
+        guard let joints = ClothFixtures.skeleton, let hand = joints.jointPaths.firstIndex(of: "/root/pelvis/spine_01/spine_02/spine_03/clavicle_l/upperarm_l/lowerarm_l/hand_l"),
+              let pelvis = joints.jointPaths.firstIndex(of: "/root/pelvis") else { throw XCTSkip("no skeleton") }
+        let handRise = (pose[hand].columns.3.y - pose[pelvis].columns.3.y) - (joints.bindModelTransforms[hand].columns.3.y - joints.bindModelTransforms[pelvis].columns.3.y)
+        var insideByModel: [String: Int] = [:]
+        for (label, configuration) in [("skin only, 16k", skinOnly), ("world, 16k", gpuConfiguration())] {
+            var bounds = Self.gpuBounds16k.armsForward
+            bounds.penetration = label.hasPrefix("world") ? Self.gpuBounds16k.armsForward.penetration : nil
+            let h = try makeHarness16k(configuration: configuration, pose: pose)
+            let figures = try ClothFitScenarios.armsForwardIdle(h, label: label, handRise: handRise, bounds: bounds)
+            insideByModel[label] = figures.inside
+        }
+        print("cloth arms-forward idle, 16k: inside by model \(insideByModel)")
+        XCTAssertGreaterThan(insideByModel["skin only, 16k"] ?? 0, 12, "the skin-only control no longer shows the patches the hulls are for: \(insideByModel)")
+        XCTAssertLessThan(Float(insideByModel["world, 16k"] ?? Int.max) / Float(max(insideByModel["skin only, 16k"] ?? 1, 1)), 0.75, "the skin's hulls take less than a quarter of the particles inside the posed skin away: \(insideByModel)")
+    }
+
+    /// The arm swing on the GPU at 16k (`ClothFitScenarios.armSwing`) on
+    /// the world model. Bounds `gpuBounds16k.swing` (measured 2026-11-04:
+    /// at most 9 inside at frame 37 and 4 once held, 5.2 mm deep at frame
+    /// 25 at particle 7878, the right armpit's armhole band, the sleeves
+    /// 50.0 mm off the skin, nothing past the slack).
+    func testTheGPUSwingingArmKeepsTheSleeveOnItsHullAt16k() throws {
+        guard let pose = try ClothFixtures.clipPose(ZombieResources.waitingClip, at: 1.0), let joints = ClothFixtures.skeleton else { throw XCTSkip("the idle clip is not bundled") }
+        guard let upperarm = joints.jointPaths.firstIndex(of: "/root/pelvis/spine_01/spine_02/spine_03/clavicle_l/upperarm_l"),
+              let elbow = joints.jointPaths.firstIndex(of: "/root/pelvis/spine_01/spine_02/spine_03/clavicle_l/upperarm_l/lowerarm_l") else { throw XCTSkip("no left arm") }
+        let h = try makeHarness16k(configuration: gpuConfiguration())
+        let readings = try ClothFitScenarios.armSwing(h, label: "world, 16k", pose: pose, joints: joints, upperarm: upperarm, elbow: elbow, bounds: Self.gpuBounds16k.swing)
+        print("cloth gpu arm swing, world, 16k, per frame (frame inside deepest_mm excess_mm lift_mm elbow_m/s): " + readings.map { String(format: "%d %d %.1f %+.1f %.1f %.2f", $0.frame, $0.inside, -$0.deepest * 1000, $0.excess * 1000, $0.lift * 1000, $0.elbowSpeed) }.joined(separator: "; "))
+    }
+
+    /// The cost at 16k over 300 frames of the sway (the design's section 8:
+    /// about 35 MFLOP and 8 MB a substep, 1.2-1.8 ms a frame at 16
+    /// substeps on the headset, under 0.1 ms more for the shell kernels; the
+    /// Mac's figures here, a debug build): the feed, the GPU, the wait, the
+    /// read-back and the bind, medians and maxima, and 300 override writes.
+    /// Measured 2026-11-04 on the M4 Max at 51 dispatches (16 substeps of a
+    /// predict and two gathers, the stats, the two shell kernels): feed
+    /// 311 us median, gpu 2,557 us median and 5,868 max, wait 2,943 median,
+    /// read-back 11,355 median (the debug build's copy of 15,979 particles
+    /// and 29,402 slots), bind 3,543 median — against 288 / 1,658 / 2,049 /
+    /// 5,673 / 2,440 at 4k the same day; and with the arms forward, where
+    /// every hull is in play, the report read gpu=6.49 ms, over the
+    /// design's 2.0 ms gate even on this GPU, which is the figure for the
+    /// owner's cost read before any headset build.
+    func testGPUTimingsOverThreeHundredFramesAt16k() throws {
+        let h = try makeHarness16k(configuration: gpuConfiguration())
+        let solver = try gpu(h)
+        var feed: [Double] = [], gpuTime: [Double] = [], wait: [Double] = [], read: [Double] = [], bind: [Double] = []
+        var dispatches = 0, substeps = 0
+        for _ in 0 ..< 300 {
+            let t = h.time + h.dt
+            h.body.pose = h.pose(offset: SIMD3(0.1 * sin(2 * Float.pi * t), 0, 0))
+            h.frame()
+            let timings = h.cloth.timings
+            read.append(timings.readBack); bind.append(timings.bind)
+            let stats = solver.stats
+            feed.append(stats.feedMicroseconds); gpuTime.append(stats.gpuMilliseconds * 1000); wait.append(stats.waitMicroseconds)
+            dispatches = max(dispatches, stats.dispatches); substeps = max(substeps, stats.substeps)
+        }
+        func stats(_ values: [Double]) -> String {
+            let sorted = values.sorted()
+            return String(format: "mean %.0f us, median %.0f us, max %.0f us", values.reduce(0, +) / Double(values.count), sorted[sorted.count / 2], sorted.last ?? 0)
+        }
+        print("cloth gpu timing 16k (300 frames, 100 Hz, \(substeps) substeps, \(dispatches) dispatches, \(h.shirt.particles.count) particles, \(solver.constraintGraph?.entryCount ?? 0) entries, \(h.shirt.render?.vertexCount ?? 0) shell vertices, gpu shell \(solver.hasGPUShell), \(device.name)): feed \(stats(feed)); gpu \(stats(gpuTime)); wait \(stats(wait)); read-back \(stats(read)); bind \(stats(bind)); \(h.cloth.summary)")
+        XCTAssertEqual(h.body.overrideWrites, 300)
         XCTAssertEqual(substeps, 16)
         XCTAssertEqual(h.cloth.runawayCount, 0)
     }

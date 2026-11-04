@@ -85,6 +85,35 @@ import UntoldEngine
 /// `ZombieClothGPUShaderTypes.swift`. Frame thread only, like
 /// `ZombieCloth`; the one thing another thread touches is the completed
 /// handler's record (`Completion`), under its lock.
+///
+/// Phase 2 of the design (2026-11-04) moves the drawn shell onto the GPU
+/// too: `RenderShell.evaluate` was the largest CPU item of the phase-1
+/// frame — 503 us median and 1,008 max on the M4 Max's cores for the
+/// shirt's 32,530 driven vertices, about a millisecond on the headset,
+/// against a 0.6 ms budget for the whole read and bind at gate 2 — so when
+/// the garment comes with a `ClothShellSetup` the frame's command buffer
+/// runs two more dispatches after the stats, `zcTriangleFrames` (one
+/// thread per proxy triangle: the frame e1, n, t in mesh space) and
+/// `zcShell` (one per slot: the barycentric point plus the rest offset in
+/// that frame, and the exported copy's rest normal turned by it, line for
+/// line the CPU's formula), into a shared `shellOut` of two planar
+/// `float4` streams, and `copyShellOutput` hands the CPU 32,530 x 2 lanes
+/// to copy into the override arrays — the design's 100-150 us — instead
+/// of a shell to evaluate. The kernels need the mesh-from-world matrix of
+/// the frame (`shellMeshFromWorld`, set by the cloth before `beginFrame`),
+/// since the override is written in the mesh's own space while the
+/// solver works in the garment frame; the game's step runs between the
+/// encode and the read and may move the entity (the controller's
+/// corrections), so the copy compares the matrix it was encoded with
+/// against the one the read wants and re-expresses the output through
+/// the difference when they disagree rather than draw the shirt a frame
+/// of motion behind the body — a rigid change of frame per slot, in the
+/// same loop. A hard skin invalidates the output (the particles were
+/// rewritten on the CPU) and the cloth evaluates that frame's shell on
+/// the cores; `-clothGPUShell off` keeps the CPU shell on the GPU arm for
+/// the A/B, and the Jolt arm never has one. In the wait-off mode the
+/// output is ringed with the read-back, three slots, so the copy reads
+/// the completed frame's while the next is being written.
 public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
     // MARK: - The constraint graph
 
@@ -522,6 +551,40 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         let readBack: MTLBuffer
     }
 
+    /// The shell's buffers (phase 2), allocated at `build` when the garment
+    /// comes with a `ClothShellSetup`: the proxy's triangles as `uint4`,
+    /// the triangle frames (filled with the bind pose's at the build, since
+    /// a collapsed triangle keeps the frame the buffer holds), the bindings
+    /// per slot and the output — two planar `float4` streams per slot,
+    /// positions then normals, mesh space — in `outputSlots` ring slots:
+    /// one with the wait on, since the read waits for the frame that wrote
+    /// it, three with it off, where the read takes the last completed
+    /// frame while the next is being written. At the 16k cook's 31,681
+    /// triangles and the game's 32,530 slots that is 507 KB + 1.52 MB +
+    /// 1.56 MB + 1.04 MB per output slot (the design's section 3 projected
+    /// 476 KB + 1.43 MB at its 29,783 triangles).
+    private struct ShellBuffers {
+        let triangles: MTLBuffer
+        let frames: MTLBuffer
+        let bindings: MTLBuffer
+        let output: MTLBuffer
+        let slotCount: Int
+        let triangleCount: Int
+        let outputSlots: Int
+
+        /// The byte size of one output slot: the positions and the normals.
+        var outputSlotBytes: Int { 2 * slotCount * MemoryLayout<SIMD4<Float>>.stride }
+    }
+
+    /// What `zcShell` last wrote, per output slot: the frame it was written
+    /// at and the mesh-from-world matrix it was evaluated with, so a read
+    /// can tell whether the slot holds the frame it wants and in which
+    /// frame of reference.
+    private struct ShellRecord {
+        var frame: Int
+        var toMesh: simd_float4x4
+    }
+
     /// The last feed as recorded: the joints now and at the frame's start,
     /// the slack multiplier, and the frame's delta.
     private struct Feed {
@@ -549,8 +612,9 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         )
     }
 
-    /// The kernels the metallib must expose.
-    public static let kernelNames = ["zcPredict", "zcSolve", "zcStats"]
+    /// The kernels the metallib must expose: the three of phase 1 and the
+    /// two shell kernels of phase 2, in the order the pipelines are built.
+    public static let kernelNames = ["zcPredict", "zcSolve", "zcStats", "zcTriangleFrames", "zcShell"]
 
     /// The gathers per substep the encode runs for a configured
     /// `gpuIterations`: clamped to 1...4 as the launch argument's parser
@@ -588,10 +652,39 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
     private let predictPipeline: MTLComputePipelineState
     private let solvePipeline: MTLComputePipelineState
     private let statsPipeline: MTLComputePipelineState
+    private let triangleFramesPipeline: MTLComputePipelineState
+    private let shellPipeline: MTLComputePipelineState
     private let configuration: ZombieCloth.Configuration
     private var completion = Completion()
 
     private var buffers: Buffers?
+    /// The shell's buffers, when the garment came with a shell to evaluate
+    /// on the GPU (phase 2); nil on a garment drawn as its proxy or with
+    /// `gpuShell` off.
+    private var shell: ShellBuffers?
+    /// What each output slot holds (`ShellRecord`), by slot; nil for a slot
+    /// nothing has written since the build or the last hard skin.
+    private var shellRecords: [ShellRecord?] = []
+    /// The frame a hard skin last invalidated the shell output at: an
+    /// output written by a frame at or before it is of particles the CPU
+    /// has since rewritten, and the cloth evaluates that frame's shell on
+    /// the cores.
+    private var shellInvalidFrame = -1
+    /// The frame `readPositions` last handed the cloth — `encodedFrames
+    /// - 1` with the wait on, the completed frame it took off the ring
+    /// with it off — so `copyShellOutput` copies that frame's shell and
+    /// not a newer one that completed between the two reads (-1 before
+    /// any read; the two took their own snapshots until 2026-11-04, and
+    /// the override's shell could run a frame ahead of the positions the
+    /// speed sample and the runaway check read).
+    private var lastReadFrame = -1
+    /// Mesh space from world space for the frame being encoded — the
+    /// inverse of the entity's world times the mesh's local matrix, which
+    /// `ZombieCloth.beginUpdate` sets before `beginFrame` — so the shell
+    /// kernels write the override's own space. Nil leaves the shell
+    /// kernels out of the frame (a cloth without a shell setup never sets
+    /// it).
+    public var shellMeshFromWorld: simd_float4x4?
     private var count = 0
     private var jointCount = 0
     private var origin: SIMD3<Float> = .zero
@@ -654,13 +747,15 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
     // MARK: - Init
 
     /// Loads the platform's metallib from the kit's bundle and builds the
-    /// three pipelines on `device`; nil, and one printed line, when the
-    /// file, a kernel or a pipeline is missing, so a stale or absent
-    /// metallib is loud and the cloth falls back to Jolt rather than
-    /// drawing nothing. `configuration` is read for the GPU arm's knobs
-    /// (`gpuSubsteps`, `gpuIterations`, `gpuRelaxation`,
-    /// `gpuAveragedJacobi`, `gpuDamping`, `gpuHullFriction`, `gpuWait`) and
-    /// the material the Jolt arm shares.
+    /// five pipelines on `device` (the three of phase 1 and the two shell
+    /// kernels of phase 2, so a metallib from before the shell is a stale
+    /// one); nil, and one printed line, when the file, a kernel or a
+    /// pipeline is missing, so a stale or absent metallib is loud and the
+    /// cloth falls back to Jolt rather than drawing nothing.
+    /// `configuration` is read for the GPU arm's knobs (`gpuSubsteps`,
+    /// `gpuIterations`, `gpuRelaxation`, `gpuAveragedJacobi`,
+    /// `gpuDamping`, `gpuHullFriction`, `gpuWait`, `gpuShell`) and the
+    /// material the Jolt arm shares.
     public init?(device: MTLDevice, configuration: ZombieCloth.Configuration) {
         self.device = device
         self.configuration = configuration
@@ -697,6 +792,8 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         predictPipeline = pipelines[0]
         solvePipeline = pipelines[1]
         statsPipeline = pipelines[2]
+        triangleFramesPipeline = pipelines[3]
+        shellPipeline = pipelines[4]
     }
 
     // MARK: - ClothSolver
@@ -710,11 +807,17 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
     /// rest faces, rotated per substep into the back-stop normal), the
     /// influences, the slack and the back-stop per particle, the hulls as
     /// plane sets with their headers, and the rings sized by the substep
-    /// cap. Positions start at the bind pose with the inverse mass in w and
-    /// no velocity; the first feed is always hard (the cloth's attach
-    /// calls `hardSkin` before anything steps), so the particles are
-    /// never solved from the bind pose. False, and nothing kept, when a
-    /// buffer cannot be made; a hull with fewer than four points or no
+    /// cap; and, when the garment comes with a shell (`ClothGarmentSetup.
+    /// shell`, phase 2), the shell's buffers — the triangles, the frames at
+    /// the bind pose (mesh space, through the setup's `meshFromWorld`,
+    /// the CPU's own `RenderShell.frames` arithmetic, so a triangle that
+    /// collapses on a later frame keeps a frame that exists), the bindings
+    /// and the ringed output. Positions start at the bind pose with the
+    /// inverse mass in w and no velocity; the first feed is always hard
+    /// (the cloth's attach calls `hardSkin` before anything steps), so the
+    /// particles are never solved from the bind pose. False, and nothing
+    /// kept, when a buffer cannot be made or a shell binding names a
+    /// triangle the faces lack; a hull with fewer than four points or no
     /// volume is skipped and `hullCount` says how many stand.
     public func build(_ garment: ClothGarmentSetup, hulls: [ClothHullSetup]) -> Bool {
         destroy()
@@ -757,6 +860,51 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         else {
             print("CoolZombie: cloth \(garment.name): the GPU solver could not allocate its buffers on \(device.name)")
             return false
+        }
+        var shellBuffers: ShellBuffers?
+        if let setup = garment.shell {
+            let slots = setup.slotCount
+            let triangleCount = garment.faces.count
+            guard slots > 0, setup.barycentric.count == slots, setup.offset.count == slots, setup.normal.count == slots,
+                  setup.triangle.allSatisfy({ Int($0) < triangleCount })
+            else {
+                print("CoolZombie: cloth \(garment.name): the shell binding disagrees with the faces (\(slots) slots over \(triangleCount) triangles); the GPU solver refused it")
+                return false
+            }
+            let outputSlots = configuration.gpuWait ? 1 : zcReadBackRingSlots
+            guard let triangles = makeBuffer(bytes: triangleCount * MemoryLayout<SIMD4<UInt32>>.stride, label: "shell triangles"),
+                  let frames = makeBuffer(bytes: triangleCount * MemoryLayout<ZCTriangleFrame>.stride, label: "shell triangle frames"),
+                  let bindings = makeBuffer(bytes: slots * MemoryLayout<ZCShellBinding>.stride, label: "shell bindings"),
+                  let output = makeBuffer(bytes: outputSlots * 2 * slots * float4, label: "shell output")
+            else {
+                print("CoolZombie: cloth \(garment.name): the GPU solver could not allocate the shell's buffers on \(device.name)")
+                return false
+            }
+            let trianglePointer = triangles.contents().bindMemory(to: SIMD4<UInt32>.self, capacity: triangleCount)
+            for (t, face) in garment.faces.enumerated() { trianglePointer[t] = SIMD4(face.x, face.y, face.z, 0) }
+            let bindingPointer = bindings.contents().bindMemory(to: ZCShellBinding.self, capacity: slots)
+            for s in 0 ..< slots {
+                bindingPointer[s] = ZCShellBinding(triangle: Int(setup.triangle[s]), barycentric: setup.barycentric[s], offset: setup.offset[s], normal: setup.normal[s])
+            }
+            // The bind pose's frames, mesh space, as the CPU shell computes
+            // its rest frames: the particles through the attach's matrix.
+            let meshBind = garment.bindPositions.map { p -> SIMD3<Float> in
+                let m = setup.meshFromWorld * SIMD4(p + garment.origin, 1)
+                return SIMD3(m.x, m.y, m.z)
+            }
+            let framePointer = frames.contents().bindMemory(to: ZCTriangleFrame.self, capacity: triangleCount)
+            for (t, face) in garment.faces.enumerated() {
+                framePointer[t] = ZCTriangleFrame()
+                let a = meshBind[Int(face.x)], b = meshBind[Int(face.y)], c = meshBind[Int(face.z)]
+                let ab = b - a
+                let cross = simd_cross(ab, c - a)
+                let lab = simd_length(ab), lcross = simd_length(cross)
+                guard lab > 1e-9, lcross > 1e-12 else { continue }
+                let e1 = ab / lab, n = cross / lcross
+                framePointer[t] = ZCTriangleFrame(e1: e1, n: n, t: simd_cross(n, e1))
+            }
+            memset(output.contents(), 0, outputSlots * 2 * slots * float4)
+            shellBuffers = ShellBuffers(triangles: triangles, frames: frames, bindings: bindings, output: output, slotCount: slots, triangleCount: triangleCount, outputSlots: outputSlots)
         }
         let built = Buffers(
             positionA: positionA, positionB: positionB, previous: previous, velocity: velocity, rest: rest, restNormal: restNormal,
@@ -832,6 +980,10 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         memset(stats.contents(), 0, zcRingSlots * Self.statsSlotStride)
 
         buffers = built
+        shell = shellBuffers
+        shellRecords = Array(repeating: nil, count: shellBuffers?.outputSlots ?? 0)
+        shellInvalidFrame = -1
+        lastReadFrame = -1
         count = n
         jointCount = joints
         origin = garment.origin
@@ -870,6 +1022,8 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
     public func destroy() {
         waitForAll()
         buffers = nil
+        shell = nil
+        shellRecords = []
         count = 0
         jointCount = 0
         constraintGraph = nil
@@ -951,6 +1105,9 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         lastFeed = recorded
         accumulatedDelta = 0
         hardSkinFrame = encodedFrames
+        // The shell output, if any, is of particles that no longer stand
+        // there: the cloth evaluates this frame's shell on the cores.
+        shellInvalidFrame = encodedFrames
         pendingFrame = nil
         fedSinceEncode = true
         active = true
@@ -1139,6 +1296,26 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         let statsThreads = min(zcStatsThreadgroupSize, statsPipeline.maxTotalThreadsPerThreadgroup)
         encoder.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: statsThreads, height: 1, depth: 1))
         dispatches += 1
+        // The shell (phase 2): the triangle frames and the slots, in mesh
+        // space, off the frame's final positions (`bindPositions` left them
+        // at `positionIn` for the stats), into this frame's output slot.
+        let shellSlot = frame % max(shell?.outputSlots ?? 1, 1)
+        if let shell, let toMesh = shellMeshFromWorld {
+            var shellParams = ZCShellParams(toMesh: toMesh, origin: origin, slotCount: shell.slotCount, triangleCount: shell.triangleCount)
+            encoder.setBytes(&shellParams, length: MemoryLayout<ZCShellParams>.stride, index: ZCBufferIndex.shellParams.rawValue)
+            encoder.setBuffer(shell.triangles, offset: 0, index: ZCBufferIndex.triangles.rawValue)
+            encoder.setBuffer(shell.frames, offset: 0, index: ZCBufferIndex.triangleFrames.rawValue)
+            encoder.setBuffer(shell.bindings, offset: 0, index: ZCBufferIndex.shellBindings.rawValue)
+            encoder.setBuffer(shell.output, offset: shellSlot * shell.outputSlotBytes, index: ZCBufferIndex.shellOut.rawValue)
+            encoder.setComputePipelineState(triangleFramesPipeline)
+            encoder.dispatchThreads(MTLSize(width: shell.triangleCount, height: 1, depth: 1), threadsPerThreadgroup: group)
+            encoder.setComputePipelineState(shellPipeline)
+            encoder.dispatchThreads(MTLSize(width: shell.slotCount, height: 1, depth: 1), threadsPerThreadgroup: group)
+            dispatches += 2
+            shellRecords[shellSlot] = ShellRecord(frame: frame, toMesh: toMesh)
+        } else if shell != nil {
+            shellRecords[shellSlot] = nil
+        }
         encoder.endEncoding()
 
         var readBackSlot: Int?
@@ -1192,6 +1369,7 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         if configuration.gpuWait {
             waitForPendingFrame()
             source = currentPositions(buffers)
+            lastReadFrame = encodedFrames - 1
         } else {
             let done = completion.snapshot
             if let slot = done.readBackSlot, done.completedFrame >= hardSkinFrame, done.completedFrame >= 0 {
@@ -1199,10 +1377,12 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
                 readStats(slot: done.completedFrame % zcRingSlots)
                 ring.readBackSlot = slot
                 frameStats.lagFrames = 1
+                lastReadFrame = done.completedFrame
             } else {
                 waitForAll()
                 source = currentPositions(buffers)
                 frameStats.lagFrames = 0
+                lastReadFrame = encodedFrames - 1
             }
         }
         let origin = origin
@@ -1255,6 +1435,99 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
             out.boundsMax = SIMD3(last.boundsMax.x, last.boundsMax.y, last.boundsMax.z) + origin
         }
         return out
+    }
+
+    // MARK: - The GPU shell (phase 2)
+
+    /// Whether the garment was built with a shell for the GPU to evaluate.
+    public var hasGPUShell: Bool { shell != nil }
+    /// The shell's slots (the driven exported vertices), 0 without one.
+    public var shellSlotCount: Int { shell?.slotCount ?? 0 }
+
+    /// The GPU shell's output for the frame the positions were last read
+    /// for, into `positions` and `normals` from `offset` on (the garment's
+    /// first override slot), mesh space of `meshFromWorld`: the design's
+    /// CPU copy of 32,530 x 2 `float4` lanes into the override's SIMD3
+    /// arrays, about 100-150 us, in place of a shell to evaluate. The
+    /// output was written with the matrix `beginFrame` was given; when the
+    /// read's differs — the game's step moved the entity between the
+    /// encode and the read, or the frame encoded nothing and the entity
+    /// moved since the last one — every slot is re-expressed through the
+    /// change of frame (`meshFromWorld` x the inverse of the recorded
+    /// matrix: a position through it, a normal through its 3x3's inverse
+    /// transpose, unit again), so the shirt is drawn where the body is and
+    /// never a frame of motion behind it. False, and nothing written,
+    /// when there is nothing valid to copy: no shell, no frame encoded
+    /// yet, a hard skin since the output was written (the particles were
+    /// rewritten on the CPU), or, in the wait-off mode, no completed frame
+    /// since; the cloth then evaluates the shell on the cores. With the
+    /// wait on the frame's buffer is waited for here if the positions
+    /// were not read first.
+    @discardableResult
+    public func copyShellOutput(meshFromWorld: simd_float4x4, into positions: inout [SIMD3<Float>], normals: inout [SIMD3<Float>], at offset: Int) -> Bool {
+        guard let shell, buffers != nil else { return false }
+        let slot: Int
+        if configuration.gpuWait {
+            waitForPendingFrame()
+            slot = (encodedFrames - 1) % max(shell.outputSlots, 1)
+            guard encodedFrames > 0, let record = shellRecords[slot], record.frame == encodedFrames - 1, record.frame >= shellInvalidFrame else { return false }
+        } else {
+            // The frame `readPositions` handed the cloth, not a fresh
+            // snapshot: its slot is still whole (the ring is three deep and
+            // `beginFrame` waits two frames back), and a record that is not
+            // that frame's, or none, sends the cloth to the cores.
+            let frame = lastReadFrame
+            guard frame >= 0, frame >= hardSkinFrame else { return false }
+            slot = frame % shell.outputSlots
+            guard let record = shellRecords[slot], record.frame == frame, record.frame >= shellInvalidFrame else { return false }
+        }
+        guard let record = shellRecords[slot] else { return false }
+        let slots = shell.slotCount
+        guard offset >= 0, offset + slots <= positions.count, offset + slots <= normals.count else { return false }
+        let source = shell.output.contents().advanced(by: slot * shell.outputSlotBytes).bindMemory(to: SIMD4<Float>.self, capacity: 2 * slots)
+        if record.toMesh == meshFromWorld {
+            positions.withUnsafeMutableBufferPointer { pos in
+                normals.withUnsafeMutableBufferPointer { nor in
+                    for s in 0 ..< slots {
+                        let p = source[s], n = source[slots + s]
+                        pos[offset + s] = SIMD3(p.x, p.y, p.z)
+                        nor[offset + s] = SIMD3(n.x, n.y, n.z)
+                    }
+                }
+            }
+        } else {
+            // The change of frame since the encode.
+            let delta = meshFromWorld * record.toMesh.inverse
+            let linear = simd_float3x3(
+                SIMD3(delta.columns.0.x, delta.columns.0.y, delta.columns.0.z),
+                SIMD3(delta.columns.1.x, delta.columns.1.y, delta.columns.1.z),
+                SIMD3(delta.columns.2.x, delta.columns.2.y, delta.columns.2.z)
+            )
+            let normalMatrix = linear.inverse.transpose
+            positions.withUnsafeMutableBufferPointer { pos in
+                normals.withUnsafeMutableBufferPointer { nor in
+                    for s in 0 ..< slots {
+                        let p = delta * SIMD4(source[s].x, source[s].y, source[s].z, 1)
+                        let n = normalMatrix * SIMD3(source[slots + s].x, source[slots + s].y, source[slots + s].z)
+                        let length = simd_length(n)
+                        pos[offset + s] = SIMD3(p.x, p.y, p.z)
+                        nor[offset + s] = length > 1e-6 ? n / length : SIMD3(0, 1, 0)
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    /// The GPU shell's output as arrays, mesh space of `meshFromWorld`
+    /// (the tests' GPU-shell-against-CPU-shell comparison, `Docs/GPUCloth.md`
+    /// section 6); nil when `copyShellOutput` has nothing valid.
+    public func shellOutput(meshFromWorld: simd_float4x4) -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>])? {
+        guard let shell else { return nil }
+        var positions = [SIMD3<Float>](repeating: .zero, count: shell.slotCount)
+        var normals = [SIMD3<Float>](repeating: .zero, count: shell.slotCount)
+        guard copyShellOutput(meshFromWorld: meshFromWorld, into: &positions, normals: &normals, at: 0) else { return nil }
+        return (positions, normals)
     }
 
     // MARK: - For the tests

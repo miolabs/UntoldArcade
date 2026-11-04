@@ -294,6 +294,20 @@ public final class ZombieCloth: @unchecked Sendable {
         /// is the bundled one. The Jolt arm keeps its 3,995: at 16k it is
         /// four times its 3.4 ms step and is refused with one line.
         public var sidecar: String? = nil
+        /// GPU arm (phase 2): on, the drawn shell is evaluated on the GPU —
+        /// the frame's command buffer ends with `zcTriangleFrames` and
+        /// `zcShell`, and `readBack` copies their output (32,530 x 2
+        /// `float4` for the shirt, 100-150 us) into the override arrays
+        /// instead of running `RenderShell.evaluate` on the cores (503 us
+        /// median and 1,008 max on the M4 Max, about a millisecond on the
+        /// headset: the largest CPU item of the phase-1 frame, against a
+        /// 0.6 ms budget for the read and the bind at gate 2). Off keeps
+        /// the CPU shell on the GPU arm for the A/B (`-clothGPUShell off`);
+        /// the Jolt arm has the CPU shell either way. A frame whose GPU
+        /// output cannot stand for its particles — the hard skin after a
+        /// runaway — is evaluated on the cores, and the report's `shell=`
+        /// says which ran.
+        public var gpuShell = true
         /// Jolt solver iterations per step: Jolt divides each of the world's
         /// sub-steps by this count and runs one constraint pass per piece
         /// (small steps, not repeated passes), so four quarter the solver's
@@ -303,8 +317,33 @@ public final class ZombieCloth: @unchecked Sendable {
         /// default; the quality picker and `-clothIterations` go from one
         /// to six for the A/B.
         public var iterationsPerStep: UInt32 = 4
-        /// Per particle, in kilograms: 50 mg makes the 4,000-particle shirt
-        /// 0.2 kg.
+        /// Per particle, in kilograms: 50 mg makes the 3,995-particle
+        /// shirt 0.2 kg — and the 16k cook's 15,979 particles 0.8 kg, which
+        /// is not a weight to this solver. Neither kernel accumulates a
+        /// Lagrange multiplier: a pass gives back `w / (w_i + w_j +
+        /// compliance / dt^2)` of a constraint's violation and nothing else
+        /// (ZombieClothGPU.metal `zcSolve`, Jolt's `SoftBodyMotionProperties`
+        /// the same way), gravity is an acceleration, the clamps and the
+        /// hulls are projections, so the mass and the compliances enter the
+        /// motion only as their product: a shirt of a quarter the mass is,
+        /// to the frame, a shirt with four times the stiffness per pass, and
+        /// nothing else changes. Kept per particle rather than per square
+        /// metre on 2026-11-04 after the first review of phase 2 read the
+        /// 16k hang's 22.9 mm sag (9.4 at 4k) as the weight: at 50 mg a
+        /// particle the finer proxy's edges and bends have the 4k's
+        /// per-pass fractions exactly (61 % of a stretch violation, 5 % of
+        /// a bend), and its larger sag is the convergence of a mesh twice
+        /// as fine under the same 32 passes (a 1.0 % mean stretch residual
+        /// against 0.4 %), not a load; the per-area alternative (0.2025
+        /// kg/m^2, 12.6 mg a particle at 16k) was built and measured that
+        /// day and made the finer shirt four times stiffer per pass (86 %
+        /// of a stretch violation, 17 % of a bend), which bridged the
+        /// armpit in the arms-forward idle — the armhole band 100 mm behind
+        /// its skinned position and 49.7 mm inside the posed skin against
+        /// 4.4 mm — for 7 mm less sag, so it was withdrawn. What the 16k
+        /// proxy needs is the owner's look at gate 2, with the per-pass
+        /// fractions (the compliances, or more gathers) as the knob, not
+        /// the mass.
         public var particleMass: Float = 0.00005
         /// Inverse stiffness of the edges, the shear and the (distance)
         /// bends, in m/N. A triangle mesh with rigid edges can only bend
@@ -437,7 +476,9 @@ public final class ZombieCloth: @unchecked Sendable {
         /// 32), `-clothGPUIterations <n>` (1 to 4), `-clothRelaxation <r>`
         /// (above 0), `-clothAveragedJacobi on|off`, `-clothGPUDamping <d>`
         /// (0 or more), `-clothHullFriction <f>` (0 or more),
-        /// `-clothGPUWait on|off` and `-clothSidecar <name>`. Anything else
+        /// `-clothGPUWait on|off`, `-clothSidecar <name>` (phase 2: the
+        /// 16k cook, `Zombie.cloth16k`, for the GPU arm; the Jolt arm keeps
+        /// the bundled 4k) and `-clothGPUShell on|off`. Anything else
         /// stays as it was — a count outside its range, a word or an
         /// infinity for a number, a flag with no value — and an unknown
         /// model, solver or switch is named once.
@@ -520,6 +561,13 @@ public final class ZombieCloth: @unchecked Sendable {
             if let index = arguments.firstIndex(of: "-clothSidecar"), index + 1 < arguments.count, !arguments[index + 1].hasPrefix("-") {
                 sidecar = arguments[index + 1]
             }
+            if let index = arguments.firstIndex(of: "-clothGPUShell"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "on": gpuShell = true
+                case "off": gpuShell = false
+                default: print("CoolZombie: unknown -clothGPUShell \(arguments[index + 1]); on or off")
+                }
+            }
         }
     }
 
@@ -532,6 +580,19 @@ public final class ZombieCloth: @unchecked Sendable {
     /// apart — the nearer takes it; the prep checks that no other part of
     /// the mesh comes that close to the shell.
     static let bindTolerance: Float = 0.0002
+
+    /// The most particles the Jolt arm will take in one garment: 8,000,
+    /// twice the 3,995 proxy and half the 16k cook. Jolt solves a soft
+    /// body's edges on one thread, so its 3.4 ms step at 3,995 would be
+    /// about 13.6 ms at 15,979 — more than the headset's whole 10 ms frame
+    /// — and `Docs/GPUCloth.md` keeps the 16k proxy to the GPU arm, the Jolt
+    /// arm on its 3,995 and the two a live A/B ("Jolt 4k" against "GPU
+    /// 16k"). `ZombieChaseGame` loads the 4k for the Jolt arm whatever
+    /// `Configuration.sidecar` names; this is the guard behind it, for a
+    /// GPU pick that fell back to Jolt (no device, no metallib) with the
+    /// 16k asset in hand: the garment is refused with one line rather than
+    /// solved at a step that would stall the frame.
+    public static let joltParticleLimit = 8_000
 
     /// The drawn shell as the sidecar binds it to the proxy
     /// (`ZombieClothAsset.RenderBinding`), evaluated from the particles each
@@ -647,6 +708,18 @@ public final class ZombieCloth: @unchecked Sendable {
                     }
                 }
             }
+        }
+
+        /// The binding as a solver evaluating the shell on the GPU takes it
+        /// (`ClothShellSetup`, phase 2 of `Docs/GPUCloth.md`): the same per
+        /// slot triangle, barycentric point, rest offset and rest normal in
+        /// the triangle's bind frame that `evaluate` reads, with the
+        /// attach's world-to-mesh matrix for the bind-pose frames.
+        func shellSetup(meshFromWorld: simd_float4x4) -> ClothShellSetup {
+            ClothShellSetup(
+                triangle: bindings.map { UInt32($0.triangle) }, barycentric: bindings.map(\.barycentric), offset: bindings.map(\.offset),
+                normal: bindings.map(\.normal), meshFromWorld: meshFromWorld
+            )
         }
 
         /// The driven vertices from the particles (mesh space), into
@@ -935,6 +1008,24 @@ public final class ZombieCloth: @unchecked Sendable {
     /// what the resting layer is for, and the tests hold it at zero over
     /// the powered ragdoll.
     public private(set) var joltWakeCount = 0
+    /// Where the drawn shell was evaluated on the last frame that wrote
+    /// the override (`shell=` in the report): on the GPU by the solver's
+    /// two shell kernels and copied (phase 2), on the cores by
+    /// `RenderShell.evaluate`, or nowhere yet (no frame written, or no
+    /// garment with a shell).
+    public enum ShellMode: String, Sendable {
+        case none, cpu, gpu
+    }
+
+    public private(set) var shellMode: ShellMode = .none
+    /// Frames whose shell the GPU evaluated and the CPU copied, and frames
+    /// the GPU arm with `gpuShell` on had to evaluate on the cores instead
+    /// — the hard skin after a runaway, a first frame before any encode —
+    /// since the attach. The two tell whether the GPU shell held the
+    /// frame, and a fallback count that grows every frame says the output
+    /// never became valid.
+    public private(set) var gpuShellFrames = 0
+    public private(set) var cpuShellFallbacks = 0
 
     /// Builds the garments on `entityId` — the zombie, revealed and with the
     /// ragdoll placed — in `physics`'s world. False when nothing attached.
@@ -1026,6 +1117,9 @@ public final class ZombieCloth: @unchecked Sendable {
         skinFeedCount = 0
         overrideWriteCount = 0
         joltWakeCount = 0
+        shellMode = .none
+        gpuShellFrames = 0
+        cpuShellFallbacks = 0
         // The bodies were built on the layer their model asks for, awake.
         bodyPutToRest = false
         // Onto the displayed pose before the first step; the next feed is
@@ -1148,7 +1242,7 @@ public final class ZombieCloth: @unchecked Sendable {
         // point at the body (the rolled cuffs, the inside of the collar)
         // that is away from it, so they get none.
         let bodyFacing = Set(garment.bodyFacingParticles)
-        let setup = ClothGarmentSetup(
+        var setup = ClothGarmentSetup(
             name: garment.name, origin: origin, bindPositions: bindWorld.map { $0 - origin }, faces: faces,
             inverseMasses: garment.maxDistance.map { $0 == 0 ? 0 : 1 / configuration.particleMass }, influences: influences,
             maxDistance: garment.maxDistance.map { $0 * configuration.slackScale },
@@ -1161,6 +1255,15 @@ public final class ZombieCloth: @unchecked Sendable {
         )
         let hulls = skinHulls(for: garment, jointInfo: jointInfo, physics: physics, model: model, meshToWorld: meshToWorld)
         let (solver, kind) = makeSolver(physics: physics)
+        if kind == .jolt, count > Self.joltParticleLimit {
+            return refuse("Jolt would solve its \(count) particles on one thread, four times its 3.4 ms step at 3,995; the 16k proxy is the GPU arm's (-clothSolver gpu)")
+        }
+        if kind == .gpu, configuration.gpuShell, let shell {
+            // The shell onto the GPU too (phase 2): the same binding the
+            // CPU shell holds, with the attach's world-to-mesh for the
+            // bind-pose frames.
+            setup.shell = shell.shellSetup(meshFromWorld: meshToWorld.inverse)
+        }
         guard solver.build(setup, hulls: hulls.setups) else { return refuse(kind == .gpu ? "the GPU solver refused the garment" : "Jolt refused the soft body") }
         (solver as? GPUClothSolver)?.floorY = floorY
         hulls.report(garment: garment.name, built: solver.hullCount)
@@ -1181,11 +1284,48 @@ public final class ZombieCloth: @unchecked Sendable {
     /// one printed line (`attach` for the missing device, the solver's init
     /// for the rest), so the picker's choice is never silently another.
     private func makeSolver(physics: ZombiePhysics) -> (solver: any ClothSolver, kind: Configuration.Solver) {
-        if configuration.solver == .gpu, let device, let gpu = GPUClothSolver(device: device, configuration: configuration) {
+        if configuration.solver == .gpu, let device, Self.gpuAvailable(device: device, configuration: configuration),
+           let gpu = GPUClothSolver(device: device, configuration: configuration)
+        {
             return (gpu, .gpu)
         }
         return (JoltClothSolver(physics: physics), .jolt)
     }
+
+    /// Whether the GPU arm can be built on `device` — a `GPUClothSolver`
+    /// with its five pipelines and a queue, the same construction `bind`
+    /// makes — probed once per device and remembered, since what refuses
+    /// it (no metallib for the platform in the bundle, a stale one missing
+    /// a kernel, a pipeline the device rejects, no queue) does not change
+    /// while the process runs; false for no device. `ZombieChaseGame` asks
+    /// before it picks the sidecar, so a GPU pick that will fall back to
+    /// Jolt loads the 4k proxy the Jolt arm can take rather than the 16k it
+    /// refuses (`joltParticleLimit`) — the shirt gone for a missing
+    /// metallib, until 2026-11-04 — and `makeSolver` asks too, so the
+    /// solver's one printed line comes once, from the probe. A probe that
+    /// succeeds costs the pipelines once more at the attach, tens of
+    /// milliseconds on the first attach of a process.
+    public static func gpuAvailable(device: MTLDevice?, configuration: Configuration) -> Bool {
+        guard let device else { return false }
+        return gpuProbes.probe(device) { GPUClothSolver(device: device, configuration: configuration) != nil }
+    }
+
+    /// The probes' results by device, under a lock.
+    private final class GPUProbes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var known: [ObjectIdentifier: Bool] = [:]
+        func probe(_ device: MTLDevice, _ build: () -> Bool) -> Bool {
+            lock.withLock {
+                let key = ObjectIdentifier(device)
+                if let result = known[key] { return result }
+                let result = build()
+                known[key] = result
+                return result
+            }
+        }
+    }
+
+    private static let gpuProbes = GPUProbes()
 
     /// The sidecar's skin colliders for `garment` (`SkinHullPlan`), under
     /// `model` (skeleton order) and `meshToWorld`.
@@ -1282,7 +1422,17 @@ public final class ZombieCloth: @unchecked Sendable {
         updateBegan = CACurrentMediaTime()
         guard !garments.isEmpty else { return }
         let spheres = sphereProvider?() ?? []
-        for garment in garments { garment.solver.beginFrame(spheres: spheres) }
+        // The GPU shell (phase 2) writes the override's own space, the
+        // mesh's: the matrix from the world to it as the body stands at the
+        // frame's begin. `readBack` compares what it wants against this and
+        // the solver re-expresses the output if the game's step moved the
+        // entity in between.
+        var meshFromWorld: simd_float4x4?
+        if configuration.gpuShell, let body { meshFromWorld = (body.entityWorld() * localTransform).inverse }
+        for garment in garments {
+            if let gpu = garment.solver as? GPUClothSolver { gpu.shellMeshFromWorld = gpu.hasGPUShell ? meshFromWorld : nil }
+            garment.solver.beginFrame(spheres: spheres)
+        }
     }
 
     // MARK: - Per frame
@@ -1597,6 +1747,7 @@ public final class ZombieCloth: @unchecked Sendable {
         ).inverse.transpose
         var maxSpeed: Float = 0
         var bind: Double = 0
+        var mode = ShellMode.none
         for garment in garments {
             let read = garment.shell == nil
                 ? garment.solver.readPositionsAndNormals(into: &garment.worldPositions, normals: &garment.worldNormals)
@@ -1615,21 +1766,49 @@ public final class ZombieCloth: @unchecked Sendable {
             }
             if !hasPrevious { garment.previousWorldPositions = garment.worldPositions }
             if let shell = garment.shell {
-                if garment.meshPositions.count != read { garment.meshPositions = Array(repeating: .zero, count: read) }
-                for index in 0 ..< read {
-                    let p = garment.worldPositions[index]
-                    garment.previousWorldPositions[index] = p
-                    let local = toMesh * SIMD4(p, 1)
-                    garment.meshPositions[index] = SIMD3(local.x, local.y, local.z)
-                }
-                let started = CACurrentMediaTime()
-                shell.evaluate(particles: garment.meshPositions)
                 let first = garment.overrideRanges.first?.lowerBound ?? 0
-                for s in 0 ..< shell.slotCount {
-                    overridePositions[first + s] = shell.positions[s]
-                    overrideNormals[first + s] = shell.normals[s]
+                // The GPU shell (phase 2): the kernels' output copied into
+                // the override arrays, re-expressed if the entity moved
+                // since the encode; the cores when there is nothing valid
+                // to copy (the hard skin after a runaway, a first frame
+                // before any encode) or the knob is off. `bind=` is the
+                // copy alone on the GPU path and, on the CPU path, the
+                // evaluation and the override write after the particles'
+                // conversion, the window the phase-1 figures were taken
+                // through (the conversion sat under `read=` then and does
+                // again; for a day it sat under `bind=`, which read the
+                // Jolt idle's 610 us against phase 1's 467-503).
+                var copied = false
+                if configuration.gpuShell, let gpu = garment.solver as? GPUClothSolver, gpu.hasGPUShell {
+                    let started = CACurrentMediaTime()
+                    copied = gpu.copyShellOutput(meshFromWorld: toMesh, into: &overridePositions, normals: &overrideNormals, at: first)
+                    if copied {
+                        bind += (CACurrentMediaTime() - started) * 1e6
+                        gpuShellFrames += 1
+                    } else {
+                        cpuShellFallbacks += 1
+                    }
                 }
-                bind += (CACurrentMediaTime() - started) * 1e6
+                if copied {
+                    for index in 0 ..< read { garment.previousWorldPositions[index] = garment.worldPositions[index] }
+                    mode = .gpu
+                } else {
+                    if garment.meshPositions.count != read { garment.meshPositions = Array(repeating: .zero, count: read) }
+                    for index in 0 ..< read {
+                        let p = garment.worldPositions[index]
+                        garment.previousWorldPositions[index] = p
+                        let local = toMesh * SIMD4(p, 1)
+                        garment.meshPositions[index] = SIMD3(local.x, local.y, local.z)
+                    }
+                    let started = CACurrentMediaTime()
+                    shell.evaluate(particles: garment.meshPositions)
+                    for s in 0 ..< shell.slotCount {
+                        overridePositions[first + s] = shell.positions[s]
+                        overrideNormals[first + s] = shell.normals[s]
+                    }
+                    bind += (CACurrentMediaTime() - started) * 1e6
+                    mode = .cpu
+                }
             } else {
                 for index in 0 ..< read {
                     let p = garment.worldPositions[index]
@@ -1647,15 +1826,19 @@ public final class ZombieCloth: @unchecked Sendable {
         }
         maxParticleSpeed = maxSpeed
         bindMicroseconds = bind
+        shellMode = mode
         return nil
     }
 
     // MARK: - Diagnostics
 
-    /// One line on the simulation: the garments, their particles and pins
-    /// and the shell vertices they carry, the skin's hulls in the world
-    /// (`colliders=`), the slack in force, the sleep and range state, the microseconds of the skin feed, the read-back and,
-    /// of the read-back, the shell's evaluation (`bind=`), the step interval
+    /// One line on the simulation: the garments, their particles and pins,
+    /// the proxy's resolution (`proxy=4k|16k`, which cook is in hand) and
+    /// the shell vertices they carry, the skin's hulls in the world
+    /// (`colliders=`), the slack in force, the sleep and range state, the
+    /// microseconds of the skin feed, the read-back and, of the read-back,
+    /// the shell's evaluation (`bind=`: the cores' pass, or on the GPU
+    /// shell path the copy of the kernels' output), the step interval
     /// (`willStep`'s end
     /// to the game update's start: Jolt's step and the coordinator's
     /// read-back), the farthest particle from its skinned target (with
@@ -1693,8 +1876,8 @@ public final class ZombieCloth: @unchecked Sendable {
             farthest = String(format: "%.3fm@(%.2f,%.2f,%.2f)", worst, at.x, at.y, at.z)
         }
         var line = String(
-            format: "cloth %@: %d particles (%d pins)%@ colliders=%d mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d",
-            names, particles, pins, shellDescription, skinColliderCount, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
+            format: "cloth %@: %d particles (%d pins) proxy=%@%@ colliders=%d mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus target<=%@ speed<=%.2fm/s targetsMoved=%.3fm joints<=%.1fmm hard=%d runaway=%d writes=%d",
+            names, particles, pins, proxyDescription, shellDescription, skinColliderCount, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds, farthest, maxParticleSpeed, targetMotion,
             lastFrameJointMotion * 1000, hardSkinCount, runawayCount, overrideWriteCount
         )
         if let gpu = gpuSolvers.first {
@@ -1704,13 +1887,14 @@ public final class ZombieCloth: @unchecked Sendable {
             // their slack ball at the frame's end — whether the look is
             // bounded by the schedule or by the solver, which the
             // `-clothSlack 3` experiment could only guess at on Jolt's
-            // inexact clamp.
+            // inexact clamp; and where the shell was evaluated (phase 2:
+            // `gpu`, the kernels' output copied; `cpu`, the cores).
             let stats = gpu.stats
             line += String(
-                format: " hulls=%d planes=%d stretch=%d bend=%d sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df onClamp=%d%%",
+                format: " hulls=%d planes=%d stretch=%d bend=%d sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df shell=%@ onClamp=%d%%",
                 gpu.hullCount, gpu.planeCount, gpu.constraintGraph?.stretchConstraintCount ?? 0, gpu.constraintGraph?.bendConstraintCount ?? 0,
                 stats.substeps, GPUClothSolver.gatherCount(configured: configuration.gpuIterations), stats.feedMicroseconds, stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames,
-                Int((stats.onClampShare * 100).rounded())
+                shellMode.rawValue, Int((stats.onClampShare * 100).rounded())
             )
         } else {
             line += " joltWakes=\(joltWakeCount)"
@@ -1725,6 +1909,14 @@ public final class ZombieCloth: @unchecked Sendable {
     /// `shirt` on Jolt as the line always read.
     private var garmentDescription: String {
         garments.map { $0.solverKind == .gpu ? "\($0.name)[gpu]" : $0.name }.joined(separator: "+")
+    }
+
+    /// The proxy's resolution in thousands of particles, from the sidecar
+    /// in hand: `4k` for the 3,995 cook, `16k` for the 15,979 of phase 2 —
+    /// `proxy=` in the report, so a headset line says which cook it reads.
+    private var proxyDescription: String {
+        let particles = garments.first?.bindWorld.count ?? 0
+        return "\(Int((Double(particles) / 1000).rounded()))k"
     }
 
     /// The shell vertices the garments carry, when any does.
@@ -1761,14 +1953,14 @@ public final class ZombieCloth: @unchecked Sendable {
             // what the first read waited, and the lag mode.
             let stats = gpu.stats
             return String(
-                format: "cloth %@: %d particles%@ mult=%.2f %@ sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df read=%.0fus bind=%.0fus hard=%d runaway=%d writes=%d",
-                names, particles, shellDescription, skinMultiplier, stateDescription, stats.substeps, GPUClothSolver.gatherCount(configured: configuration.gpuIterations), stats.feedMicroseconds,
-                stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames, readBackMicroseconds, bindMicroseconds, hardSkinCount, runawayCount, overrideWriteCount
+                format: "cloth %@: %d particles proxy=%@%@ mult=%.2f %@ sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df shell=%@ read=%.0fus bind=%.0fus hard=%d runaway=%d writes=%d",
+                names, particles, proxyDescription, shellDescription, skinMultiplier, stateDescription, stats.substeps, GPUClothSolver.gatherCount(configured: configuration.gpuIterations), stats.feedMicroseconds,
+                stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames, shellMode.rawValue, readBackMicroseconds, bindMicroseconds, hardSkinCount, runawayCount, overrideWriteCount
             )
         }
         return String(
-            format: "cloth %@: %d particles%@ mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus hard=%d runaway=%d writes=%d",
-            names, particles, shellDescription, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds,
+            format: "cloth %@: %d particles proxy=%@%@ mult=%.2f %@ skin=%.0fus read=%.0fus bind=%.0fus step=%.0fus hard=%d runaway=%d writes=%d",
+            names, particles, proxyDescription, shellDescription, skinMultiplier, stateDescription, skinMicroseconds, readBackMicroseconds, bindMicroseconds, worldMicroseconds,
             hardSkinCount, runawayCount, overrideWriteCount
         )
     }
@@ -1806,9 +1998,21 @@ public final class ZombieCloth: @unchecked Sendable {
         garments.indices.contains(index) ? garments[index].maxDistance : []
     }
 
-    /// The shell a garment carries, as last evaluated, for the tests.
+    /// The shell a garment carries, as last evaluated, for the tests (on
+    /// the GPU shell path it is evaluated only on a fallback frame; a test
+    /// calls `evaluate` on it with the particles it wants compared).
     func renderShell(ofGarment index: Int) -> RenderShell? {
         garments.indices.contains(index) ? garments[index].shell : nil
+    }
+
+    /// The GPU shell's output for a garment as the kernels last wrote it,
+    /// mesh space of the body as it stands now (the frame `readBack`
+    /// converts into), for the tests' GPU-shell-against-CPU-shell
+    /// comparison (`Docs/GPUCloth.md` section 6); nil on the Jolt arm, with
+    /// `gpuShell` off, or when nothing valid has been written yet.
+    public func gpuShellOutput(ofGarment index: Int) -> (positions: [SIMD3<Float>], normals: [SIMD3<Float>])? {
+        guard garments.indices.contains(index), let body, let gpu = garments[index].solver as? GPUClothSolver, gpu.hasGPUShell else { return nil }
+        return gpu.shellOutput(meshFromWorld: (body.entityWorld() * localTransform).inverse)
     }
 
     /// Whether the solver is simulating a garment's body (false while the

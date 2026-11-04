@@ -153,17 +153,38 @@ enum ZCBufferIndex {
     ZCSpheresIndex = 17,
     /// `ZCStats` (64 B): the frame's stats slot, bound at its ring offset.
     ZCStatsIndex = 18,
-    // Phase 2, reserved so the shell kernels need no renumbering:
-    /// `uint4` x T: the proxy's triangles (w unused).
+    // Phase 2, the GPU shell: the two kernels (`zcTriangleFrames`,
+    // `zcShell`) that run after the frame's last substep and the stats in
+    // the same encoder, reading the current positions at
+    // ZCPositionInIndex. The indices were reserved in phase 1 so nothing
+    // above moved.
+    /// `uint4` x T: the proxy's triangles, the sidecar's faces in order and
+    /// orientation (xyz the three particle indices, w unused, 0); 7,852 on
+    /// the 3,995 proxy, 31,681 on the 16k cook.
     ZCTrianglesIndex = 19,
-    /// `3 x float4` x T: each triangle's (e1, n, t) frame in mesh space.
+    /// `ZCTriangleFrame` x T: each triangle's (e1, n, t) frame in MESH
+    /// space, written by `zcTriangleFrames` and read by `zcShell`; a
+    /// collapsed triangle keeps the frame the buffer held, so the CPU fills
+    /// the buffer once at the attach with the bind-pose frames (the same
+    /// rule over the rest positions, as `RenderShell.init` computes them)
+    /// and never writes it again.
     ZCTriangleFramesIndex = 20,
-    /// 48 B x shell slots: bary + triangle, offset, normal.
+    /// `ZCShellBinding` x slots: per driven exported vertex (32,530 in the
+    /// game, 29,402 in the tests' shell-only mesh), its triangle, the
+    /// barycentric point, the rest offset and the exported copy's own rest
+    /// normal in the triangle's bind frame.
     ZCShellBindingsIndex = 21,
-    /// `2 x float4` x shell slots: positions (w = 1) and normals (w = 0).
+    /// `float4` x 2 x slots, planar: the positions (w = 1) in [0, slots)
+    /// and the normals (w = 0) in [slots, 2 slots), mesh space, one slot
+    /// per `ZCShellBinding` in the same order — the two `float4` streams
+    /// the engine's `deformOverride` kernel takes (E/Shaders/
+    /// DeformOverrideCompute.metal), so phase 3 binds the second half at
+    /// the offset slots x 16 and phase 2's CPU copy reads the halves into
+    /// the override arrays.
     ZCShellOutIndex = 22,
-    /// `constant` phase-2 shell params (`toMesh`), separate from `ZCParams`
-    /// so the 256 B stay whole.
+    /// `constant ZCShellParams` (128 B): the mesh-from-world matrix, the
+    /// garment origin and the two counts, separate from `ZCParams` so the
+    /// 256 B stay whole and the shell kernels take no substep state.
     ZCShellParamsIndex = 23,
 };
 
@@ -258,7 +279,7 @@ enum ZCConstraintFamily {
 };
 
 /// Bit layout of `ZCEntry.packed`: the neighbour's particle index in the
-/// low 24 bits (16.7 M particles, the 16k cook's 15,994 and anything
+/// low 24 bits (16.7 M particles, the 16k cook's 15,979 and anything
 /// after), the family in bits 24-25, the region in bits 26-31.
 #define ZCEntryNeighbourBits 24
 #define ZCEntryNeighbourMask 0x00FFFFFFu
@@ -380,6 +401,100 @@ struct ZCStats {
     metal::uint4 counts;
     /// Zero.
     metal::uint4 reserved;
+};
+
+// ---------------------------------------------------------------------------
+// Phase 2: the GPU shell. Three structs, all lanes, that move
+// `ZombieCloth.RenderShell` — the drawn shell's triangle + barycentric +
+// offset binding to the proxy, evaluated on the CPU's cores in 503 us at
+// the median and 1,008 us at most on the M4 Max (ZombieCloth.swift, the
+// `RenderShell` comment), about a millisecond of the headset's 10 ms — to
+// two kernels, `zcTriangleFrames` and `zcShell`, that reproduce it line
+// for line in mesh space: the frame per proxy triangle (e1 along the first
+// edge, n the face normal, t = n x e1), then per driven exported vertex
+// pos = bary . (a, b, c) + o.x e1 + o.y n + o.z t and normal = r.x e1 +
+// r.y n + r.z t, nothing re-normalised, as `RenderShell.evaluate` has it.
+// The rigid islands (the 21 buttons and bits of thread) need no case of
+// their own: the prep binds every vertex of an island to the single
+// triangle nearest the island's centre (prep_zombie.py `render_binding`),
+// so the per-slot formula already carries the whole island on one frame,
+// and `RenderShell` evaluates them by the same line — the islands are a
+// list it keeps for the tests, never a branch.
+// ---------------------------------------------------------------------------
+
+/// What the two shell kernels need beyond the particles: the space change
+/// and the counts. The solver's positions are in the garment frame (world
+/// minus the origin) while the shell is evaluated in MESH space, the
+/// space `expandOverride` converts the particles into before
+/// `RenderShell.evaluate` (`toMesh * (p, 1)` with p the world position,
+/// which is the buffer plus the origin), so the kernels add the origin
+/// first and multiply second, the CPU's order, and the two agree to the
+/// float arithmetic. 128 B, eight lanes, bound with `setBytes` once per
+/// frame to both kernels.
+///
+/// Offsets: 0 toMesh (float4x4, 64 B), 64 origin (float4), 80 counts
+/// (uint4), 96 reserved0 (uint4), 112 reserved1 (uint4); size and stride
+/// 128, alignment 16.
+struct ZCShellParams {
+    /// Mesh space from world space: the inverse of the entity's model
+    /// matrix this frame (`meshToWorld.inverse`, as `readBack` hands it to
+    /// `expandOverride`), column-major as `simd_float4x4` is.
+    metal::float4x4 toMesh;
+    /// xyz the garment origin (`ClothGarmentSetup.origin`, the entity's
+    /// origin at the attach), m, added to a position before `toMesh`; w 0.
+    metal::float4 origin;
+    /// x the shell slot count (the driven exported vertices, one
+    /// `ZCShellBinding` and two `float4` of output each); y the triangle
+    /// count T; z, w 0.
+    metal::uint4 counts;
+    /// Zero.
+    metal::uint4 reserved0;
+    metal::uint4 reserved1;
+};
+
+/// One proxy triangle's frame this frame, mesh space, as `RenderShell.Frame`
+/// holds it without the corners (which `zcShell` reads from the positions
+/// itself, three `float4` per slot, rather than carrying 48 more bytes per
+/// triangle): e1 the unit first edge (b - a), n the unit face normal
+/// (e1 x (c - a)), t = n x e1. Written by `zcTriangleFrames` for every
+/// triangle whose edge is over 1e-9 m and whose cross product over 1e-12
+/// m^2, left as it was otherwise, so a triangle collapsed to a line
+/// keeps its last frame rather than a NaN, as the CPU's does; the CPU
+/// fills the buffer with the bind-pose frames at the attach so that "last
+/// frame" exists on the first frame.
+///
+/// Offsets: 0 e1 (float4), 16 n (float4), 32 t (float4); size and stride
+/// 48, alignment 16. The w lanes are 0.
+struct ZCTriangleFrame {
+    metal::float4 e1;
+    metal::float4 n;
+    metal::float4 t;
+};
+
+/// One driven exported vertex's binding, `RenderShell.Binding` in lanes:
+/// which proxy triangle, where on it, the rest offset in the triangle's
+/// bind frame and the exported copy's own rest normal in that frame (unit,
+/// taken off the mesh at the attach — the exporter splits a vertex whose
+/// corners' normals disagree, so the copies of one shell vertex differ in
+/// this lane and nothing else). The triangle index travels in
+/// `barycentric.w` as a float — exact below 2^24, 16.7 M triangles, where
+/// the 16k cook has 31,681 — so the struct stays four-byte-typed lanes
+/// and 48 B, not a fifth lane for one integer; the kernel reads it back
+/// with `uint(w)`, the mirror with `Int(w)`.
+///
+/// Offsets: 0 barycentric (float4, w the triangle), 16 offset (float4, w
+/// 0), 32 normal (float4, w 0); size and stride 48, alignment 16.
+struct ZCShellBinding {
+    /// xyz the barycentric weights of the closest point on the triangle
+    /// (summing to 1, clipped to [0, 1] by the prep); w the triangle index
+    /// as a float.
+    metal::float4 barycentric;
+    /// xyz the rest offset from that point, m, in the frame (e1, n, t); the
+    /// inner layer sits at y down to -18 mm; w 0.
+    metal::float4 offset;
+    /// xyz the exported copy's unit rest normal in the frame (e1, n, t);
+    /// w 0.
+    metal::float4 normal;
 };
 
 #endif /* ZombieClothGPUShaderTypes_h */

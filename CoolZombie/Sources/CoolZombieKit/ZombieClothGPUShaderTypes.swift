@@ -60,7 +60,7 @@ enum ZCBufferIndex: Int {
     case hullWorld = 16
     case spheres = 17
     case stats = 18
-    // Phase 2, reserved.
+    // Phase 2, the GPU shell (`zcTriangleFrames`, `zcShell`).
     case triangles = 19
     case triangleFrames = 20
     case shellBindings = 21
@@ -256,6 +256,78 @@ struct ZCStats {
     var onClampShare: Float { freeCount > 0 ? Float(onClampCount) / Float(freeCount) : 0 }
 }
 
+// MARK: - Phase 2: the GPU shell
+
+/// `ZCShellParams`: what the two shell kernels need beyond the particles —
+/// `toMesh`, mesh space from world space (`meshToWorld.inverse`, as
+/// `readBack` hands it to `expandOverride`); `origin`, the garment origin
+/// the kernels add to a garment-frame position before the matrix, the
+/// CPU's order, so the GPU shell lands on the CPU shell to the float
+/// arithmetic; `counts` x the shell slot count (the driven exported
+/// vertices, 32,530 in the game and 29,402 in the tests' shell-only mesh),
+/// y the triangle count T. 128 B, bound with `setBytes` once per frame to
+/// both kernels at `ZCBufferIndex.shellParams`.
+struct ZCShellParams {
+    var toMesh: simd_float4x4 = matrix_identity_float4x4
+    var origin: SIMD4<Float> = .zero
+    var counts: SIMD4<UInt32> = .zero
+    var reserved0: SIMD4<UInt32> = .zero
+    var reserved1: SIMD4<UInt32> = .zero
+
+    init() {}
+
+    init(toMesh: simd_float4x4, origin: SIMD3<Float>, slotCount: Int, triangleCount: Int) {
+        self.toMesh = toMesh
+        self.origin = SIMD4(origin, 0)
+        counts = SIMD4(UInt32(slotCount), UInt32(triangleCount), 0, 0)
+    }
+}
+
+/// `ZCTriangleFrame`: one proxy triangle's frame in mesh space as
+/// `zcTriangleFrames` writes it and `zcShell` reads it — `e1` the unit
+/// first edge, `n` the unit face normal, `t = n x e1`, w lanes 0 — the
+/// `RenderShell.Frame` without the corners. 48 B, one per triangle. The
+/// CPU fills the buffer once at the attach with the bind-pose frames (the
+/// same rule over the rest positions, as `RenderShell.init` does) because
+/// a collapsed triangle keeps whatever frame the buffer holds; the
+/// defaults are the CPU's rest default, the identity frame.
+struct ZCTriangleFrame {
+    var e1: SIMD4<Float> = SIMD4(1, 0, 0, 0)
+    var n: SIMD4<Float> = SIMD4(0, 1, 0, 0)
+    var t: SIMD4<Float> = SIMD4(0, 0, 1, 0)
+
+    init() {}
+
+    init(e1: SIMD3<Float>, n: SIMD3<Float>, t: SIMD3<Float>) {
+        self.e1 = SIMD4(e1, 0)
+        self.n = SIMD4(n, 0)
+        self.t = SIMD4(t, 0)
+    }
+}
+
+/// `ZCShellBinding`: one driven exported vertex's binding, `RenderShell.
+/// Binding` in lanes — the barycentric weights with the triangle index in
+/// `barycentric.w` as a float (exact below 2^24; the 16k cook has 31,681
+/// triangles), the rest offset in the triangle's bind frame (e1, n, t) and
+/// the exported copy's own unit rest normal in that frame. 48 B, one per
+/// slot in the override's order.
+struct ZCShellBinding {
+    var barycentric: SIMD4<Float> = .zero
+    var offset: SIMD4<Float> = .zero
+    var normal: SIMD4<Float> = SIMD4(0, 1, 0, 0)
+
+    init() {}
+
+    init(triangle: Int, barycentric: SIMD3<Float>, offset: SIMD3<Float>, normal: SIMD3<Float>) {
+        precondition(triangle >= 0 && triangle < 1 << 24, "ZCShellBinding: triangle \(triangle) is not exact as a float")
+        self.barycentric = SIMD4(barycentric, Float(triangle))
+        self.offset = SIMD4(offset, 0)
+        self.normal = SIMD4(normal, 0)
+    }
+
+    var triangle: Int { Int(barycentric.w) }
+}
+
 /// The layout the header writes down, so a test can pin the Swift mirror
 /// to it: `mismatches()` is empty when every size, stride and offset
 /// agrees, and names each disagreement otherwise. `testTheMetallibExposesTheKernels`
@@ -281,6 +353,11 @@ enum ZCLayout {
     static let hullHeader = Expected(name: "ZCHullHeader", size: 48, stride: 48, alignment: 16, offsets: [("range", 0), ("boundsMin", 16), ("boundsMax", 32)])
     static let sphere = Expected(name: "ZCSphere", size: 32, stride: 32, alignment: 16, offsets: [("center", 0), ("velocity", 16)])
     static let stats = Expected(name: "ZCStats", size: 64, stride: 64, alignment: 16, offsets: [("boundsMin", 0), ("boundsMax", 16), ("counts", 32), ("reserved", 48)])
+    static let shellParams = Expected(name: "ZCShellParams", size: 128, stride: 128, alignment: 16, offsets: [
+        ("toMesh", 0), ("origin", 64), ("counts", 80), ("reserved0", 96), ("reserved1", 112),
+    ])
+    static let triangleFrame = Expected(name: "ZCTriangleFrame", size: 48, stride: 48, alignment: 16, offsets: [("e1", 0), ("n", 16), ("t", 32)])
+    static let shellBinding = Expected(name: "ZCShellBinding", size: 48, stride: 48, alignment: 16, offsets: [("barycentric", 0), ("offset", 16), ("normal", 32)])
 
     /// Every disagreement between the Swift structs and the header's
     /// layout, one line each; empty when the mirror is exact.
@@ -311,6 +388,12 @@ enum ZCLayout {
         check(ZCHullHeader.self, hullHeader, [("range", \ZCHullHeader.range), ("boundsMin", \ZCHullHeader.boundsMin), ("boundsMax", \ZCHullHeader.boundsMax)])
         check(ZCSphere.self, sphere, [("center", \ZCSphere.center), ("velocity", \ZCSphere.velocity)])
         check(ZCStats.self, stats, [("boundsMin", \ZCStats.boundsMin), ("boundsMax", \ZCStats.boundsMax), ("counts", \ZCStats.counts), ("reserved", \ZCStats.reserved)])
+        check(ZCShellParams.self, shellParams, [
+            ("toMesh", \ZCShellParams.toMesh), ("origin", \ZCShellParams.origin), ("counts", \ZCShellParams.counts),
+            ("reserved0", \ZCShellParams.reserved0), ("reserved1", \ZCShellParams.reserved1),
+        ])
+        check(ZCTriangleFrame.self, triangleFrame, [("e1", \ZCTriangleFrame.e1), ("n", \ZCTriangleFrame.n), ("t", \ZCTriangleFrame.t)])
+        check(ZCShellBinding.self, shellBinding, [("barycentric", \ZCShellBinding.barycentric), ("offset", \ZCShellBinding.offset), ("normal", \ZCShellBinding.normal)])
         return out
     }
 }

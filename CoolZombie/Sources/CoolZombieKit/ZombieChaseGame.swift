@@ -9,6 +9,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import Foundation
+import Metal
 import simd
 import UntoldEngine
 
@@ -238,9 +239,12 @@ public final class ZombieChaseGame: @unchecked Sendable {
     /// every frame around the game's own update. Frame thread, like the
     /// cloth itself: the host reads its state and counters there.
     public private(set) var cloth: ZombieCloth?
-    /// The sidecar, loaded once for every cloth built from it; nil until a
-    /// configuration with the cloth on asks for it.
-    private var clothAsset: ZombieClothAsset?
+    /// The sidecars loaded so far by name, each once for every cloth built
+    /// from it (`Zombie.cloth`, the 3,995 proxy; `Zombie.cloth16k`, phase 2
+    /// of `Docs/GPUCloth.md`); empty until a configuration with the cloth
+    /// on asks for one. Both stay loaded once read, so the hosts' Proxy
+    /// picker flips between them without file IO.
+    private var clothAssets: [String: ZombieClothAsset] = [:]
     /// A new cloth configuration from the host (`setCloth`), applied on the
     /// game thread.
     private var clothRequest: ZombieCloth.Configuration?
@@ -278,23 +282,61 @@ public final class ZombieChaseGame: @unchecked Sendable {
         appliedFloorLevel = configuration.floorY
         spawnStorage = simd_float3(0, configuration.floorY, -configuration.spawnDistance)
         navigator = ZombieChaseGame.makeNavigator(configuration.obstacles, around: .zero, reach: configuration.spawnDistance)
-        if configuration.cloth.enabled, let asset = loadClothAsset() {
+        if configuration.cloth.enabled, let asset = loadClothAsset(for: configuration.cloth) {
             // The renderer's device is where the GPU solver builds (phase 1
             // of `Docs/GPUCloth.md`); the Jolt arm ignores it.
             cloth = ZombieCloth(asset: asset, configuration: configuration.cloth, device: renderInfo.device)
         }
     }
 
-    /// The bundled sidecar, once; nil, and one line, when it cannot be
-    /// read (the garments then stay body-skinned).
-    private func loadClothAsset() -> ZombieClothAsset? {
-        if let clothAsset { return clothAsset }
+    /// The sidecar a cloth configuration runs on (`clothSidecar(for:
+    /// device:)`), read once per file; nil, and one line, when the one it
+    /// comes to cannot be read (the garments then stay body-skinned).
+    private func loadClothAsset(for configuration: ZombieCloth.Configuration) -> ZombieClothAsset? {
+        let choice = Self.clothSidecar(for: configuration, device: renderInfo.device)
+        if let line = choice.line { print("CoolZombie: cloth: \(line)") }
+        let name = choice.name
+        if let asset = clothAssets[name] { return asset }
         do {
-            clothAsset = try ZombieClothAsset.loadBundled()
+            let asset = try ZombieClothAsset.loadBundled(named: name)
+            clothAssets[name] = asset
+            return asset
         } catch {
-            print("CoolZombie: the cloth sidecar could not be loaded — \(error); the garments stay body-skinned")
+            print("CoolZombie: the cloth sidecar \(ZombieClothAsset.sidecarFileName(name)) could not be loaded — \(error); the garments stay body-skinned")
+            return nil
         }
-        return clothAsset
+    }
+
+    /// The sidecar a cloth configuration runs on, and the line to print
+    /// when it is not the one named: the bundled 3,995 proxy
+    /// (`ZombieClothAsset.defaultSidecarName`) unless `sidecar` names
+    /// another and the arm the shirt will really run on is the GPU's —
+    /// the Jolt arm keeps the 4k whatever is named, with one printed line,
+    /// because its one-thread edge pass at 16,000 particles is four times
+    /// its 3.4 ms step (`Docs/GPUCloth.md`, "The sim mesh and the shell"),
+    /// and a GPU pick on a device the GPU solver cannot be built on (no
+    /// metallib for the platform, a stale one, no device at all:
+    /// `ZombieCloth.gpuAvailable`) is the Jolt arm too, so it keeps the 4k
+    /// as well — until 2026-11-04 the pick went by the configuration
+    /// alone, the fallback to Jolt came later at the attach, and
+    /// `ZombieCloth.joltParticleLimit` then refused the 16k outright: no
+    /// shirt for a missing metallib. A named sidecar the bundle lacks (a
+    /// checkout before its cook) falls back to the default with one line
+    /// too, so the shirt is never silently another proxy and never
+    /// silently gone. Static so the choice is tested without a game.
+    public static func clothSidecar(for configuration: ZombieCloth.Configuration, device: MTLDevice?) -> (name: String, line: String?) {
+        let name = ZombieClothAsset.defaultSidecarName
+        guard let named = configuration.sidecar, ZombieClothAsset.sidecarFileName(named) != ZombieClothAsset.sidecarFileName(name) else { return (name, nil) }
+        if configuration.solver != .gpu {
+            return (name, "the Jolt arm keeps the \(name) proxy; -clothSidecar \(named) is the GPU arm's")
+        }
+        if !ZombieCloth.gpuAvailable(device: device, configuration: configuration) {
+            return (name, "the GPU solver cannot be built on \(device?.name ?? "no device"), so Jolt stands in and keeps the \(name) proxy; -clothSidecar \(named) is the GPU arm's")
+        }
+        if !ZombieClothAsset.isBundled(named: named) {
+            return (name, "no \(ZombieClothAsset.sidecarFileName(named)) in the bundle (not cooked yet?); the \(name) proxy stands in")
+        }
+        return (named, nil)
     }
 
     /// Measured floor height in world space. The world origin's height is
@@ -1387,8 +1429,9 @@ public final class ZombieChaseGame: @unchecked Sendable {
             print("CoolZombie: cloth off; the garments are body-skinned")
             return
         }
-        // The loader says why when it cannot.
-        guard let asset = loadClothAsset() else { return }
+        // The loader says why when it cannot, and which proxy it came to
+        // (the Proxy picker's 16k on the Jolt arm is the 4k).
+        guard let asset = loadClothAsset(for: configuration) else { return }
         cloth = ZombieCloth(asset: asset, configuration: configuration, device: renderInfo.device)
         if !revealPending { attachCloth() }
     }

@@ -65,6 +65,39 @@ clip pipeline expect, the UE4-mannequin convention that `ZombieAA` had:
     on the headset (2026-10-31). The proxy
     itself is kept in the rig file as `Shirt_Proxy`, hidden and not exported: it lives
     in the sidecar only;
+  * a SECOND shirt proxy of about 16,000 particles (`refine_proxy`, 2026-11-04), for the
+    GPU solver of Docs/GPUCloth.md: three headset rounds read the 3,995-particle shirt
+    as paper, and at its 17.5 mm median edge the smallest fold it can show is about
+    five edges long, 8.5 cm, where a shirt's folds read at 3-5 cm; the drawn shell's
+    own median edge is 8.25 mm, so 16,000 particles (8.4 mm hexagonal spacing over the
+    shirt's 0.99 m²) is where the proxy stops hiding folds the shell could draw, and
+    finer buys nothing. It is cut from the same sewn outer layer, before the 4,000
+    decimation: collapsed to 10,000 at a 3 mm minimum (the clean), every edge split at
+    its midpoint, then collapsed to 16,000 with the limits 4.5 / 18 mm and 10 degrees
+    (15,979 particles, 31,681 triangles, edges 4.5-29.1 mm with the median at 8.8), and
+    run through the SAME
+    pipeline as the 4k proxy — the body's weights, the hand weights off, four
+    influences, the hips freed of arm weight, the slack schedule read off the artist's
+    weights with the same bands in metres, the armhole seam, the outward winding, the
+    2 mm push-off — and the shell bound to it with the same button patches and rigid
+    islands. It is written as a second sidecar, `<NAME>.cloth16k.json`, beside the
+    first (`ZombieCloth.Configuration.sidecar` picks it; the Jolt arm keeps the 4k,
+    since at 16k its step is four times its 3.4 ms), so the two are a live A/B and the
+    4k file's garments are cooked unchanged, byte for byte. The skin hulls stay their
+    margin off BOTH proxies, one set for both files, so a hull moves in the 4k file
+    too where the finer proxy comes nearer it than the 4k's chords did — six of the
+    eleven on 2026-11-04, measured against the 2026-11-03 cook's points: the neck
+    from 35 points to 28 (the 16k collar sat 1.1 mm inside the old hull; it receded
+    up to 14.7 mm and grew 5.4 elsewhere, the nearest-vertex pushes being path
+    dependent), the left upper arm three points by 3.5 mm (the 16k sleeve was 1.25
+    mm off its old hull, under the margin), the right upper arm 37 to 38 points and
+    up to 10.9 mm OUTSIDE its old hull somewhere, the right forearm 34 to 32 and 7 mm
+    in, the left forearm four points by 0.13 mm, the left clavicle one point by under
+    a micrometre; the pelvis, the three spine links and the right clavicle are the
+    points they were. Both proxies clear every hull by the margin afterwards. The
+    16k file also carries what the GPU solver otherwise derives at attach — the hulls'
+    planes, a rest normal and a schedule region per particle, the constraint graph's
+    counts — and is kept in the rig file as `Shirt_Proxy16k`, hidden, like the first;
   * the ragdoll's twenty capsules fitted to this body and logged in the rig's syntax
     (`fit_capsules`): inside the skin the part's bones move and a centimetre inside the
     shirt and the trousers proxies (CAPSULE_GARMENT_MARGIN: a cloth particle's collision
@@ -123,7 +156,7 @@ Run headless (the exit-code flag makes an uncaught error fail the Blender proces
   /Applications/Blender.app/Contents/MacOS/Blender -b --python-exit-code 1 --python Tools/blender/prep_zombie.py
 Requires the Untold Engine Blender add-on (untold_exporter) installed.
 """
-import bpy, bmesh, os, json, hashlib, heapq, math, shutil
+import bpy, bmesh, os, json, hashlib, heapq, math, shutil, time, itertools
 import numpy as np
 from mathutils import Vector, Matrix
 from mathutils.geometry import closest_point_on_tri
@@ -831,32 +864,42 @@ def describe_loops(name, loops, mw):
 
 def mesh_stats(obj):
     """(vertices, triangles, min/median/max edge, min face area, min angle in degrees,
-    islands, boundary loops) of a triangle mesh in world units."""
+    islands, boundary loops, then the 10th and 90th percentile edge) of a triangle mesh
+    in world units. The percentiles come last so the callers that unpack the first nine
+    read as they did; they say how uniform a proxy's spacing is, which the 16k proxy's
+    8.4 mm target is about (2026-11-04)."""
     bm = bmesh.new(); bm.from_mesh(obj.data); bm.transform(obj.matrix_world)
     lengths = np.array([e.calc_length() for e in bm.edges])
     areas = [f.calc_area() for f in bm.faces]
     angles = [min(l.calc_angle() for l in f.loops) for f in bm.faces]
     stats = (len(bm.verts), len(bm.faces), float(lengths.min()), float(np.median(lengths)), float(lengths.max()),
-             min(areas), math.degrees(min(angles)), len(islands(bm)), len(boundary_loops(bm)))
+             min(areas), math.degrees(min(angles)), len(islands(bm)), len(boundary_loops(bm)),
+             float(np.percentile(lengths, 10)), float(np.percentile(lengths, 90)))
     bm.free()
     return stats
 
 
 def report_proxy(name, obj, loops, min_edge=0.008, max_edge=0.040, min_area=1e-6, min_angle=5.0):
     """Log a proxy's mesh_stats and hold them to the limits the tests check and to one
-    piece with `loops` openings; returns the stats."""
+    piece with `loops` openings; returns the stats. The limits are per garment: the 4k
+    shirt and the trousers take the defaults (the asset tests' 8-40 mm and 5 degrees),
+    the 16k shirt 4-30 mm and 10 degrees (Docs/GPUCloth.md, section 5)."""
     stats = mesh_stats(obj)
-    nv, nf, emin, emed, emax, amin, angmin, nisl, nloops = stats
-    log(f"{name} proxy: {nv} verts, {nf} tris, edges {emin * 1000:.1f}/{emed * 1000:.1f}/{emax * 1000:.1f} mm (min/median/max), "
+    nv, nf, emin, emed, emax, amin, angmin, nisl, nloops, e10, e90 = stats
+    log(f"{name} proxy: {nv} verts, {nf} tris, edges {emin * 1000:.1f}/{e10 * 1000:.1f}/{emed * 1000:.1f}/{e90 * 1000:.1f}/{emax * 1000:.1f} mm (min/p10/median/p90/max), "
         f"min face area {amin * 1e6:.2f} mm², min angle {angmin:.1f}°, {nisl} island(s), {nloops} boundary loop(s)")
     if not (emin >= min_edge and emax <= max_edge and amin >= min_area and angmin >= min_angle):
         fail(f"{name} proxy breaks the mesh limits (edges {min_edge}..{max_edge} m, area >= {min_area} m², angle >= {min_angle}°)")
     if nisl != 1 or nloops != loops:
-        fail(f"{name} proxy: must be one piece with {loops} openings, not {nisl} piece(s) with {nloops}")
+        bm = bmesh.new(); bm.from_mesh(obj.data)
+        sizes = [len(p) for p in islands(bm)]
+        loose = sum(1 for v in bm.verts if not v.link_edges)
+        bm.free()
+        fail(f"{name} proxy: must be one piece with {loops} openings, not {nisl} piece(s) of {sizes[:8]} vertices ({loose} loose) with {nloops}")
     return stats
 
 
-def decimate_proxy(obj, target, min_edge=0.0085, max_edge=0.036, min_angle=8.0, min_area=2e-6, deviation=0.002, max_valence=12):
+def decimate_proxy(obj, target, min_edge=0.0085, max_edge=0.036, min_angle=8.0, min_area=2e-6, deviation=0.002, max_valence=12, split_long=True):
     """Shortest-edge-first half-edge collapse of `obj` (triangulated first) down to about
     `target` vertices, and on until no edge is shorter than `min_edge`.
 
@@ -876,13 +919,17 @@ def decimate_proxy(obj, target, min_edge=0.0085, max_edge=0.036, min_angle=8.0, 
     line's UV island has none for them (the texture shifts by the strip's width). The
     result is the near-uniform triangle mesh a particle simulation wants,
     with the garment's outline and UV layout intact. Edges longer than `max_edge` are
-    split first (a collapse never shortens an edge)."""
+    split first (a collapse never shortens an edge) — unless `split_long` is off: the
+    16k proxy (`refine_proxy`) has already split every edge at its midpoint, and this
+    partial split, run on it at a 12 mm limit, left 304 zero-area faces and 89
+    non-manifold edges (measured 2026-11-04), so that garment skips it and lets the
+    collapse's own long-edge rule hold what the midpoint split made."""
     bm = bmesh.new(); bm.from_mesh(obj.data)
     # Zero-length edges and zero-area faces (coincident vertices the artist left, or a
     # weld made) cannot be collapsed away by the quality rules below: dissolve them first.
     bmesh.ops.dissolve_degenerate(bm, dist=1e-4, edges=bm.edges[:])
     bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method="BEAUTY", ngon_method="BEAUTY")
-    long_edges = [e for e in bm.edges if e.calc_length() > max_edge]
+    long_edges = [e for e in bm.edges if e.calc_length() > max_edge] if split_long else []
     for _ in range(4):
         if not long_edges:
             break
@@ -1076,9 +1123,35 @@ def decimate_proxy(obj, target, min_edge=0.0085, max_edge=0.036, min_angle=8.0, 
     # A short edge whose collapse the link condition refuses sits on a hollow 3-cycle
     # through a third vertex y (a-y and b-y are edges, a-b-y is no face): collapsing
     # a-y or b-y first opens the way. Failing that, any collapse next to the edge may.
+    # And when the 3-cycle is the base of a TENT — a vertex w of exactly three faces
+    # whose three neighbours are the cycle, a cap a few millimetres across that the
+    # collapses leave at the rolled cuffs' creases (the 16k proxy, 2026-11-04: five
+    # of them, every edge of each base link-refused from both ends and the apex's
+    # own collapses refused by the feature rules, the whole proxy held at a 2.9 mm
+    # edge) — the cap is below the proxy's resolution and goes: its apex is collapsed
+    # onto the nearest of the three, which the link condition allows by construction
+    # (the two shared faces' apexes are the other two) and which leaves the base as
+    # one face wound like the surface around it; the feature rules are set aside for
+    # it, as they are for any edge under `min_edge`. The 4k proxy has no stuck edge
+    # and never reaches this.
+    def tent_apex(a, b):
+        for w in sorted(neighbours(a) & neighbours(b)):
+            nw = neighbours(w)
+            if len(nw) == 3 and len(vf[w]) == 3 and all(q in neighbours(p) for p in nw for q in nw if p != q):
+                return w
+        return None
+
+    tents = 0
     for d, a, b in sorted(set(stuck)):
         if not (alive_v[a] and alive_v[b] and b in neighbours(a)):
             continue
+        w = tent_apex(a, b)
+        if w is not None:
+            c = min(neighbours(w), key=lambda x: length(w, x))
+            log(f"  {obj.name}: edge {a}-{b} of {d * 1000:.2f} mm is the base of a tent at vertex {w} ({', '.join(f'{length(w, x) * 1000:.1f}' for x in sorted(neighbours(w)))} mm to its three neighbours): the apex collapsed onto {c}")
+            collapse(w, c); count -= 1 + len(lost); lost.clear(); tents += 1
+            if try_collapse(a, b):
+                continue
         apex = {x for fi in vf[a] & vf[b] for x in faces[fi] if x != a and x != b}
         for y in sorted((neighbours(a) & neighbours(b)) - apex, key=lambda y: min(length(a, y), length(b, y))):
             if try_collapse(a, y) or try_collapse(b, y):
@@ -1161,8 +1234,73 @@ def decimate_proxy(obj, target, min_edge=0.0085, max_edge=0.036, min_angle=8.0, 
         if alive_v[i]:
             for gi, w in weights[i].items():
                 obj.vertex_groups[gi].add([index[i]], w, "REPLACE")
-    log(f"{obj.name}: decimated {before[0]} verts / {before[1]} tris -> {len(coords)} verts / {len(tris)} tris ({refused} collapses refused)")
+    log(f"{obj.name}: decimated {before[0]} verts / {before[1]} tris -> {len(coords)} verts / {len(tris)} tris ({refused} collapses refused, {tents} tents dissolved)")
     return len(coords), len(tris)
+
+
+def refine_proxy(obj, target, clean_target=10000, clean_edge=0.003, min_edge=0.0045, max_edge=0.018, min_angle=10.0):
+    """The 16,000-particle shirt proxy (Docs/GPUCloth.md, section 5; 2026-11-04): `obj`
+    is the sewn outer layer, refined in place.
+
+    Why a second proxy: three headset rounds read the 3,995-particle shirt as paper
+    with coarse crumples that do not fall under gravity, and its resolution is one of
+    the two limits (the solver is the other). At a 17.5 mm median edge the smallest
+    fold the proxy can show is four or five edges long, 7-9 cm, where a shirt's folds
+    read at 3-5 cm; that wants 6-10 mm spacing, four times the particles, which Jolt
+    could not afford (it solves a soft body's edges on one thread) and the GPU solver
+    can (a 16k frame costs about twice a 4k one, not four times). The drawn shell's
+    own median edge is 8.25 mm, so 16,000 particles — 8.4 mm hexagonal spacing over
+    the shirt's 0.99 m² — is where the proxy stops hiding folds the shell could draw,
+    and 26,000 left 26 slivers and 10 non-manifold edges after the collapse.
+
+    How: the outer layer is cleaned first by the existing collapse run down to
+    `clean_target` vertices with `clean_edge` as its minimum (the artist's shell
+    carries 1,826 triangles under 8 degrees and edges down to 0.12 mm along its seam
+    and hem strips, and the midpoint split of a sliver is four slivers; the collapse to
+    a target takes the strips' slivers out along the way, shortest edge first, where a
+    drain of the sub-3 mm edges alone, the first try, left four slivers of 4.4 mm
+    whose vertices' valence refused every collapse, and the 16k collapse could not
+    finish what their quartering made: 8.2 degrees and a 3.66 mm edge were left,
+    2026-11-04); then EVERY edge is split once at its midpoint
+    (`bmesh.ops.subdivide_edges`, cuts 1, a triangle into four), which carries the UVs
+    and the artist's weights to the new vertices (`recap_influences` cuts the five to
+    eight they inherit back to four); then the collapse runs down to `target` with the
+    limits `min_edge`, `max_edge` and `min_angle` — the 4k rules at half the scale —
+    with `decimate_proxy`'s own partial long-edge split bypassed (see there). The
+    result is one piece with the four openings, no sliver and no non-manifold edge:
+    15,979 vertices and 31,681 triangles, edges 4.5 / 5.8 / 8.8 / 12.8 / 29.1 mm
+    (min / p10 / median / p90 / max), the smallest angle 10.1 degrees, 8.4 s on a 44 s
+    cook (2026-11-04; the collapse eases its edge limit to 39 mm where it removes an
+    edge under `min_edge`, as the 4k does, which is where the few edges over `max_edge`
+    come from, and five tents are dissolved on the way, see `decimate_proxy`). The
+    triangle count follows the vertex count: on a genus-0 surface with four openings
+    F = 2V + 4 - B, and the 281 boundary edges are twice the 4k's 142, as a halved
+    spacing should give. Logs each stage's counts and seconds; `report_proxy` holds
+    the result to 4-30 mm and 10 degrees afterwards."""
+    t0 = time.perf_counter()
+    before = (len(obj.data.vertices), len(obj.data.polygons))
+    decimate_proxy(obj, clean_target, min_edge=clean_edge, split_long=False)
+    t1 = time.perf_counter()
+    nv, nf, emin, emed, emax, amin, angmin, nisl, nloops, e10, e90 = mesh_stats(obj)
+    log(f"{obj.name} refine: cleaned to {clean_target} at {clean_edge * 1000:.0f} mm in {t1 - t0:.1f} s: {before[0]} verts / {before[1]} faces -> {nv} verts / {nf} tris, "
+        f"edges {emin * 1000:.2f}/{emed * 1000:.1f}/{emax * 1000:.1f} mm, min angle {angmin:.1f}°, {nisl} island(s), {nloops} loop(s)")
+    bm = bmesh.new(); bm.from_mesh(obj.data)
+    bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=1, use_grid_fill=True)
+    bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method="BEAUTY", ngon_method="BEAUTY")
+    degenerate = sum(1 for f in bm.faces if f.calc_area() < 1e-10)
+    non_manifold = sum(1 for e in bm.edges if not e.is_manifold and not e.is_boundary)
+    split = (len(bm.verts), len(bm.faces))
+    bm.to_mesh(obj.data); bm.free(); obj.data.update()
+    t2 = time.perf_counter()
+    log(f"{obj.name} refine: every edge split at its midpoint in {t2 - t1:.1f} s: {split[0]} verts / {split[1]} tris, "
+        f"{degenerate} zero-area faces, {non_manifold} non-manifold edges")
+    decimate_proxy(obj, target, min_edge=min_edge, max_edge=max_edge, min_angle=min_angle, split_long=False)
+    t3 = time.perf_counter()
+    nv, nf, emin, emed, emax, amin, angmin, nisl, nloops, e10, e90 = mesh_stats(obj)
+    log(f"{obj.name} refine: collapsed to {target} in {t3 - t2:.1f} s ({t3 - t0:.1f} s in all): {nv} verts / {nf} tris, "
+        f"edges {emin * 1000:.1f}/{e10 * 1000:.1f}/{emed * 1000:.1f}/{e90 * 1000:.1f}/{emax * 1000:.1f} mm (min/p10/median/p90/max), "
+        f"min face area {amin * 1e6:.2f} mm², min angle {angmin:.1f}°, {nisl} island(s), {nloops} loop(s)")
+    return nv, nf
 
 
 def recap_influences(obj):
@@ -1289,17 +1427,20 @@ def within(obj, segments, distance):
 
 
 def mark_sleeve_seam(obj, weights=None):
-    """Keeps the armhole seam of `obj` as its weights draw it (`sleeve_seam_segments`,
-    for `shirt_slack`), and returns the wider arm-against-torso seam edges; fails when
-    there is no seam of either kind."""
+    """The armhole seam of `obj` as its weights draw it, for `shirt_slack`: returns
+    (the wider arm-against-torso seam edges, the sleeve-cap-against-body-panel chains as
+    world segments); fails when there is no seam of either kind. The caller keeps the
+    segments (the 4k shirt's in `sleeve_seam_segments`, the 16k shirt's in its own
+    list, since 2026-11-04 the two proxies each read their seam off their own artist
+    weights before the body's replace them)."""
     weights = weights or vertex_weights(obj)
     armhole = seam_edges(obj, weights, sides=(ARM_BONES, TORSO_BONES))
     if not armhole:
         fail(obj.name, "has no armhole seam: no edge runs from an arm bone's vertex to a torso bone's")
-    sleeve_seam_segments.clear(); sleeve_seam_segments.extend(seam_chains(obj, weights, sides=(SLEEVE_BONES, BODY_BONES)))
-    if not sleeve_seam_segments:
+    segments = seam_chains(obj, weights, sides=(SLEEVE_BONES, BODY_BONES))
+    if not segments:
         fail(obj.name, "has no sleeve seam: no edge runs from an upper-arm vertex to a body-panel vertex")
-    return armhole
+    return armhole, segments
 
 
 def grade_weight_seams(obj, arm, band=SEAM_BAND, blend=0.5, passes=16, trace=0.03,
@@ -1358,7 +1499,8 @@ def grade_weight_seams(obj, arm, band=SEAM_BAND, blend=0.5, passes=16, trace=0.0
     mw = obj.matrix_world
     positions = {v.index: mw @ v.co for v in obj.data.vertices}
     seams = seam_edges(obj, weights)
-    armhole_before = mark_sleeve_seam(obj, weights)
+    armhole_before, segments = mark_sleeve_seam(obj, weights)
+    sleeve_seam_segments[:] = segments
     seam_band = within(obj, seams, band)
     armpit = within(obj, armhole_before, armpit_band)
     before = weight_jumps(obj, names, weights)
@@ -1883,6 +2025,14 @@ def free_hips_of_arm_weights(obj, arm, radius=HIP_ARM_FREE, taper=HIP_ARM_TAPER)
 
 outer_layer(shirt, body_tree)
 sew_placket(shirt, body_tree)
+# The 16k proxy (`refine_proxy`, below the 4k flow) starts from this very mesh — the
+# sewn outer layer with the artist's cleaned weights — so the two proxies descend from
+# one surface and differ only in their spacing; the copy is taken before the 4,000
+# decimation, which is in place.
+shirt16k = shirt.copy(); shirt16k.data = shirt.data.copy()
+shirt16k.name = "Shirt16k"; shirt16k.data.name = "Shirt16k"
+scene.collection.objects.link(shirt16k)
+shirt16k.parent = arm; shirt16k.matrix_parent_inverse = arm.matrix_world.inverted()
 decimate_proxy(shirt, 4000)
 
 # The proxy's skinned positions are the cloth's whole picture of the body: the back stop
@@ -1904,7 +2054,7 @@ decimate_proxy(shirt, 4000)
 # the sleeve cap to the upper arm at the tailor's seam, where the body's weights hand the
 # deltoid's skin over, up over the shoulder top the shirt hangs from.
 recap_influences(shirt)
-armhole = mark_sleeve_seam(shirt)
+armhole, sleeve_seam_segments[:] = mark_sleeve_seam(shirt)
 artist_names = [g.name for g in shirt.vertex_groups]
 artist_dominant.clear()
 artist_dominant.update({i: artist_names[dominant_group(w)] for i, w in vertex_weights(shirt).items() if w})
@@ -1922,6 +2072,34 @@ log(f"shirt: {changed} of the {near} particles within {HIP_ARM_FREE + HIP_ARM_TA
 orient_outward(shirt, body_tree)
 push_off_body(shirt, body_tree)
 report_proxy("shirt", shirt, loops=4)
+
+# --- the 16k shirt proxy: the 4k pipeline, in the same order, on the finer mesh ------
+# Docs/GPUCloth.md, section 5 (2026-11-04). The copy was taken above, after the placket
+# was sewn and before the 4k decimation. From here every step is the 4k's: the artist's
+# weights recapped and read for the sleeves and the armhole seam, then replaced by the
+# body's (nearest skin face), the hands taken off, four influences, the hips freed of
+# arm weight, the faces turned outward and the mesh pushed 2 mm off the body — only
+# this proxy's seam and sleeves go into lists of its own, since `sleeve_seam_segments`
+# and `artist_dominant` are the 4k's and that sidecar must cook unchanged.
+refine_proxy(shirt16k, 16000)
+recap_influences(shirt16k)
+armhole16k, sleeve_seam_segments16k = mark_sleeve_seam(shirt16k)
+names16k = [g.name for g in shirt16k.vertex_groups]
+artist_dominant16k = {i: names16k[dominant_group(w)] for i, w in vertex_weights(shirt16k).items() if w}
+log(f"shirt16k: the artist's weights draw the armhole seam as {len(armhole16k)} edges between an arm bone's vertex and a torso bone's, "
+    f"{len(sleeve_seam_segments16k)} of them sleeve cap against body panel; {sum(1 for n in artist_dominant16k.values() if n.startswith(SLEEVE_BONES))} sleeve particles")
+for g in list(shirt16k.vertex_groups):
+    shirt16k.vertex_groups.remove(g)
+transfer_weights(body, shirt16k)
+changed, rescued = unhand(shirt16k)
+log(f"shirt16k: weights taken from the body (nearest skin face); {changed} vertices lost hand weights, {rescued} rehomed to the forearm; not graded")
+recap_influences(shirt16k)
+changed, largest, near = free_hips_of_arm_weights(shirt16k, arm)
+log(f"shirt16k: {changed} of the {near} particles within {HIP_ARM_FREE + HIP_ARM_TAPER:.2f} m of the pelvis carried arm weight, taken off "
+    f"(wholly within {HIP_ARM_FREE} m, tapered beyond; the most taken off one vertex {largest:.3f})")
+orient_outward(shirt16k, body_tree)
+push_off_body(shirt16k, body_tree)
+report_proxy("shirt16k", shirt16k, loops=4, min_edge=0.004, max_edge=0.030, min_angle=10.0)
 
 # The shell is drawn and the proxy simulates, so the two must agree on where the body
 # puts the shirt: hard skinned (the attach, a re-seat, the slack shut) every particle
@@ -2357,14 +2535,19 @@ def fit_skin_hulls(body_obj, garment_objs, arm):
     entry, in the joint's bind frame, as the sidecar's "colliders" list — {"joint": the
     joint path the garments' jointPaths use, "shape": "hull", "points": flat x y z
     triples in engine space, joint-local}. `body_obj` must be the full body;
-    `garment_objs` the simulated proxies (the shirt) the hulls must stay
-    SKIN_HULL_GARMENT_MARGIN under. Each skin point is first pulled inward by the bend
-    inset (the comment above), then hulled, then the hull's vertices inset
-    SKIN_HULL_INSET, then pushed in wherever the garment comes closer than the margin.
-    Logs each hull, its insets, its fit against the skin and its clearance of the
-    garment."""
+    `garment_objs` the simulated proxies the hulls must stay SKIN_HULL_GARMENT_MARGIN
+    under — since 2026-11-04 BOTH shirt proxies, the 4k and the 16k, whose surfaces
+    are sampled together so one set of hulls serves both sidecars (the finer proxy
+    samples the same surface more closely, so where its samples come nearer a hull
+    than the 4k's chords did the hull stands back a little further, and the 4k file's
+    colliders move with it; the cook log says where). Each skin point is first pulled
+    inward by the bend inset (the comment above), then hulled, then the hull's
+    vertices inset SKIN_HULL_INSET, then pushed in wherever a garment comes closer
+    than the margin. Logs each hull, its insets, its fit against the skin and its
+    clearance of the garments, together and each."""
     points, normals, dominants, weights = skin_with_weights(body_obj)
-    garment = np.concatenate([garment_surface(o) for o in garment_objs])
+    garment_surfaces = [(o.name, garment_surface(o)) for o in garment_objs]
+    garment = np.concatenate([surface for _, surface in garment_surfaces])
     heads = {b.name: np.array(engine_point(arm.matrix_world @ b.head_local)) for b in arm.data.bones}
     bend = math.sin(math.radians(SKIN_HULL_BEND_ANGLE))
     tree = surface_tree([body_obj])
@@ -2423,8 +2606,16 @@ def fit_skin_hulls(body_obj, garment_objs, arm):
             clearance_after = clearance.min()
             if clearance_after < SKIN_HULL_GARMENT_MARGIN - 0.001:
                 fail("skin hull", joint, "stands", round(float(SKIN_HULL_GARMENT_MARGIN - clearance_after) * 1000, 2), "mm within the garment margin after", rounds, "rounds")
+            # The clearance per proxy against the finished hull, so the log says which of
+            # the two set the margin.
+            fn, fo = hull_planes(V, T)
+            each = []
+            for garment_name, surface in garment_surfaces:
+                local = surface @ Mi[:3, :3].T + Mi[:3, 3]
+                close = local[np.all((local > V.min(axis=0) - 0.05) & (local < V.max(axis=0) + 0.05), axis=1)]
+                each.append(f"{garment_name} {(close @ fn.T - fo).max(axis=1).min() * 1000:+.1f} mm" if len(close) else f"{garment_name} none within 5 cm")
             garment_text = (f"garment clearance {clearance_before * 1000:+.1f} mm -> {clearance_after * 1000:+.1f} mm after {rounds} rounds, "
-                            f"{pushes} vertex pushes, the largest {pushed_max * 1000:.1f} mm")
+                            f"{pushes} vertex pushes, the largest {pushed_max * 1000:.1f} mm (per proxy: {', '.join(each)})")
         a, b, c = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
         samples = np.concatenate([(a * i + b * j + c * (n - i - j)) / n for i in range(n + 1) for j in range(n + 1 - i)])
         signed = np.empty(len(samples)); where = []
@@ -2450,7 +2641,51 @@ def fit_skin_hulls(body_obj, garment_objs, arm):
     return colliders
 
 
-skin_hulls = fit_skin_hulls(body, [shirt], arm)
+skin_hulls = fit_skin_hulls(body, [shirt, shirt16k], arm)
+
+
+def hull_plane_set(points):
+    """The planes of a hull's convex surface as the GPU solver builds them at attach
+    (`GPUClothSolver.HullPlaneSet`, ZombieClothGPUSolver.swift): every triple's plane
+    kept when all the points lie on one side within a micrometre, oriented outward,
+    deduplicated at 1e-4 in the normal and the offset, in double precision — the same
+    brute force, so the sidecar's planes are the runtime's to the rounding (87 / 83 / 82
+    / 88 / 66 / 84 / 82 / 66 / 70 / 60 / 64 on the eleven hulls as cooked on 2026-11-03,
+    832 in all; 87 / 83 / 82 / 88 / 52 / 84 / 82 / 66 / 72 / 60 / 60, 816, once the
+    hulls were fitted against both proxies on 2026-11-04 and the 16k collar pushed the
+    neck's in, see `fit_skin_hulls`) and the kit can skip the few milliseconds and the
+    asset test can compare. Returns one [n.x, n.y, n.z, d] per plane, a point inside
+    where n . p + d < 0, in the joint's bind frame like the points, as the kernel reads
+    them (nested, not flat like `points`: the design writes the plane as that quadruple
+    and the asset test reads it so).
+    Written to the 16k sidecar only (2026-11-04): the 4k file keeps the shape it had
+    (points without planes, its garments byte for byte the cook before this one), and
+    the runtime keeps computing the planes for a sidecar without them."""
+    P = np.asarray(points, dtype=np.float64); n = len(P)
+    idx = np.array(list(itertools.combinations(range(n), 3)))
+    normals = np.cross(P[idx[:, 1]] - P[idx[:, 0]], P[idx[:, 2]] - P[idx[:, 0]])
+    lengths = np.linalg.norm(normals, axis=1)
+    ok = lengths >= 1e-12
+    normals = normals[ok] / lengths[ok][:, None]; base = P[idx[ok, 0]]
+    s = np.einsum("tnj,tj->tn", P[None, :, :] - base[:, None, :], normals)
+    low, high = s.min(axis=1), s.max(axis=1)
+    outward = high <= 1e-6
+    inward = ~outward & (low >= -1e-6)
+    normals[inward] *= -1
+    keep = outward | inward
+    candidates = np.concatenate([normals[keep], -(normals[keep] * base[keep]).sum(axis=1)[:, None]], axis=1)
+    found = []
+    for c in candidates:
+        if not found or not np.any(np.all(np.abs(np.array(found) - c) <= 1e-4, axis=1)):
+            found.append(c)
+    return [[round(float(x), 7) for x in p] for p in found]
+
+
+# The 16k sidecar's colliders: the same eleven hulls (the same points, fitted above
+# against both proxies) with their planes beside the points.
+colliders16k = [dict(c, planes=hull_plane_set(np.array(c["points"]).reshape(-1, 3))) for c in skin_hulls]
+log(f"skin hull planes for the 16k sidecar: {[len(c['planes']) for c in colliders16k]} per hull, "
+    f"{sum(len(c['planes']) for c in colliders16k)} in all (the 2n - 4 bound {sum(2 * len(c['points']) // 3 - 4 for c in skin_hulls)})")
 
 
 # ---------------------------------------------------------------- UVs into the atlas
@@ -2465,7 +2700,7 @@ log(f"eyes: cornea slot {cornea_slot} removed, {len(eyes.data.polygons)} faces l
 remap_uvs(shoes, {i: "clothes" for i in range(len(shoes.material_slots))})
 for o in (belt, trousers):
     remap_uvs(o, {i: "trousers" for i in range(len(o.material_slots))})
-for o in (shirt, shirt_render):
+for o in (shirt, shirt16k, shirt_render):
     remap_uvs(o, {i: "shirt" for i in range(len(o.material_slots))})
 
 # The skin under the trousers and the shoes goes: it is never seen, and where the two
@@ -2539,22 +2774,79 @@ def ring(bm, seeds, depth):
 BACKSTOP = 0.001
 
 
-def garment_record(obj, name, slack, render=None):
+def constraint_counts(triangles, count, pins):
+    """The constraint graph the GPU solver builds from a garment at attach
+    (`GPUClothSolver.ConstraintGraph`, ZombieClothGPUSolver.swift), counted here the
+    same way so the 16k sidecar can carry the figures and the asset test can hold the
+    kit's build to them (Docs/GPUCloth.md, section 5; 2026-11-04): the unique edges of
+    the faces (one stretch constraint each) and those on the boundary; the interior
+    edges whose two opposite vertices differ (one bend pair each, across the edge);
+    the edges and the pairs dropped for having a pin at both ends (a pin has no
+    inverse mass, Jolt's rule, SoftBodySharedSettings.cpp:218); what is kept; the CSR
+    entries, two per kept constraint; and the most on one particle. The keys are the
+    kit's names. On the 4k shirt the figures are 11,849 edges, 142 on the boundary,
+    11,707 pairs, 1,424 and 1,282 dropped, 10,425 + 10,425 kept, 41,700 entries and 22
+    at most. The shear split of the pairs (Jolt's 8 degree quad test) is not here: the
+    kit decides it in single precision and a double-precision count puts one pair of
+    the 4k shirt's on the other side."""
+    sides = {}
+    for x, y, z in triangles:
+        corners = (x, y, z)
+        for i in range(3):
+            a, b, o = corners[i], corners[(i + 1) % 3], corners[(i + 2) % 3]
+            sides.setdefault((min(a, b), max(a, b)), []).append(o)
+    boundary = pairs = pin_edges = pin_pairs = edges_kept = pairs_kept = 0
+    degree = [0] * count
+    for (a, b), opposite in sides.items():
+        if len(opposite) == 1:
+            boundary += 1
+        if len(opposite) >= 2 and opposite[0] != opposite[1]:
+            pairs += 1
+            o0, o1 = opposite[0], opposite[1]
+            if o0 in pins and o1 in pins:
+                pin_pairs += 1
+            else:
+                pairs_kept += 1; degree[o0] += 1; degree[o1] += 1
+        if a in pins and b in pins:
+            pin_edges += 1
+        else:
+            edges_kept += 1; degree[a] += 1; degree[b] += 1
+    # The design's single `pinPinDropped` (section 5) is the sum of the two drops; the
+    # kit names them apart and the asset test holds the file to exactly these nine keys.
+    return {"edges": len(sides), "boundaryEdges": boundary, "bendPairs": pairs,
+            "pinPinEdgesDropped": pin_edges, "pinPinBendPairsDropped": pin_pairs,
+            "stretchConstraints": edges_kept, "bendConstraints": pairs_kept,
+            "entries": 2 * (edges_kept + pairs_kept), "maxEntriesPerParticle": max(degree)}
+
+
+def garment_record(obj, name, slack, render=None, extended=False):
     """The sidecar entry for a proxy: `slack(bm, loops)` returns the per-vertex
-    maxDistance list (0 pins). The faces are wound consistently and point away from the
+    maxDistance list (0 pins), the per-vertex region name and the region name table.
+    The faces are wound consistently and point away from the
     body on the whole (orient_outward), but not every one does: the rolled cuffs and the
     inside of the collar wrap back towards the arm and the neck. A back-stop placed
     behind the face would sit on the wrong side of those particles, so the ones whose
     normal points at the body are listed (`bodyFacingParticles`) for the game to put
     their back-stop on the body side. `render`, when given, is the drawn shell's binding
-    to this proxy (`render_binding`), written under the garment as "render"."""
+    to this proxy (`render_binding`), written under the garment as "render".
+
+    `extended` (the 16k sidecar, Docs/GPUCloth.md section 5, 2026-11-04) adds what the
+    GPU solver otherwise derives at attach, so the kit can skip the work and the asset
+    test can hold the kit's build to the cook's: `restNormal` per particle, the
+    area-weighted normal of its rest faces in engine space (the sum of the faces'
+    cross products, outward by the winding, normalised), which the predict kernel
+    rotates into the back-stop normal; `regions`, the slack schedule's band names in
+    SLACK's order, and `region` per particle, its index into them, so a band can be
+    stiffened or softened by name (the kernel's `regionScale`); and `constraintCounts`
+    (`constraint_counts`). The 4k sidecar's garments do without them, byte for byte as
+    before, and the runtime computes them for a sidecar that lacks them."""
     mw = obj.matrix_world
     if max(abs(x - y) for r0, r1 in zip(mw, Matrix.Identity(4)) for x, y in zip(r0, r1)) > 1e-5:
         fail(obj.name, "is not at the origin; the exporter would bake another transform")
     bm = bmesh.new(); bm.from_mesh(obj.data); bm.verts.ensure_lookup_table()
     bm.normal_update()
     loops = boundary_loops(bm)
-    max_distance = slack(bm, loops)
+    max_distance, region_names, region_table = slack(bm, loops)
     body_facing = []
     for v in bm.verts:
         p = mw @ v.co
@@ -2601,6 +2893,24 @@ def garment_record(obj, name, slack, render=None):
     }
     if render is not None:
         record["render"] = render
+    if extended:
+        P = np.array(record["particles"], dtype=np.float64); T = np.array(triangles)
+        face_normals = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])  # twice the area, outward
+        vertex_normals = np.zeros_like(P)
+        for k in range(3):
+            np.add.at(vertex_normals, T[:, k], face_normals)
+        lengths = np.linalg.norm(vertex_normals, axis=1)
+        if lengths.min() <= 0:
+            fail(obj.name, "a particle has no rest normal (no face, or faces that cancel)")
+        vertex_normals /= lengths[:, None]
+        pins = {i for i, d in enumerate(max_distance) if d == 0}
+        counts = constraint_counts(triangles, len(me.vertices), pins)
+        record["restNormal"] = [[round(float(c), 7) for c in n] for n in vertex_normals]
+        record["regions"] = list(region_table)
+        record["region"] = [region_table.index(r) for r in region_names]
+        record["constraintCounts"] = counts
+        log(f"{name} sidecar (extended): regions {dict((r, region_names.count(r)) for r in region_table)}; "
+            f"constraint graph {counts}; rest normals unit within {abs(np.linalg.norm(np.array(record['restNormal']), axis=1) - 1).max():.1e}")
     return record
 
 
@@ -2857,8 +3167,22 @@ def render_binding(shell, proxy):
     }
 
 
-def shirt_slack(bm, loops):
-    """The per-particle slack of the shirt by SLACK's regions (see there). The collar is
+def shirt_slack_for(obj, artist_dominant, sleeve_seam_segments, label="shirt"):
+    """The slack function (`garment_record`'s `slack(bm, loops)`) of a shirt proxy —
+    `obj`, with the bone that dominated each of its particles under the ARTIST's weights
+    and its sleeve seam as those weights drew it, read before the body's weights
+    replaced them (the main flow's `artist_dominant` and `sleeve_seam_segments` for the
+    4k proxy, their 16k twins for the other, 2026-11-04). The schedule is metres
+    throughout, so the same bands fit both spacings; the collar, yoke and hem bands are
+    Dijkstra along the proxy's edges (`surface_distances`), which overestimates the
+    geodesic by a few per cent and so moves a band's edge by a few per cent either way
+    between the spacings — inward at the collar on 2026-11-04, whose pin band is 5 %
+    smaller in area at 16k (535 cm^2 against 563; 133 particles the 4k pins are yoke
+    there, none the reverse) because the coarse mesh's chords cut under the collar's
+    curvature and its edge paths come out shorter, the yoke 3 % smaller, the hem the
+    same within 1 % — and the cuff and armhole rules are geometric.
+
+    The per-particle slack of the shirt by SLACK's regions (see there). The collar is
     the loop with the highest centroid (the front is sewn, so it is a loop of its own),
     the cuffs the two loops out at the wrists (the pins reach CUFF_BAND up the forearm's
     axis, both layers of the roll, the wrist band CUFF_GRADE beyond), the hem what is
@@ -2869,91 +3193,99 @@ def shirt_slack(bm, loops):
     the cuffs first, since nothing may loosen a pin, the buttoned front before the yoke,
     the yoke before the armhole band (the shoulder tops are what the shirt hangs from),
     the armhole band before the sleeve, the hem band before the chest and the back.
-    Logs each region's count and extent."""
-    mw = shirt.matrix_world
-    collar = max(loops, key=lambda l: sum((mw @ v.co).z for v in l) / len(l))
-    cuffs = [l for l in loops if l is not collar and abs(sum((mw @ v.co).x for v in l) / len(l)) > 0.3]
-    hems = [l for l in loops if l is not collar and l not in cuffs]
-    if len(cuffs) != 2 or len(hems) != 1:
-        fail(f"shirt: expected the collar, two cuffs and the hem among the loops, found {len(loops)} loops: {len(cuffs)} at the wrists")
-    hem = hems[0]
-    collar_z = min((mw @ v.co).z for v in collar)
-    names = [g.name for g in shirt.vertex_groups]
-    dominant = artist_dominant or {i: names[dominant_group(w)] for i, w in vertex_weights(shirt).items() if w}
-    collar_band = set(surface_distances(bm, collar, COLLAR_BAND))
-    # The cuffs along the forearm's axis, both layers of the roll (see SLACK): up the
-    # axis from the cuff loop's plane, within CUFF_RADIUS of the axis so nothing else
-    # at that height is caught, the pins to CUFF_BAND and the wrist band CUFF_GRADE
-    # beyond them.
-    cuff_band, wrist_band = set(), set()
-    for loop in cuffs:
-        centre = sum((mw @ v.co for v in loop), Vector()) / len(loop)
-        side = "l" if centre.x > 0 else "r"
-        elbow = arm.matrix_world @ arm.data.bones[f"lowerarm_{side}"].head_local
-        hand = arm.matrix_world @ arm.data.bones[f"hand_{side}"].head_local
-        axis = (hand - elbow).normalized()
+    Logs each region's count and extent. Returns the slack per vertex, the region name
+    per vertex and SLACK's names."""
+    def shirt_slack(bm, loops):
+        mw = obj.matrix_world
+        collar = max(loops, key=lambda l: sum((mw @ v.co).z for v in l) / len(l))
+        cuffs = [l for l in loops if l is not collar and abs(sum((mw @ v.co).x for v in l) / len(l)) > 0.3]
+        hems = [l for l in loops if l is not collar and l not in cuffs]
+        if len(cuffs) != 2 or len(hems) != 1:
+            fail(f"{label}: expected the collar, two cuffs and the hem among the loops, found {len(loops)} loops: {len(cuffs)} at the wrists")
+        hem = hems[0]
+        collar_z = min((mw @ v.co).z for v in collar)
+        names = [g.name for g in obj.vertex_groups]
+        dominant = artist_dominant or {i: names[dominant_group(w)] for i, w in vertex_weights(obj).items() if w}
+        collar_band = set(surface_distances(bm, collar, COLLAR_BAND))
+        # The cuffs along the forearm's axis, both layers of the roll (see SLACK): up the
+        # axis from the cuff loop's plane, within CUFF_RADIUS of the axis so nothing else
+        # at that height is caught, the pins to CUFF_BAND and the wrist band CUFF_GRADE
+        # beyond them.
+        cuff_band, wrist_band = set(), set()
+        for loop in cuffs:
+            centre = sum((mw @ v.co for v in loop), Vector()) / len(loop)
+            side = "l" if centre.x > 0 else "r"
+            elbow = arm.matrix_world @ arm.data.bones[f"lowerarm_{side}"].head_local
+            hand = arm.matrix_world @ arm.data.bones[f"hand_{side}"].head_local
+            axis = (hand - elbow).normalized()
+            for v in bm.verts:
+                d = (mw @ v.co) - centre
+                along = -d.dot(axis)
+                if (d - d.dot(axis) * axis).length > CUFF_RADIUS:
+                    continue
+                if along < CUFF_BAND:
+                    cuff_band.add(v)
+                elif along < CUFF_BAND + CUFF_GRADE:
+                    wrist_band.add(v)
+        wrist_band -= cuff_band
+        yoke_reach = set(surface_distances(bm, list(collar_band), YOKE_BAND))
+        hem_band = set(surface_distances(bm, hem, HEM_BAND))
+        # The sleeves, like the band, stay off the centre of the chest: the artist's weights
+        # leave an upper-arm pocket on the pectoral, 7-9 cm from the centre line, that is
+        # the chest's (ARMHOLE_MIN_X, above).
+        sleeve = {v for v in bm.verts if dominant.get(v.index, "").startswith(SLEEVE_BONES) and abs((mw @ v.co).x) >= ARMHOLE_MIN_X}
+        if not sleeve_seam_segments:
+            fail(f"{label}: the sleeve seam is unknown; mark_sleeve_seam did not run on this proxy")
+        armhole = {v for v in bm.verts if abs((mw @ v.co).x) >= ARMHOLE_MIN_X
+                   and any(segment_distance(mw @ v.co, a, b) <= ARMHOLE_BAND for a, b in sleeve_seam_segments)}
+        region = {}
         for v in bm.verts:
-            d = (mw @ v.co) - centre
-            along = -d.dot(axis)
-            if (d - d.dot(axis) * axis).length > CUFF_RADIUS:
-                continue
-            if along < CUFF_BAND:
-                cuff_band.add(v)
-            elif along < CUFF_BAND + CUFF_GRADE:
-                wrist_band.add(v)
-    wrist_band -= cuff_band
-    yoke_reach = set(surface_distances(bm, list(collar_band), YOKE_BAND))
-    hem_band = set(surface_distances(bm, hem, HEM_BAND))
-    # The sleeves, like the band, stay off the centre of the chest: the artist's weights
-    # leave an upper-arm pocket on the pectoral, 7-9 cm from the centre line, that is
-    # the chest's (ARMHOLE_MIN_X, above).
-    sleeve = {v for v in bm.verts if dominant.get(v.index, "").startswith(SLEEVE_BONES) and abs((mw @ v.co).x) >= ARMHOLE_MIN_X}
-    if not sleeve_seam_segments:
-        fail("shirt: the sleeve seam is unknown; mark_sleeve_seam did not run on this proxy")
-    armhole = {v for v in bm.verts if abs((mw @ v.co).x) >= ARMHOLE_MIN_X
-               and any(segment_distance(mw @ v.co, a, b) <= ARMHOLE_BAND for a, b in sleeve_seam_segments)}
-    region = {}
-    for v in bm.verts:
-        p = mw @ v.co
-        if v in collar_band:
-            region[v] = "collar"
-        elif v in cuff_band:
-            region[v] = "cuff"
-        elif v in wrist_band:
-            region[v] = "wrist"
-        elif abs(p.x) < PLACKET_HALF_WIDTH and p.y < PLACKET_FRONT_Y and p.z < collar_z:
-            region[v] = "placket"
-        elif v in yoke_reach and v not in sleeve and (p.y >= TORSO_AXIS_Y or p.z >= SHOULDER_Z):
-            region[v] = "yoke"
-        elif v in armhole:
-            region[v] = "armhole"
-        elif v in sleeve:
-            region[v] = "sleeve"
-        elif v in hem_band:
-            region[v] = "hem"
-        elif p.y < TORSO_AXIS_Y:
-            region[v] = "chest"
-        else:
-            region[v] = "back"
-    log(f"shirt: {len(loops)} loops; collar loop {len(collar)} verts (z from {collar_z:.3f}), cuff loops {[len(l) for l in cuffs]}, hem loop {len(hem)}; "
-        f"{len(sleeve_seam_segments)} sleeve seam edges, {len(sleeve)} sleeve particles")
-    for name in SLACK:
-        chosen = [mw @ v.co for v in bm.verts if region[v] == name]
-        if not chosen:
-            fail(f"shirt: the {name} region is empty")
-        log(f"  shirt {name:8s} {len(chosen):5d} particles, slack {SLACK[name] * 1000:5.1f} mm, x {min(p.x for p in chosen):+.2f}..{max(p.x for p in chosen):+.2f} "
-            f"y {min(p.y for p in chosen):+.2f}..{max(p.y for p in chosen):+.2f} z {min(p.z for p in chosen):.2f}..{max(p.z for p in chosen):.2f}")
-    return [SLACK[region[v]] for v in bm.verts]
+            p = mw @ v.co
+            if v in collar_band:
+                region[v] = "collar"
+            elif v in cuff_band:
+                region[v] = "cuff"
+            elif v in wrist_band:
+                region[v] = "wrist"
+            elif abs(p.x) < PLACKET_HALF_WIDTH and p.y < PLACKET_FRONT_Y and p.z < collar_z:
+                region[v] = "placket"
+            elif v in yoke_reach and v not in sleeve and (p.y >= TORSO_AXIS_Y or p.z >= SHOULDER_Z):
+                region[v] = "yoke"
+            elif v in armhole:
+                region[v] = "armhole"
+            elif v in sleeve:
+                region[v] = "sleeve"
+            elif v in hem_band:
+                region[v] = "hem"
+            elif p.y < TORSO_AXIS_Y:
+                region[v] = "chest"
+            else:
+                region[v] = "back"
+        log(f"{label}: {len(loops)} loops; collar loop {len(collar)} verts (z from {collar_z:.3f}), cuff loops {[len(l) for l in cuffs]}, hem loop {len(hem)}; "
+            f"{len(sleeve_seam_segments)} sleeve seam edges, {len(sleeve)} sleeve particles")
+        for name in SLACK:
+            chosen = [mw @ v.co for v in bm.verts if region[v] == name]
+            if not chosen:
+                fail(f"{label}: the {name} region is empty")
+            log(f"  {label} {name:8s} {len(chosen):5d} particles, slack {SLACK[name] * 1000:5.1f} mm, x {min(p.x for p in chosen):+.2f}..{max(p.x for p in chosen):+.2f} "
+                f"y {min(p.y for p in chosen):+.2f}..{max(p.y for p in chosen):+.2f} z {min(p.z for p in chosen):.2f}..{max(p.z for p in chosen):.2f}")
+        return [SLACK[region[v]] for v in bm.verts], [region[v] for v in bm.verts], list(SLACK)
+    return shirt_slack
+
+
+TROUSERS_REGIONS = ("waist", "hem", "leg")
 
 
 def trousers_slack(bm, loops):
-    """The waist loop and its two-ring pinned, the hems 2 cm, the rest 3 cm."""
+    """The waist loop and its two-ring pinned, the hems 2 cm, the rest 3 cm; the region
+    names (TROUSERS_REGIONS) beside the slack, as `shirt_slack_for` returns them."""
     mw = trousers.matrix_world
     waist = max(loops, key=lambda l: sum((mw @ v.co).z for v in l) / len(l))
     pinned = ring(bm, waist, 2)
     hems = {v for l in loops if l is not waist for v in l}
     log(f"trousers: waist loop {len(waist)} verts, pinned with two-ring {len(pinned)}, hem verts {len(hems)}")
-    return [0.0 if v in pinned else (0.02 if v in hems else 0.03) for v in bm.verts]
+    region = ["waist" if v in pinned else ("hem" if v in hems else "leg") for v in bm.verts]
+    return [{"waist": 0.0, "hem": 0.02, "leg": 0.03}[r] for r in region], region, list(TROUSERS_REGIONS)
 
 
 # ---------------------------------------------------------------- buttons on the fabric
@@ -3018,9 +3350,21 @@ def seat_buttons(shell, seat=BUTTON_SEAT, bits_within=BUTTON_BITS):
 seat_buttons(shirt_render)
 
 cloth = {
-    "garments": [garment_record(shirt, "shirt", shirt_slack, render=render_binding(shirt_render, shirt)),
+    "garments": [garment_record(shirt, "shirt", shirt_slack_for(shirt, artist_dominant, sleeve_seam_segments), render=render_binding(shirt_render, shirt)),
                  garment_record(trousers, "trousers", trousers_slack)],
     "colliders": skin_hulls,
+}
+# The 16k sidecar (Docs/GPUCloth.md, section 5; 2026-11-04): the same shell bound to the
+# 16k proxy — the same rigid islands and button patches, the offsets smaller since more
+# shell vertices sit near a proxy vertex — under the garment's SAME name, `shirt`, since
+# the game simulates the garments `Configuration.garments` names and the file is a
+# drop-in for the first; the same trousers; the same eleven hulls with their planes.
+# Both shirt garments carry the phase-2 keys (`garment_record(extended=True)`).
+cloth16k = {
+    "garments": [garment_record(shirt16k, "shirt", shirt_slack_for(shirt16k, artist_dominant16k, sleeve_seam_segments16k, label="shirt16k"),
+                                render=render_binding(shirt_render, shirt16k), extended=True),
+                 garment_record(trousers, "trousers", trousers_slack, extended=True)],
+    "colliders": colliders16k,
 }
 
 # ---------------------------------------------------------------- one object
@@ -3030,7 +3374,7 @@ cloth = {
 # SCENE export skips hidden objects) and in the rig file for inspection.
 shell_positions = [shirt_render.matrix_world @ v.co for v in shirt_render.data.vertices]
 meshes = [body, eyes, shoes, belt, shirt_render, trousers]
-for m in meshes + [shirt]:
+for m in meshes + [shirt, shirt16k]:
     for s in m.material_slots:
         s.material = atlas_mat
 with bpy.context.temp_override(object=body, active_object=body, selected_objects=meshes, selected_editable_objects=meshes):
@@ -3045,13 +3389,16 @@ body.name = "ZombieMesh"; body.data.name = "ZombieMesh"
 meshes = [body]
 log(f"joined: {len(body.data.vertices)} verts, {len(body.data.polygons)} faces, slots {[s.material.name for s in body.material_slots]}, groups {len(body.vertex_groups)}")
 shirt.name = "Shirt_Proxy"; shirt.data.name = "Shirt_Proxy"
-shirt.hide_set(True); shirt.hide_render = True
-for p in shirt.data.polygons:
-    p.material_index = 0
-while len(shirt.material_slots) > 1:
-    shirt.active_material_index = len(shirt.material_slots) - 1
-    with bpy.context.temp_override(object=shirt, active_object=shirt):
-        bpy.ops.object.material_slot_remove()
+# The 16k proxy stays in the rig file beside the 4k, hidden and not exported alike.
+shirt16k.name = "Shirt_Proxy16k"; shirt16k.data.name = "Shirt_Proxy16k"
+for proxy in (shirt, shirt16k):
+    proxy.hide_set(True); proxy.hide_render = True
+    for p in proxy.data.polygons:
+        p.material_index = 0
+    while len(proxy.material_slots) > 1:
+        proxy.active_material_index = len(proxy.material_slots) - 1
+        with bpy.context.temp_override(object=proxy, active_object=proxy):
+            bpy.ops.object.material_slot_remove()
 
 # The game binds the shell's vertices to the exported ones by position, within 0.2 mm,
 # and hands a vertex two of them claim to the nearer: the artist's shell has a thousand
@@ -3132,15 +3479,25 @@ if os.path.isdir(hdr_dir):
     shutil.rmtree(hdr_dir)
     log(f"removed the exporter's side folder {hdr_dir}")
 
-for g in cloth["garments"]:
-    g["sourceFile"] = os.path.basename(SRC)
-    g["sourceHash"] = source_hash
-    g["exportedVertexCount"] = exported_vertices
-sidecar = os.path.join(asset_dir, NAME + ".cloth.json")
-with open(sidecar, "w") as f:
-    json.dump(cloth, f, sort_keys=True, separators=(",", ":"))
-size = os.path.getsize(sidecar)
-log(f"sidecar {sidecar}: {size} bytes ({size / 1e6:.2f} MB), garments {[(g['name'], len(g['particles']), len(g['triangles']), g['pinCount'], g.get('render', {}).get('vertexCount')) for g in cloth['garments']]}")
-if size > 8e6:
-    log(f"WARNING: the sidecar passes 8 MB ({size / 1e6:.2f} MB); the render binding is most of it")
+# Two sidecars from one cook (2026-11-04): the 4k one as it always was, and the 16k one
+# beside it, both stamped with the same source and export so a stale one is told apart.
+# JSON holds both under the 8 MB warning (2.95 MB and 4.99 MB on 2026-11-04, the shell
+# binding 2.25 and 2.29 MB of them; the 16k's particles, rest normals, influences and
+# triangles are the other 2.7 MB), so the design's note that a binary blob would come
+# when the JSON passes the mark stays a note.
+for filename, data in ((NAME + ".cloth.json", cloth), (NAME + ".cloth16k.json", cloth16k)):
+    for g in data["garments"]:
+        g["sourceFile"] = os.path.basename(SRC)
+        g["sourceHash"] = source_hash
+        g["exportedVertexCount"] = exported_vertices
+    sidecar = os.path.join(asset_dir, filename)
+    with open(sidecar, "w") as f:
+        json.dump(data, f, sort_keys=True, separators=(",", ":"))
+    size = os.path.getsize(sidecar)
+    render_bytes = sum(len(json.dumps(g["render"], separators=(",", ":"))) for g in data["garments"] if "render" in g)
+    log(f"sidecar {sidecar}: {size} bytes ({size / 1e6:.2f} MB, the render binding {render_bytes / 1e6:.2f} MB of it), "
+        f"garments {[(g['name'], len(g['particles']), len(g['triangles']), g['pinCount'], g.get('render', {}).get('vertexCount')) for g in data['garments']]}, "
+        f"colliders {len(data['colliders'])} with {sum(len(c.get('planes', [])) for c in data['colliders'])} planes")
+    if size > 8e6:
+        log(f"WARNING: the sidecar passes 8 MB ({size / 1e6:.2f} MB); the render binding is most of it")
 print("DONE")

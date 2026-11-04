@@ -88,6 +88,7 @@ database rebuilds from whatever is loaded. The layout is:
 Sources/CoolZombieKit/Resources/
   Models/Zombie/Zombie.untold                 the zombie: skeleton + one skinned mesh
   Models/Zombie/Zombie.cloth.json             the cloth sidecar: shirt and trousers proxies, the shirt shell's binding
+  Models/Zombie/Zombie.cloth16k.json          the second sidecar (2026-11-04): the same shell bound to a 15,979-particle shirt proxy, for the GPU arm
   Models/Zombie/Textures/Zombie_BaseColor.png 4K atlas: face, body, shoes, shirt + trousers tiles
   Models/Zombie/Textures/Zombie_Roughness.png
   Models/Zombie/Textures/Zombie_Normal.png
@@ -1108,12 +1109,13 @@ Phase 1 of the design landed the same day, 2026-11-03: `GPUClothSolver`
 SwiftPM target, as the engine and CoolCloth ship theirs, and compiled by
 `Scripts/build-cloth-metallib.sh` (two seconds) into the five committed
 `Resources/Shaders/ZombieCloth-{macos,ios,iossim,xros,xrossim}.metallib`,
-24 KB each, against the package's own minimums (macOS 14, iOS 17,
+24 KB each (35 KB since the shell kernels of phase 2, below), against the package's own minimums (macOS 14, iOS 17,
 visionOS 2) because a lib built against the SDK's OS is refused on an
 older device — with the C header `ZombieClothGPUShaderTypes.h` as the
 ABI (`ZCParams` 256 B, `ZCEntry` 8, `ZCInfluence` 16, `ZCHullHeader` 48,
 `ZCSphere` 32, `ZCStats` 64; nineteen buffer roles, five more reserved for
-phase 2), pinned on the Metal side by `static_assert` at every metallib
+phase 2, which took them on 2026-11-04 for the shell's triangles, frames,
+bindings, output and params), pinned on the Metal side by `static_assert` at every metallib
 build and on the Swift side by `ZCLayout.mismatches()` in the tests. The
 kit loads the platform's lib from `Bundle.module` through the engine's
 suffix rule (`xros` / `xrossim` on the headset, `macos` on the Mac), and
@@ -1286,6 +1288,357 @@ the other half), the choice between one gather at 16 substeps (3.38 %
 p99 residual, 33 dispatches) and two at 8 (3.84 %, 25 dispatches), and
 `-clothGPUWait off` re-gated first if the headset's cost fails on the
 wait, as section 7 says.
+
+Phase 2 of the design, the quality phase, landed on 2026-11-04. The
+owner's headset read of phase 1 at the 3,995 proxy had come back as
+expected — no much difference, the same issues on Jolt and on the GPU —
+since phase 1 pinned the GPU arm to Jolt's figures on Jolt's proxy, and a
+proxy whose median edge is 17.5 mm cannot show a fold under 8 cm whatever
+solves it. So the prep cooks a second shirt proxy, `refine_proxy`, from
+the same sewn outer layer the 4k one is collapsed from: the existing
+collapse run down to 10,000 vertices at a 3 mm minimum edge as the clean
+(the design's drain of the sub-3 mm edges alone left four valence-stuck
+5-degree slivers, which the split quartered and the final collapse could
+not finish — 8.2 degrees, a 3.7 mm edge, two islands), every edge cut once
+with grid fill and triangulated (39,779 vertices and 79,108 triangles, no
+zero-area face, no non-manifold edge), and the collapse again to 16,000 at
+a 4.5 mm minimum, an 18 mm maximum and 10 degrees, 8.9 s of a 44.6 s cook.
+One thing was added to the collapse's stuck-edge stage, which the 4k proxy
+never reaches: at the rolled cuffs' creases five valence-3 caps over hollow
+three-cycles held a 2.9 mm edge, every base edge refused by the link
+condition and the apex's own collapses by the feature rule, and the apex
+is now collapsed onto its nearest neighbour (the 4k garments are byte for
+byte what they were, which is the proof the 4k never gets there). The
+result is 15,979 particles and 31,681 triangles in one piece with the
+shirt's four openings — edges 4.5 / 5.8 / 8.8 / 12.8 / 29.1 mm at the
+minimum, the tenth percentile, the median, the ninetieth and the maximum
+(the 4k's 8.5 / 11.5 / 17.5 / 25.6 / 39.1), the smallest angle 10.1
+degrees, 281 boundary edges where the 4k has 142, as a halved spacing
+gives; the design's 29,783 triangles at 15,994 vertices cannot hold on a
+four-loop surface, where Euler wants 2V + 4 - B — 1,848 pins (11.6 %: the
+collar 877, the cuffs 971), 588 body-facing (3.7 %, the 4k's share), the
+slack schedule unchanged in metres and its bands 3.5 to 4.5 times the 4k's
+counts (collar 877, cuffs 971, wrist 271, placket 329, yoke 1,057, sleeves
+2,390, armhole 4,185, chest 1,995, back 2,173, hem 1,731), the body's
+weights transferred as before (one to four influences on 3,026 / 4,796 /
+3,913 / 4,244 particles) and the push-off leaving the nearest point 2.00 mm
+off the body. The same 29,402-vertex shell is bound to it, identical rigid
+islands and button patches, and tighter, as the design predicted: the
+offsets' median 0.88 mm and maximum 10.1 mm (0.96 and 20.3 on the 4k),
+5,722 shell vertices within 0.1 mm of a proxy point, 39 hanging more than
+2 mm below their triangle instead of 122. The skin hulls are fitted against
+BOTH proxies now, so one set serves the A/B, and six of the eleven moved
+against the 2026-11-03 cook's points (the first review measured them; the
+cook's own log had counted three): the 16k collar sat 1.1 mm inside the
+neck hull the 4k alone had allowed (the fit's log says 7.2 mm for its
+samples, the 4k's own 5.3), so the neck went from 35 to 28 points,
+receding up to 14.7 mm and growing 5.4 mm elsewhere; the 16k sleeve sat
+1.25 mm off the left upper arm's hull, under the 3.5 mm margin, so three
+of its 35 points moved 3.5 mm and the hull receded 3.4; the right arm's
+iterative fits re-ran to 38 and 32 points on the upper arm and the forearm
+(37 and 34), the upper arm's new hull standing up to 10.9 mm OUTSIDE its
+old one somewhere, since a nearest-vertex push fit is path-dependent and a
+different sample set re-pushes different vertices, the forearm's 7.0 mm
+inside; the left forearm's four points moved 0.13 mm and one of the left
+clavicle's under a micrometre; the pelvis, the three spine links and the
+right clavicle are the points they were — 438 points in all, 816 planes
+where the design and the phase-1 tests counted 832, every point inside at
+1e-7, both proxies 3.5 mm or more off every hull, the largest skin
+protrusion 8.3 mm at the right upper arm (10.1 at the neck before). The
+4k file's shirt and trousers did not change; its colliders did, and of
+the 36 figure lines the four Jolt fit tests print, the 19 that do not
+meet a hull (every skin-only line among them) are byte for byte what
+they were and the 17 on the hull models moved with the hulls by under a
+tenth of a millimetre and a particle in the counts (the hang's sag 9.4 to
+9.5 mm and its back-stop 1.14 to 1.15, the sway's excess 0.21 to 0.30 mm,
+the swing's 14 inside to 13 and its 14.2 mm to 14.3, the arms-forward
+19.8 mm to 19.7), which is the one thing this phase did not keep byte for
+byte on the Jolt arm. Both sidecars come out of one cook:
+`Zombie.cloth.json` at 2.95 MB and `Zombie.cloth16k.json` at 4.99 MB (the
+design projected 4.19; the prep's 8 MB warning stands, so the JSON stays),
+the second carrying the phase-2 keys the runtime does not read yet but the
+asset tests pin against what the kit derives at attach — `restNormal`
+(unit within 1e-7, the kit's area-weighted normal to 0.0 degrees),
+`region` with a `regions` table from the schedule's bands, `planes` per
+collider as the runtime computes them (nested [nx, ny, nz, d], inside
+where n.p + d < 0, the joint's bind frame) and `constraintCounts` under
+the kit's nine names (47,662 edges, 281 boundary, 47,381 cross pairs,
+5,222 pin-pin edges and 4,957 pin-pin pairs dropped, 42,440 stretch and
+42,424 bend constraints, 169,728 CSR entries, 22 at most and 10.62 on
+average per particle; the trousers carry the same keys). The design's
+single `pinPinDropped` is the sum, 10,179, and is not written: the code's
+names win. `ZombieCloth16kAssetTests` (10 tests, skipped when the file is
+not bundled) holds the file to those figures — the histogram within a
+quarter, the 4k file's placement bounds, the binding's rebuild within
+0.0036 mm, the planes equal to the kit's, the counts key for key.
+
+The second file is selected, never swapped in: `-clothSidecar
+Zombie.cloth16k` (the name with or without `.json`), the headset's *Proxy*
+picker beside *Solver* (4k / 16k, disabled with the cloth off or on Jolt)
+and the Mac's *Proxy* dropdown, each change taking the shirt off and
+putting it back on the other cook, both files kept loaded once read. It is
+the GPU arm's knob alone: `ZombieChaseGame` loads the 4k for the Jolt arm
+whatever is named, with one printed line, `ZombieCloth` refuses a Jolt
+garment over `joltParticleLimit` (8,000 particles — the case of a GPU pick
+that fell back to Jolt with the 16k asset in hand) with one line rather
+than solve a 13.6 ms step, and a name the bundle lacks falls back to the
+4k with a line, so the picker is safe on a checkout before the cook. The
+report prints `proxy=4k|16k` (thousands of particles, rounded) so a
+headset line says which cook it reads, and `-clothGPUShell on|off` (on) is
+the shell's switch, next.
+
+The drawn shell is evaluated on the GPU since the same day. The frame's
+encoder ends with two more dispatches after the stats: `zcTriangleFrames`,
+one thread per proxy triangle — the corners into mesh space as
+`expandOverride` converted them for the CPU shell, the origin added first
+and the matrix second, then e1 = ab / |ab|, n = ab x ac / |ab x ac|, t = n
+x e1, and a collapsed triangle leaving the frame the buffer held, the
+CPU's own rule — and `zcShell`, one thread per driven exported vertex:
+pos = w.(a, b, c) + o.x e1 + o.y n + o.z t and normal = r.x e1 + r.y n +
+r.z t, nothing re-normalised, as `RenderShell.evaluate` has it, into two
+planar `float4` streams, the positions with w 1 and the normals with w 0,
+which is what the engine's `deformOverride` consumes, so phase 3 can bind
+them as they are. The ABI took the five reserved buffer indices for three
+new structs (`ZCShellParams` 128 B, the mesh-from-world matrix with the
+garment's origin and the counts; `ZCTriangleFrame` 48 B; `ZCShellBinding`
+48 B, the triangle index travelling in `barycentric.w` as a float, exact
+below 2^24), and the metallibs are 35 KB each. The Swift side hands the
+solver a `ClothShellSetup` at the attach (the per-slot binding the CPU
+shell holds, with the attach's world-to-mesh for the bind-pose frames,
+which are prefilled on the cores), sets the frame's mesh-from-world at
+`beginUpdate`, and in `readBack` copies the output into the override
+arrays in place of `RenderShell.evaluate` — the design's 100-150 us copy
+against the shell's 503 us median on the cores — re-expressing every slot
+through the change of frame when the matrix the read wants is not the one
+the frame was encoded with, because the engine's `translateTo` syncs the
+entity's world transform eagerly and the controller corrects the body
+inside the game step, between the encode and the read. A frame with
+nothing valid to copy — the hard skin after a runaway, a frame before any
+encode, the knob off — runs the CPU shell and counts a fallback
+(`cpuShellFallbacks` beside `gpuShellFrames`), and the report's
+`shell=gpu|cpu` says which ran. The rigid islands need no branch of their
+own: the prep binds every vertex of a button to one triangle, so the
+formula carries the island whole. One thing found on the way: under
+Metal's default fast math the standard library's `float4x4 * float4`
+contracted the three corners' products into fused multiply-adds
+differently after inlining, so two corners at the SAME position came out
+1e-8 m apart under a scaled matrix and an exactly collapsed triangle got a
+frame of rounding noise instead of its kept one; the conversion sums the
+four columns by hand under `#pragma clang fp reassociate(off)
+contract(off)`, which the operator's own inlined flags would not honour.
+`testTheGPUShellMatchesTheCPUShell` holds the two within 4.9e-7 m and
+0.005 degrees over the 29,402 slots at the bind pose and 101 frames into
+the sway (the design's bounds 1e-5 m and 0.05 degrees; the angle is taken
+in double precision, since a single-precision acos cannot resolve under
+0.03 degrees near 1), the override written the same, 51 dispatches a frame
+(49 and the shell's two), and `-clothGPUShell off` back on the cores.
+
+The drape figure of the design's section 6 is exact now
+(`ClothMetrics.Drape`), so the owner's read of the folds has a number
+beside it: over the hem band's interior edges (slack 0.12, both ends in
+the band) the signed dihedral per edge, positive where the fold is convex
+outward, read off the geometry; the design's per-edge mean in degrees,
+which falls with the edge length for the same shape and so cannot compare
+two proxies; a mean absolute curvature in 1/m — the sum of |dihedral| x
+edge length over the band's area, 1 / r on a cylinder of radius r at any
+resolution — which can; and the fold alternations around the hem loop, the
+sign changes of the signed fold at each loop vertex, resampled along the
+loop's arc at 5 mm and smoothed over a 1 cm each-way window (a 3-5 cm
+fold reads through a 2 cm window, a particle's own jitter does not), per
+metre of hem. It is taken at the hang's 200th frame (the cloth is asleep
+on the still body from frame 177 on either solver) and at the sway's last,
+printed by both solvers' hang and sway rows on either proxy beside the
+same shirt's figure at the sidecar's bind pose and as the change from it,
+and pinned once the gate-2 verdict is in. The rest figure and the
+resample are the first review's (2026-11-04): the day's first count read
+"the alternations double at 16k, a fold every 4.4 cm" — 12 against 26 —
+and 21 of the 16k's 22.9 per metre were the artist's own hem folds, there
+before either solver ran, which the finer loop resolves and the coarser
+cannot, read through a window that smoothed the 4k loop vertex to vertex
+and the 16k's over three vertices. With the resample the two rest hems
+read as one: 4k 15.53 1/m and 6 alternations on 1.162 m (5.2 per metre),
+16k 16.61 1/m and 6 on 1.125 m (5.3 per metre). After the hang on the
+GPU, the M4 Max: the 4k hem band (430 particles, 1,097 edges, 1,111 cm^2)
+reads 4.99 degrees per edge, 16.45 1/m and 5.2 per metre — +0.92 1/m
+(+6 %) and not one new fold — and the 16k band (1,731 particles, 4,816
+edges, 1,158 cm^2) 3.86 degrees, 27.09 1/m and 8.8 per metre, +10.48 1/m
+(+63 %) and +3.5 per metre: the hang folds the finer hem and leaves the
+coarser as the artist drew it, which is the figure the cook is for, with
+the caveat under the fit paragraph that the finer proxy's curvature
+carries its unconverged stretch. After the sway +0.67 1/m and +0 at 4k on
+the GPU, +9.26 1/m (+56 %) and +5.2 per metre at 16k.
+The fit scenarios run at 16k on the GPU with bounds of their own
+(`gpuBounds16k`, measured the day the cook landed and pinned with the 4k
+rows' margins; the swing alone is six minutes of the posed-skin metric
+over 15,979 particles): the finer shirt hangs lower — the chest and the
+back sag 22.9 mm (9.4 at 4k), the hem band's mean 16.7 mm over the yoke's
+2.8 (7.8 over 1.3) — and the first review read that as the weight, since
+`particleMass` is 50 mg a particle whatever the count and the 16k shirt
+is 0.8 kg to the 4k's 0.2; it is not, to this solver. Neither kernel
+accumulates a Lagrange multiplier: a pass gives back `w / (w_i + w_j +
+compliance / dt^2)` of a constraint's violation and nothing else, gravity
+is an acceleration and the clamps and hulls are projections, so the mass
+and the compliances enter only as their product, and at 50 mg the finer
+proxy has the 4k's per-pass fractions exactly (61 % of a stretch
+violation, 5 % of a bend). What it does not have is the 4k's convergence:
+a mesh twice as fine is half as converged across the sheet after the same
+32 passes, and the stretch residual the gate reads at 4k as 0.40 % mean /
+2.09 % p99 (`testStretchResidualAtRest`) reads at 16k 1.37 % / 5.99 % at
+the default two gathers and 0.73 % / 3.50 % at the parser's cap of four
+(`testStretchResidualAtRestAt16k`, pinned to those with a quarter of
+margin, the gate's 1 % / 3 % not met at either) — that unconverged stretch
+is the extra sag. The per-area mass the review proposed (0.2025 kg/m^2,
+12.6 mg a particle at 16k) was built and measured the same day: it is a
+shirt four times stiffer per pass (86 % of a stretch violation, 17 % of a
+bend), it read 1.03 % / 8.07 % with a worst edge at 28 % and sagged 15.6
+mm, and in the arms-forward idle it bridged the armpit — the armhole band
+100 mm behind its skinned position and 49.7 mm inside the posed skin
+against 13.2 and 4.4 — so it was withdrawn, the mass left per particle
+with the equivalence written on it, and the 16k hang's sag and hem floors
+set to the 4k row's 5 mm (a shirt that hangs at all) rather than the 18
+and 10 mm first pinned on the measurement. The 16k runs with the clamp
+and the back-stop as
+exact as before (nothing past its slack by more than 2e-6 m, the pins
+within 3.2e-6 m, 1.67 mm behind the skin at the worst, 1.73 mm off the
+surface under the shirt, nothing inside the posed skin after the hang or
+the sway; at rest 14,601 of its particles read against the skin and the
+nearest is 2.09 mm outside), the arms-forward armhole band's farthest
+particle ON its 150 mm ball (150.004 mm, where the 4k's rested 143.4
+inside it), 30 particles inside the posed skin with the hulls and 71
+without (12 and 18 at 4k: four times the particles read about twice the
+count, the armpit and armhole band again, where the convex hulls sit
+inside the concave skin, phase 4's gap capsules), the swing at most 9
+inside at a read frame and 5.2 mm deep (none and 1.1 at 4k), the sleeves
+50 mm off the skin, and Jolt refusing the file outright. The cost in the
+debug build on the M4 Max over 300 frames of the sway at 51 dispatches:
+4k with the GPU shell, `gpu=` 1.73 ms median (5.43 max), the wait 2.09 ms,
+the read-back 5.87 ms and the bind 2.57 ms (the copy, debug code); 16k,
+2.30 ms median (5.38 max), 2.74, 10.85 and 3.60 ms — 2.99 ms on the 16k
+attach's first frames, and 6.49 ms with the arms forward and every hull
+in play (the sway on the world model 5.65, the hang 3.55), over the
+design's 2.0 ms gate-2 line on this GPU before any headset figure exists.
+The release figures are the sweep's:
+
+The phase-2 Mac sweep, 2026-11-04, the release host as the phase-1 sweep
+ran it (`swift build -c release --product CoolZombie`, the M4 Max at 60 Hz,
+so 16 asked substeps are 27 encoded and 12 are 21, two gathers, 35 s runs,
+the once-a-second `-debugLog` line, the idle inspect and the chase with
+eight balls and a reset every 12 s, medians over the awake in-range lines
+with the maximum in brackets; `bind=` is the shell's evaluation on the
+cores or, with the GPU shell, the copy of the kernels' output; a `gulp`
+process of another session held a fifth of a core throughout, which is
+why every CPU figure here is a third over the phase-1 sweep's):
+
+| run (`-clothSolver gpu` unless Jolt; `-clothSidecar Zombie.cloth16k` for 16k) | shell | gpu= | wait= | feed= | read= | bind= | step= | speed<= | onClamp |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Jolt, 4k, idle | cpu | — | — | — | 706 us | 610 us | 3294 us | 1.05 m/s | — |
+| GPU, 4k, idle | gpu | 4.10 ms (8.43) | 4469 us (8855) | 203 us | 4668 us | 85 us | 331 us | 1.02 | 1 % |
+| GPU, 4k, idle, `-clothGPUShell off` | cpu | 6.23 ms (8.25) | 6404 us (8370) | 157 us | 7197 us | 1133 us | 335 us | 1.16 | 1 % |
+| GPU, 16k, idle, 16 substeps (27) | gpu | 6.81 ms (7.77) | 6958 us (7948) | 145 us | 7354 us | 97 us | 358 us | 1.30 | 1 % |
+| GPU, 16k, idle, `-clothSubsteps 12` (21) | gpu | 5.93 ms (7.05) | 6677 us (7258) | 130 us | 7009 us | 105 us | 358 us | 1.64 | 1 % |
+| GPU, 16k, idle, 16, `-clothGPUShell off` | cpu | 6.53 ms (8.08) | 6714 us (8283) | 157 us | 8869 us | 1640 us | 319 us | 1.21 | 1 % |
+| GPU, 16k, idle, 12, `-clothGPUShell off` | cpu | 6.77 ms (7.17) | 6884 us (7305) | 92 us | 8435 us | 1487 us | 401 us | 1.49 | 1 % |
+| GPU, 4k, chase, eight balls | gpu | 6.75 ms (8.01) | 6755 us (8457) | 162 us | 7012 us | 65 us | 444 us | 4.89 | 2 % |
+| GPU, 16k, chase, 16 | gpu | 6.28 ms (8.12) | 6338 us (8188) | 158 us | 6765 us | 103 us | 420 us | 4.56 | 1 % |
+| GPU, 16k, chase, 12 | gpu | 6.78 ms (8.32) | 7059 us (8713) | 132 us | 7325 us | 96 us | 358 us | 3.67 | 1 % |
+| GPU, 16k, chase, 16, `-clothGPUShell off` | cpu | 6.75 ms (8.51) | 6817 us (8682) | 126 us | 8694 us | 1639 us | 356 us | 4.24 | 1 % |
+| GPU, 16k, chase, 12, `-clothGPUShell off` | cpu | 5.89 ms (8.65) | 5972 us (8733) | 115 us | 7664 us | 1675 us | 372 us | 3.89 | 1 % |
+| GPU, 16k, idle, 16 (27), after the reviews' fixes | gpu | 5.52 ms (7.69) | 5802 us (8127) | 76 us | 6020 us | 34 us | 306 us | 1.04 | 1 % |
+| GPU, 16k, chase, 16, after the reviews' fixes | gpu | 6.06 ms (9.09) | 6132 us (9136) | 72 us | 6352 us | 21 us | 286 us | 4.39 | 1 % |
+
+Not a runaway, not a warning and not an error line in any run, the
+override written once per awake frame (817-819 in the idle, 1,342-1,439 in
+the chase with its 13-15 resets' hard skins), the 16k proxy drawn through
+the same shell with `proxy=16k shell=gpu` in every line of its runs, and
+the Proxy dropdown reading its pick; the last two rows are the same idle
+and chase run again after the reviews' fixes below, with the other
+session's load gone (`feed=` 72-76 us against 145-158) and `bind=` the
+copy alone (21-34 us: it had carried the previous-positions loop too).
+What the table says: the GPU shell
+takes the shell's CPU cost out of the frame — `bind=` falls from
+1.1-1.7 ms on the cores to 65-105 us of copy, the design's 100-150 us, and
+`read=` with it, 1.5 ms on the 16k idle — which is the whole of what phase
+2 asked of the CPU. The GPU's own time on this Mac is 6-7 ms at the 27
+substeps the 60 Hz frame asks for, 16k and 4k alike on the chase (6.28
+against 6.75) and 6.81 against 4.10 on the idle, where the 4k's run caught
+the GPU clocked up as the phase-1 sweep's did (4.67 then, 5.88 with the
+balls); the Mac's 27 substeps and clock swings make it no measure of the
+headset's 16, and the debug build's exact-16-substep figures above (2.30
+ms median at 16k against 1.73 at 4k, 6.49 ms with every hull engaged)
+are the nearer guide. Twelve substeps buy 0.9 ms on the idle and nothing
+on the chase within the noise. The chase's `speed<=` is the read-back's
+per-frame displacement over the frame, 4k and 16k alike a fifth over the
+solver's 4 m/s cap (the phase-1 sweep read 4.04): the cap is on the
+velocity carried into the next substep, not on where the slack clamp puts
+a particle whose skinned target left faster at a knockdown.
+
+The two reviews of phase 2 (2026-11-04) changed five more things. The
+game picks the sidecar by the arm the shirt will really run on
+(`ZombieChaseGame.clothSidecar(for:device:)`, a static the GPU suite
+tests without a game): `ZombieCloth.gpuAvailable(device:configuration:)`
+probes the GPU solver once per device — the five pipelines and a queue,
+what `bind` builds — and a GPU pick on a device it cannot be built on (no
+metallib for the platform, a stale one, no device at all) loads the 4k the
+Jolt arm can take, with one line, where until then the pick went by the
+configuration alone, the fallback came at the attach and
+`joltParticleLimit` then refused the 16k outright: no shirt for a missing
+metallib. `bind=` means again what the phase-1 figures measured — the
+shell's evaluation and the override write on the CPU path, the copy alone
+on the GPU path — the particles' conversion to mesh space having sat
+under it for a day (part of the Jolt idle's 610 us above against phase
+1's 467-503). With `-clothGPUWait off` the shell copy takes the frame
+`readPositions` handed the cloth rather than a snapshot of its own, so the
+override's shell cannot run a frame ahead of the positions the speed
+sample and the runaway check read. The shell test has a third row, the
+entity moved inside the frame by 5 cm and 0.1 rad between the cloth's
+`beginUpdate` and its `readBack` as the controller's `translateTo` moves
+it on most chase frames: the copy re-expresses the kernels' output
+through the read's matrix, within 3.9e-7 m and 0.0046 degrees of the CPU
+shell on the particles taken through the same matrix, and the output read
+through the old matrix is that shell carried by the rigid change of frame
+within 1e-5 m, which is the proof the re-expression ran. And the five
+metallibs were rebuilt from the shader sources as they stand (the
+committed ones pre-dated the header's last edit and, the compile being
+deterministic, differed from a rebuild in their per-function hashes), the
+doc comments' projected figures (29,783 triangles, 15,994 particles, 476
+KB and 1.43 MB) replaced by the cook's (31,681, 15,979, 507 KB and 1.52
+MB), and the prep's docstrings corrected to the six hulls that moved and
+the collar band that shrank.
+
+The suites on 2026-11-04 after everything above: `ZombieClothGPUTests` is
+41 tests (the phase-1 30, the shell test with its three rows, the drape
+on both proxies against their rest poses, the Jolt refusal, the sidecar
+choice, the 16k rest read, the 16k stretch residual and five 16k rows),
+`ZombieClothTests` 29, `ZombieClothAssetTests` 12,
+`ZombieCloth16kAssetTests` 10, `ZombiePhysicsTests` 9, the whole kit
+suite green in a debug build — `swift test --filter CoolZombieKitTests`,
+157 tests, 41 minutes with the machine otherwise quiet (the GPU suite 16
+of them with the 16k swing, the Jolt suite 24) — and the visionOS host built
+for the device in Release (`xcodebuild ... -scheme
+CoolZombieVisionOS-visionOS -configuration Release -destination
+"generic/platform=visionOS"`). Left
+for gate 2, the owner's quality verdict on the headset at 16k and 16
+substeps (`Docs/GPUCloth.md` section 7): the drape figure pinned from the
+verdict, `Configuration.solver`'s default flipped to `.gpu` with the
+launch-argument test if it passes, the 2.0 ms `gpu=` line and the 0.6 ms
+read-plus-bind on the device, and the 12,000 cook as the fallback the
+owner settled on if the gate fails on cost rather than look, and phase 3's
+engine PR once the GPU shirt is the shirt. On the cost the Mac's own
+numbers say where the levers are, and it is not the proxy (the second
+review of phase 2, 2026-11-04, from the arms-forward rows in the debug
+build at exactly 16 substeps): with every hull engaged the 4k reads
+`gpu=` 0.49 ms on the skin-only model and 3.65 ms with the eleven hulls,
+the 16k 1.55 ms and 2.57-6.22 ms — the hull plane pass is 87 % of the 4k's
+GPU time already and up to 4.7 ms of the 16k's — while on the sway the
+cost per particle per substep FALLS from 27 ns at 4k to 9 ns at 16k, the
+solve being dispatch-latency-bound at 4k and the finer proxy's marginal
+particle about 3 ns a substep. So the 2.0 ms line is threatened by the
+hull pass on either proxy: the first lever is that pass (a per-hull
+bounding-sphere early-out in `zcSolve`, fewer planes per hull, the
+24-point hulls or a coplanar merge of section 9), the second 12 substeps
+(0.9 ms on the 16k idle, nothing on the chase within the noise), and only
+then the 12,000 cook; and the headset run should print the arms-forward
+idle beside the sway, since the sway alone leaves most hulls idle.
 
 The package depends on the miolabs fork of the plugin at its
 `feature/zombie_cloth` branch (the character controller, the ragdoll, the

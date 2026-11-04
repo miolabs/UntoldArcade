@@ -562,7 +562,12 @@ final class ZombieClothAssetTests: XCTestCase {
     /// 8.3 mm at the upper arms in the cook's own check, which is the back-stop's
     /// business there). The voxel downsample keeps the hulls under the prep's cap of
     /// 48 points and the garment push takes the armpit end of the upper arms and the
-    /// collar end of the neck down to 35-37: 32-48 points each, 446 in all.
+    /// collar end of the neck down to 35-37: 32-48 points each, 446 in all on the cook
+    /// of 2026-11-03. The phase-2 cook of 2026-11-04 (`Docs/GPUCloth.md`), which writes
+    /// this sidecar and the 16k one from one run, left the shirt as it was and took the
+    /// neck hull to 28 points and the right arm's two to 38 and 32 (the garment push
+    /// now clears the 16k proxy too): 28-48 points each, 438 in all, 816 planes where
+    /// the GPU tests counted 832 (ZombieClothGPUTests re-pins them beside this).
     func testTheSkinCollidersAreHullsOnTheShirtsJointsOffTheProxy() throws {
         let cloth = try loadCloth()
         let shirt = try XCTUnwrap(cloth.garment(named: "shirt"))

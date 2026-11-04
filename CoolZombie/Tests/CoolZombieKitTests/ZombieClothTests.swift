@@ -1023,8 +1023,9 @@ final class ZombieClothTests: XCTestCase {
     /// and the GPU arm's knobs of `Docs/GPUCloth.md` — Jolt by default
     /// until the design's gate 2 flips it, 16 substeps, one gather, the
     /// raw-sum relaxation at 0.5, Jolt's damping, frictionless hulls, the
-    /// read waiting for the frame, the bundled sidecar — each flag with its
-    /// bounds, and a bad value leaving the knob as it was.
+    /// read waiting for the frame, the bundled sidecar, and since phase 2
+    /// (2026-11-04) the GPU shell on — each flag with its bounds, and a bad
+    /// value leaving the knob as it was.
     func testTheLaunchArgumentsSetTheClothConfiguration() {
         let defaults = ZombieCloth.Configuration()
         XCTAssertTrue(defaults.skinColliders, "the skin's hulls are built by default")
@@ -1090,13 +1091,14 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertEqual(defaults.gpuHullFriction, 0, "frictionless hulls, as on Jolt")
         XCTAssertTrue(defaults.gpuWait, "the read waits for the frame's command buffer")
         XCTAssertNil(defaults.sidecar, "the bundled sidecar")
+        XCTAssertTrue(defaults.gpuShell, "the GPU arm evaluates the shell on the GPU (phase 2); the Jolt arm has no say")
         configuration = defaults
         configuration.apply(launchArguments: [])
         XCTAssertEqual(configuration.solver, .jolt)
         XCTAssertEqual(configuration.gpuSubsteps, 16)
         configuration.apply(launchArguments: ["-clothSolver", "gpu", "-clothSubsteps", "8", "-clothGPUIterations", "2", "-clothRelaxation", "1.5",
                                               "-clothAveragedJacobi", "on", "-clothGPUDamping", "1", "-clothHullFriction", "0.2", "-clothGPUWait", "off",
-                                              "-clothSidecar", "Zombie.cloth16k"])
+                                              "-clothSidecar", "Zombie.cloth16k", "-clothGPUShell", "off"])
         XCTAssertEqual(configuration.solver, .gpu, "-clothSolver gpu picks the GPU arm")
         XCTAssertEqual(configuration.gpuSubsteps, 8)
         XCTAssertEqual(configuration.gpuIterations, 2)
@@ -1106,12 +1108,15 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertEqual(configuration.gpuHullFriction, 0.2)
         XCTAssertFalse(configuration.gpuWait)
         XCTAssertEqual(configuration.sidecar, "Zombie.cloth16k")
+        XCTAssertFalse(configuration.gpuShell, "-clothGPUShell off keeps the CPU shell on the GPU arm for the A/B")
         XCTAssertEqual(configuration.collisionModel, .skinAndWorld, "the model is orthogonal to the solver")
         XCTAssertEqual(configuration.iterationsPerStep, 4, "and so are Jolt's iterations")
-        configuration.apply(launchArguments: ["-clothSolver", "jolt", "-clothAveragedJacobi", "off", "-clothGPUWait", "on", "-clothGPUDamping", "0", "-clothHullFriction", "0"])
+        configuration.apply(launchArguments: ["-clothSolver", "jolt", "-clothAveragedJacobi", "off", "-clothGPUWait", "on", "-clothGPUDamping", "0", "-clothHullFriction", "0",
+                                              "-clothGPUShell", "on"])
         XCTAssertEqual(configuration.solver, .jolt)
         XCTAssertFalse(configuration.gpuAveragedJacobi)
         XCTAssertTrue(configuration.gpuWait)
+        XCTAssertTrue(configuration.gpuShell)
         XCTAssertEqual(configuration.gpuDamping, 0, "nought is a damping (no drag), unlike nil")
         XCTAssertEqual(configuration.gpuHullFriction, 0)
         XCTAssertEqual(configuration.gpuSubsteps, 8, "the other knobs stayed")
@@ -1134,7 +1139,7 @@ final class ZombieClothTests: XCTestCase {
         configuration = defaults
         configuration.apply(launchArguments: ["-clothSolver", "cpu", "-clothSubsteps", "many", "-clothGPUIterations", "two", "-clothRelaxation", "0",
                                               "-clothAveragedJacobi", "maybe", "-clothGPUDamping", "-1", "-clothHullFriction", "-0.5", "-clothGPUWait", "later",
-                                              "-clothSidecar", "-play"])
+                                              "-clothGPUShell", "sometimes", "-clothSidecar", "-play"])
         XCTAssertEqual(configuration.solver, .jolt, "an unknown solver changes nothing")
         XCTAssertEqual(configuration.gpuSubsteps, 16, "a word is not a count")
         XCTAssertEqual(configuration.gpuIterations, 2, "a word is not a count; the default's two gathers stay")
@@ -1143,13 +1148,14 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertNil(configuration.gpuDamping, "a negative damping is not one")
         XCTAssertEqual(configuration.gpuHullFriction, 0, "nor a negative friction")
         XCTAssertTrue(configuration.gpuWait, "an unknown value leaves the wait as it was")
+        XCTAssertTrue(configuration.gpuShell, "an unknown value leaves the shell where it was")
         XCTAssertNil(configuration.sidecar, "the next flag is not a sidecar's name")
         configuration.apply(launchArguments: ["-clothRelaxation", "-0.5", "-clothGPUDamping", "inf", "-clothHullFriction", "nan"])
         XCTAssertEqual(configuration.gpuRelaxation, 0.5, "a negative relaxation would undo the corrections; ignored")
         XCTAssertNil(configuration.gpuDamping, "an infinity is not a damping")
         XCTAssertEqual(configuration.gpuHullFriction, 0, "nor is not-a-number a friction")
         configuration.apply(launchArguments: ["-clothSolver", "-clothSubsteps", "-clothGPUIterations", "-clothRelaxation", "-clothAveragedJacobi",
-                                              "-clothGPUDamping", "-clothHullFriction", "-clothGPUWait", "-clothSidecar"])
+                                              "-clothGPUDamping", "-clothHullFriction", "-clothGPUWait", "-clothSidecar", "-clothGPUShell"])
         XCTAssertEqual(configuration.solver, .jolt, "a flag with no value is ignored")
         XCTAssertEqual(configuration.gpuSubsteps, 16)
         XCTAssertEqual(configuration.gpuIterations, 2)
@@ -1159,6 +1165,7 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertEqual(configuration.gpuHullFriction, 0)
         XCTAssertTrue(configuration.gpuWait)
         XCTAssertNil(configuration.sidecar)
+        XCTAssertTrue(configuration.gpuShell)
     }
 
     // MARK: - The solver switch

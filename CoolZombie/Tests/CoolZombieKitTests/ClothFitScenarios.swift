@@ -200,6 +200,14 @@ enum ClothFitScenarios {
         XCTAssertLessThan(inward, bounds.inward, "a particle sits \(inward) m behind its skinned position along the skin's normal")
         XCTAssertEqual(islands, 21, "seven buttons and fourteen bits of thread")
         XCTAssertLessThan(worstRigid, bounds.rigid, "a button or a bit is \(worstRigid) m off where its triangle's rotation carries it")
+        // The drape figure (`ClothMetrics.Drape`, design section 6): the hem
+        // band's folds as a number beside the owner's read, printed for both
+        // solvers and either proxy, pinned once the gate-2 verdict is in.
+        let drape = try XCTUnwrap(ClothMetrics.drape(of: h), "the hem band or the hem loop could not be read")
+        XCTAssertGreaterThan(drape.bandEdges, 100, "the hem band has \(drape.bandEdges) interior edges")
+        XCTAssertTrue(drape.curvature.isFinite && drape.loopLength > 0.5, "the drape figure is not a number: \(drape)")
+        let restDrape = ClothMetrics.restDrape(of: h)
+        print("cloth drape, hang 2 s, \(h.sidecarName) (\(h.shirt.particles.count) particles, \(h.cloth.activeSolver.map { "\($0)" } ?? "no solver")): \(drape); \(restDrape.map { drape.against($0) } ?? "no rest figure")")
 
         control.frames(200)
         let cp = control.particles, ct = control.targets
@@ -283,6 +291,13 @@ enum ClothFitScenarios {
         XCTAssertLessThan(worstPins, bounds.pins, "\(label): a pin came \(worstPins) m off the skin during the sway")
         XCTAssertEqual(h.cloth.runawayCount, 0)
         print("cloth sway 3 s, \(label): worst excess \(worstFree) m, pins \(worstPins) m, parts lag up to \(worstLag) m (\(laggingPart)); \(h.cloth.report)")
+        // The drape figure at the sway's last frame (see the hang).
+        if let drape = ClothMetrics.drape(of: h) {
+            let restDrape = ClothMetrics.restDrape(of: h)
+            print("cloth drape, sway 3 s, \(label), \(h.sidecarName) (\(h.shirt.particles.count) particles, \(h.cloth.activeSolver.map { "\($0)" } ?? "no solver")): \(drape); \(restDrape.map { drape.against($0) } ?? "no rest figure")")
+        } else {
+            XCTFail("\(label): the hem band or the hem loop could not be read for the drape figure")
+        }
     }
 
     /// The re-seat (`testAPelvisJumpReseatsTheShirtOnTheNewPose`): a

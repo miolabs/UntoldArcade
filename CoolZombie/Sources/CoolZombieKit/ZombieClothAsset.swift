@@ -187,15 +187,57 @@ public struct ZombieClothAsset: Codable, Sendable, Equatable {
         try JSONDecoder().decode(ZombieClothAsset.self, from: Data(contentsOf: url))
     }
 
+    /// The sidecar the kit runs on unless `ZombieCloth.Configuration.sidecar`
+    /// names another: `Zombie.cloth`, the 3,995-particle cook of
+    /// 2026-11-03 (2,948,037 bytes). Phase 2 of `Docs/GPUCloth.md` cooks a
+    /// second file beside it, `Zombie.cloth16k` — the same shell, the same
+    /// colliders and the same trousers over a 16,000-particle shirt proxy,
+    /// whose 8.4 mm spacing is the drawn shell's own 8.25 mm median edge,
+    /// so finer than it buys nothing the shell can show — and the two are a
+    /// live A/B on the GPU arm (`-clothSidecar Zombie.cloth16k`, the
+    /// hosts' Proxy picker); the 4k stays the default until the design's
+    /// gate 2, the owner's quality verdict on the headset, and the Jolt arm
+    /// keeps it whatever is named, since at 16k Jolt's one-thread edge
+    /// pass is four times its 3.4 ms step.
+    public static let defaultSidecarName = "Zombie.cloth"
+    /// The phase-2 cook's name, `Zombie.cloth16k`: what the hosts' Proxy
+    /// picker and `-clothSidecar Zombie.cloth16k` select on the GPU arm.
+    public static let sidecar16kName = "Zombie.cloth16k"
+
+    /// A sidecar's file name from its name, with or without the `.json`
+    /// (`Zombie.cloth16k` and `Zombie.cloth16k.json` are the same file).
+    public static func sidecarFileName(_ name: String) -> String {
+        name.hasSuffix(".json") ? name : name + ".json"
+    }
+
     /// The sidecar bundled with the kit, beside the model.
-    public static var bundledURL: URL? {
-        ZombieResources.baseURL?.appendingPathComponent("Models/Zombie/Zombie.cloth.json")
+    public static var bundledURL: URL? { bundledURL(named: defaultSidecarName) }
+
+    /// A bundled sidecar by name (`Models/Zombie/<name>.json`); nil when
+    /// the kit has no resource bundle. Whether the file exists is the
+    /// loader's to say.
+    public static func bundledURL(named name: String) -> URL? {
+        ZombieResources.baseURL?.appendingPathComponent("Models/Zombie/\(sidecarFileName(name))")
+    }
+
+    /// Whether a sidecar of that name is in the bundle: what a host's
+    /// Proxy picker offers, and what the loader falls back from.
+    public static func isBundled(named name: String) -> Bool {
+        guard let url = bundledURL(named: name) else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
     }
 
     /// Decodes the bundled sidecar.
     public static func loadBundled() throws -> ZombieClothAsset {
-        guard let url = bundledURL else {
-            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: "Models/Zombie/Zombie.cloth.json"])
+        try loadBundled(named: defaultSidecarName)
+    }
+
+    /// Decodes a bundled sidecar by name; throws `fileNoSuchFile` with the
+    /// path when the bundle lacks it, so the caller can name the file it
+    /// did not find.
+    public static func loadBundled(named name: String) throws -> ZombieClothAsset {
+        guard let url = bundledURL(named: name), FileManager.default.fileExists(atPath: url.path) else {
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: "Models/Zombie/\(sidecarFileName(name))"])
         }
         return try load(from: url)
     }

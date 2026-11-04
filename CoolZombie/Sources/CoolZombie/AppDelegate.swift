@@ -143,6 +143,8 @@
                                 current: scene.clothChoice) { scene.setClothChoice($0) }
                     optionGroup("Solver", options: ZombieScene.SolverChoice.allCases.map { ($0.title, $0) },
                                 current: scene.solverChoice) { scene.setSolverChoice($0) }
+                    optionGroup("Proxy", options: ZombieScene.ProxyChoice.allCases.map { ($0.title, $0) },
+                                current: scene.proxyChoice) { scene.setProxyChoice($0) }
                     if clipSets.count > 1 {
                         optionGroup("Clips", options: clipSets.map { ($0.title, $0) },
                                     current: scene.clipSet) { scene.setClipSet($0) }

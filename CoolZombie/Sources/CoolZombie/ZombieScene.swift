@@ -166,6 +166,43 @@
             }
         }
 
+        /// Which proxy the shirt is simulated on, switched live like the
+        /// Solver dropdown (`ZombieCloth.Configuration.sidecar`): the
+        /// 3,995-particle cook, `Zombie.cloth`, the default until the
+        /// design's gate 2, or phase 2's 16,000-particle `Zombie.cloth16k`,
+        /// whose 8.4 mm spacing shows the folds the drawn shell can
+        /// (`Docs/GPUCloth.md`). The GPU arm's knob alone: the game keeps
+        /// the Jolt arm on the 4k whatever is picked, with one printed
+        /// line, and a 16k pick on a checkout without the cook runs the 4k
+        /// the same way.
+        enum ProxyChoice: String, CaseIterable, Identifiable {
+            case fourK, sixteenK
+
+            var id: String { rawValue }
+
+            var title: String {
+                switch self {
+                case .fourK: return "4k"
+                case .sixteenK: return "16k"
+                }
+            }
+
+            init(_ configuration: ZombieCloth.Configuration) {
+                if let name = configuration.sidecar, ZombieClothAsset.sidecarFileName(name) == ZombieClothAsset.sidecarFileName(ZombieClothAsset.sidecar16kName) {
+                    self = .sixteenK
+                } else {
+                    self = .fourK
+                }
+            }
+
+            /// `configuration` with this choice applied.
+            func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
+                var result = configuration
+                result.sidecar = self == .sixteenK ? ZombieClothAsset.sidecar16kName : nil
+                return result
+            }
+        }
+
         /// How high the cube sits: near the floor, or at chest height as a
         /// stand-in for a person — the arms reach for it either way.
         enum TargetHeight: String, CaseIterable, Identifiable {
@@ -252,9 +289,9 @@
                 }
             }
             // The shirt's simulation: `-cloth off|skin|ragdoll`,
-            // `-clothSolver jolt|gpu`, `-clothIterations <n>` and the GPU
-            // arm's knobs (`-clothSubsteps <n>` and the rest), as on the
-            // headset.
+            // `-clothSolver jolt|gpu`, `-clothSidecar <name>`,
+            // `-clothIterations <n>` and the GPU arm's knobs
+            // (`-clothSubsteps <n>` and the rest), as on the headset.
             configuration.cloth.apply(launchArguments: arguments)
             clothConfiguration = configuration.cloth
             roomObstacles = room
@@ -434,6 +471,15 @@
         /// The dropdown's solver choice: the game swaps the shirt's
         /// simulation on its thread, as for the cloth choice.
         func setSolverChoice(_ choice: SolverChoice) {
+            clothConfiguration = choice.apply(to: clothConfiguration)
+            game.setCloth(clothConfiguration)
+        }
+
+        var proxyChoice: ProxyChoice { ProxyChoice(clothConfiguration) }
+
+        /// The dropdown's proxy choice: the game takes the garments off and
+        /// puts them back on the other sidecar, as for the solver choice.
+        func setProxyChoice(_ choice: ProxyChoice) {
             clothConfiguration = choice.apply(to: clothConfiguration)
             game.setCloth(clothConfiguration)
         }

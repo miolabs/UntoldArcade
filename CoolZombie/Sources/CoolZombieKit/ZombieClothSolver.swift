@@ -121,7 +121,8 @@ public struct ClothGarmentSetup: Sendable {
     /// their normal is the skin's, and the back-stop lies behind it.
     public var faces: [SIMD3<UInt32>]
     /// 0 for a pin, 1 over the particle's mass otherwise (20,000 1/kg at
-    /// the shirt's 50 mg).
+    /// the shirt's 50 mg, whatever the proxy's count: the mass is a per-pass
+    /// stiffness to the solvers, `ZombieCloth.Configuration.particleMass`).
     public var inverseMasses: [Float]
     public var influences: [[ClothInfluence]]
     /// How far each particle may stray from its skinned position, metres,
@@ -164,12 +165,18 @@ public struct ClothGarmentSetup: Sendable {
     /// The world's gravity, m/s^2, for a solver that integrates its own
     /// particles (the GPU arm; Jolt's bodies take the world's).
     public var gravity: SIMD3<Float>
+    /// The drawn shell's binding to this proxy (`ClothShellSetup`), for a
+    /// solver that evaluates the shell itself — the GPU arm's `zcShell`,
+    /// phase 2 of `Docs/GPUCloth.md` — or nil for a garment drawn as its
+    /// proxy (the trousers) and for the Jolt arm, which leaves the shell
+    /// to `ZombieCloth.RenderShell` on the cores.
+    public var shell: ClothShellSetup?
 
     public init(name: String, origin: SIMD3<Float>, bindPositions: [SIMD3<Float>], faces: [SIMD3<UInt32>], inverseMasses: [Float],
                 influences: [[ClothInfluence]], maxDistance: [Float], backstop: [Float], bodyFacing: Set<Int>, bindJointWorld: [simd_float4x4],
                 stretchCompliance: Float, shearCompliance: Float, bendCompliance: Float, linearDamping: Float, maxLinearVelocity: Float,
                 vertexRadius: Float, friction: Float, iterations: UInt32, oneWayAgainstRagdolls: Bool, layer: UInt32,
-                pelvisJoint: Int = 0, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0))
+                pelvisJoint: Int = 0, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), shell: ClothShellSetup? = nil)
     {
         self.name = name
         self.origin = origin
@@ -193,6 +200,54 @@ public struct ClothGarmentSetup: Sendable {
         self.layer = layer
         self.pelvisJoint = pelvisJoint
         self.gravity = gravity
+        self.shell = shell
+    }
+}
+
+/// The drawn shell as `ZombieCloth.RenderShell` binds it at the attach,
+/// handed to a solver that evaluates the shell on the GPU (phase 2 of
+/// `Docs/GPUCloth.md`): one entry per driven exported vertex — a slot, in
+/// the garment's override order, 32,530 on the shirt in the game and
+/// 29,402 in the tests' shell-only mesh — with the proxy triangle its shell
+/// vertex rides, the barycentric point on it, the rest offset from that
+/// point in the triangle's frame (`e1` along the first edge, `n` the
+/// normal, `t = n x e1`) and the exported copy's own rest normal in the
+/// same frame, so position = bary . (a, b, c) + o.x e1 + o.y n + o.z t and
+/// normal = r.x e1 + r.y n + r.z t, line for line what `RenderShell.
+/// evaluate` computes on the cores (503 us median on the M4 Max for the
+/// shirt, about a millisecond on the headset, the largest CPU item of the
+/// phase-1 frame, which is why the kernel takes it over). The shell is
+/// drawn in MESH space — the frame the engine's deformation override
+/// expects, the skinned mesh's own, which the entity's world transform
+/// turns and carries — while the solver works in the garment frame (world
+/// minus the attach origin), so `meshFromWorld` is the attach's matrix
+/// from the world to the mesh, with which the solver fills the triangle
+/// frames at the bind pose; the frame's own matrix goes with every
+/// `beginFrame`, since the entity moves. The rigid islands (the buttons,
+/// the bits of thread) need nothing of their own here: every slot of one
+/// names the island's single triangle, as the sidecar bound them.
+public struct ClothShellSetup: Sendable {
+    /// The slots, `triangle.count`; every array below has one entry each.
+    public var slotCount: Int { triangle.count }
+    /// Per slot, the proxy triangle (an index into the garment's faces).
+    public var triangle: [UInt32]
+    /// Per slot, the barycentric coordinates of the shell vertex's point on
+    /// the triangle.
+    public var barycentric: [SIMD3<Float>]
+    /// Per slot, the rest offset from that point in the triangle's frame.
+    public var offset: [SIMD3<Float>]
+    /// Per slot, the exported copy's rest normal in the triangle's frame.
+    public var normal: [SIMD3<Float>]
+    /// The world to the mesh at the attach (the inverse of the entity's
+    /// world times the mesh's local matrix).
+    public var meshFromWorld: simd_float4x4
+
+    public init(triangle: [UInt32], barycentric: [SIMD3<Float>], offset: [SIMD3<Float>], normal: [SIMD3<Float>], meshFromWorld: simd_float4x4) {
+        self.triangle = triangle
+        self.barycentric = barycentric
+        self.offset = offset
+        self.normal = normal
+        self.meshFromWorld = meshFromWorld
     }
 }
 
