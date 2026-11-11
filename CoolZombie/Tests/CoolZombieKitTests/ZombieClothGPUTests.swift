@@ -32,7 +32,12 @@
 //  16k proxy at rest against the posed skin, the Jolt arm's refusal of it,
 //  and the 16k cost; the hull counts were re-pinned the same day to the
 //  phase-2 cook's colliders (816 planes on 438 points, where the design
-//  counted 832 on 446).
+//  counted 832 on 446). The budget phase (2026-11-04, closed 2026-11-10)
+//  added the hull candidates' tree, the contact diffs between the
+//  candidate loop and the every-hull one on six motions, the loss over the
+//  chase's clips and the falls that keeps the candidates off by default,
+//  the coplanar merge's enclosure, the sheet without joint paths, and the
+//  two cost tests timed in rotation behind a heater frame.
 //
 
 @testable import CoolZombieKit
@@ -136,11 +141,12 @@ final class ZombieClothGPUTests: XCTestCase {
     /// the coordinator's world configuration, not the harness's backend.
     private func makeHarness(configuration: ZombieCloth.Configuration = ZombieCloth.Configuration(), world: simd_float4x4 = ClothFixtures.standing,
                              ragdoll: Bool = true, obstacles: [NavObstacle] = [], mesh: [SIMD3<Float>]? = nil, normals: [SIMD3<Float>]? = nil,
-                             pose: [simd_float4x4]? = nil, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), device: MTLDevice? = nil, sidecar: String? = nil) throws -> ClothHarness
+                             pose: [simd_float4x4]? = nil, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), device: MTLDevice? = nil, sidecar: String? = nil,
+                             frameDelta: Float? = nil) throws -> ClothHarness
     {
         guard let asset = ClothFixtures.asset, let joints = ClothFixtures.skeleton else { throw XCTSkip("Models/Zombie is not bundled") }
         if let sidecar, ClothFixtures.sidecar(named: sidecar) == nil { throw XCTSkip("Models/Zombie/\(sidecar) is not bundled (the phase-2 cook)") }
-        let harness = ClothHarness(dt: dt, asset: asset, joints: joints, configuration: configuration, world: world, ragdoll: ragdoll, obstacles: obstacles, mesh: mesh,
+        let harness = ClothHarness(dt: frameDelta ?? dt, asset: asset, joints: joints, configuration: configuration, world: world, ragdoll: ragdoll, obstacles: obstacles, mesh: mesh,
                                    normals: normals, pose: pose, gravity: gravity, solver: .gpu, device: device ?? self.device, sidecar: sidecar)
         XCTAssertTrue(harness.attached, "the shirt attached")
         XCTAssertEqual(harness.cloth.activeSolver, .gpu, "the shirt is not on the GPU solver (\(harness.cloth.report))")
@@ -170,6 +176,16 @@ final class ZombieClothGPUTests: XCTestCase {
         configuration.gpuAveragedJacobi = averaged
         configuration.gpuHullFriction = hullFriction
         configuration.collisionModel = collisionModel
+        return configuration
+    }
+
+    /// The GPU configuration with the hull candidates on. They are an
+    /// option since 2026-11-10 (`gpuHullCandidates` is off by default,
+    /// the every-hull loop being the exact one), so a test that reads the
+    /// candidate loop asks for it by name.
+    private var withHullCandidates: ZombieCloth.Configuration {
+        var configuration = gpuConfiguration()
+        configuration.gpuHullCandidates = true
         return configuration
     }
 
@@ -390,6 +406,830 @@ final class ZombieClothGPUTests: XCTestCase {
         print("cloth gpu hulls: \(counts) planes, \(total) in all over \(colliders.reduce(0) { $0 + $1.pointVectors.count }) points; \(h.cloth.report)")
     }
 
+    // MARK: - The hull candidates and the coplanar merge (2026-11-04)
+
+    /// The skeleton tree the solver reads off the sidecar's joint paths and
+    /// the candidates it derives from it, on both proxies. The shirt's
+    /// thirteen feed joints are the pelvis, three spine links, the neck,
+    /// the two clavicles, upper arms and forearms and the two thighs, so
+    /// the parents are [-1, 0, 1, 2, 3, 3, 5, 6, 3, 8, 9, 0, 0], and the
+    /// eleven hulls sit on joints 0-10 in the sidecar's order (pelvis,
+    /// spine 1-3, neck, clavicle l, clavicle r, upper arm l, upper arm r,
+    /// forearm l, forearm r). Every pin has none; every free particle's
+    /// list is sorted, duplicate-free, at most four long, and is the rule's
+    /// set — the hulls of its influence joints and of their parents and
+    /// children — whenever that set has four or fewer, and four of it when
+    /// it has more. Measured 2026-11-04: at 4k the 3,463 free particles
+    /// have 1 / 2 / 3 / 4 candidates 80 / 294 / 923 / 2,166 times, 1,249
+    /// of them capped from up to 9 (a spine-link particle has the links
+    /// above and below, the neck and both clavicles; one on spine 3 with a
+    /// clavicle influence reaches 9); at 16k 276 / 1,332 / 3,770 / 8,753
+    /// over 14,131 free particles, 5,047 capped. The cap keeps an influence
+    /// joint's own hull on every particle but the few whose own hull is
+    /// farther at rest than four neighbours' (printed). What the list
+    /// costs in contacts is the three tests' below: nothing in the six
+    /// motions the first two play, and a great deal over the chase's
+    /// clips and the falls, which is why the candidates are an option and
+    /// the default configuration walks every hull — held here too, on a
+    /// second harness per proxy: `gpuHullCandidates` false, the solver's
+    /// `walksEveryHull` true and the report's `hullCandidates=off`, where
+    /// the harness that asks for the candidates reads `on`. That the
+    /// four kept ARE the nearest is held too (2026-11-10, the review's
+    /// gap: the count and the membership alone would pass a cap that kept
+    /// any four): each qualifying hull's signed distance to the particle's
+    /// rest position is taken again here, in the hull's bind frame from
+    /// the sidecar's own matrices, and no kept hull may read farther than
+    /// a dropped one by more than a tenth of a millimetre — the solver
+    /// ranks in the attach's world frame, so the two orders agree to the
+    /// float rounding of a rigid transform and not to the bit.
+    func testTheHullCandidatesFollowTheSkeleton() throws {
+        for (label, sidecar, expectedHistogram, expectedCapped) in [("4k", nil, [0, 80, 294, 923, 2166], 1249), ("16k", ClothFixtures.sidecar16kName, [0, 276, 1332, 3770, 8753], 5047)] {
+            let h = try makeHarness(configuration: withHullCandidates, sidecar: sidecar)
+            let solver = try gpu(h)
+            let candidates = try XCTUnwrap(solver.hullCandidates, "\(label): no candidates were built")
+            let shirt = h.shirt
+            // The default configuration builds the same lists and does not
+            // read them: every hull on every particle.
+            let shipped = try makeHarness(configuration: gpuConfiguration(), sidecar: sidecar)
+            XCTAssertFalse(ZombieCloth.Configuration().gpuHullCandidates, "the candidates are off by default")
+            XCTAssertFalse(shipped.cloth.configuration.gpuHullCandidates, "\(label): the default harness asks for no candidates")
+            XCTAssertTrue(try gpu(shipped).walksEveryHull, "\(label): the default configuration walks every hull")
+            XCTAssertEqual(try gpu(shipped).hullCandidates?.words, candidates.words, "\(label): the lists are built the same with the option off")
+            XCTAssertTrue(shipped.cloth.report.hasSuffix("hullCandidates=off"), shipped.cloth.report)
+            XCTAssertTrue(shipped.cloth.summary.contains("hullCandidates=off"), shipped.cloth.summary)
+            XCTAssertTrue(h.cloth.report.hasSuffix("hullCandidates=on"), h.cloth.report)
+            XCTAssertTrue(h.cloth.summary.contains("hullCandidates=on"), h.cloth.summary)
+            XCTAssertEqual(candidates.parents, [-1, 0, 1, 2, 3, 3, 5, 6, 3, 8, 9, 0, 0], "\(label): the tree off the joint paths")
+            XCTAssertFalse(candidates.everyHull, "\(label): the shirt has joint paths")
+            XCTAssertEqual(solver.hullPlaneSets.map(\.joint), [0, 1, 2, 3, 4, 5, 8, 6, 9, 7, 10], "\(label): the hulls' joints in the sidecar's order")
+            XCTAssertEqual(candidates.words.count, shirt.particles.count)
+            var hullsOfJoint = [[Int]](repeating: [], count: candidates.parents.count)
+            for (hull, set) in solver.hullPlaneSets.enumerated() { hullsOfJoint[set.joint].append(hull) }
+            var children = [[Int]](repeating: [], count: candidates.parents.count)
+            for (joint, parent) in candidates.parents.enumerated() where parent >= 0 { children[parent].append(joint) }
+            let inverseBind = shirt.bindMatrices.map(\.inverse)
+            // The rest positions once (the asset builds the array at every
+            // read) and each hull's planes as plain floats, for the few
+            // million plane tests of the cap's check in a debug build.
+            let restPositions = shirt.positions
+            let flatPlanes: [[Float]] = solver.hullPlaneSets.map { set in set.planes.flatMap { [$0.x, $0.y, $0.z, $0.w] } }
+            func restDistance(_ hull: Int, _ p: SIMD3<Float>) -> Float {
+                let local = inverseBind[solver.hullPlaneSets[hull].joint] * SIMD4(p, 1)
+                let x = local.x, y = local.y, z = local.z
+                var worst = -Float.greatestFiniteMagnitude
+                flatPlanes[hull].withUnsafeBufferPointer { planes in
+                    var k = 0
+                    while k < planes.count {
+                        let d = planes[k] * x + planes[k + 1] * y + planes[k + 2] * z + planes[k + 3]
+                        if d > worst { worst = d }
+                        k += 4
+                    }
+                }
+                return worst
+            }
+            var ownHullDropped = 0, pins = 0, free = 0, rankedWrong = 0, closestCall = Float.greatestFiniteMagnitude
+            for i in shirt.particles.indices {
+                let list = candidates.candidates(of: i)
+                if shirt.maxDistance[i] == 0 {
+                    pins += 1
+                    XCTAssertTrue(list.isEmpty, "\(label): pin \(i) has candidates \(list)")
+                    continue
+                }
+                free += 1
+                XCTAssertFalse(list.isEmpty, "\(label): free particle \(i) has no candidate")
+                XCTAssertLessThanOrEqual(list.count, zcHullCandidateCount, "\(label): particle \(i) carries \(list.count)")
+                XCTAssertEqual(list, list.sorted(), "\(label): particle \(i)'s candidates are not ascending")
+                XCTAssertEqual(Set(list).count, list.count, "\(label): particle \(i) names a hull twice")
+                var expected = Set<Int>(), own = Set<Int>()
+                for pair in shirt.influences[i] where pair[1] > 0 {
+                    let joint = Int(pair[0])
+                    expected.formUnion(hullsOfJoint[joint])
+                    own.formUnion(hullsOfJoint[joint])
+                    if candidates.parents[joint] >= 0 { expected.formUnion(hullsOfJoint[candidates.parents[joint]]) }
+                    for child in children[joint] { expected.formUnion(hullsOfJoint[child]) }
+                }
+                if expected.count <= zcHullCandidateCount {
+                    XCTAssertEqual(Set(list), expected, "\(label): particle \(i)'s candidates are not the rule's set")
+                } else {
+                    XCTAssertEqual(list.count, zcHullCandidateCount, "\(label): particle \(i) had \(expected.count) qualifying hulls and keeps \(list.count)")
+                    XCTAssertTrue(Set(list).isSubset(of: expected), "\(label): particle \(i) keeps a hull the rule did not name")
+                    if !own.isSubset(of: Set(list)) { ownHullDropped += 1 }
+                    // The four kept are the four nearest at rest.
+                    var farthestKept = -Float.greatestFiniteMagnitude, nearestDropped = Float.greatestFiniteMagnitude
+                    for hull in expected {
+                        let distance = restDistance(hull, restPositions[i])
+                        if list.contains(hull) { farthestKept = max(farthestKept, distance) } else { nearestDropped = min(nearestDropped, distance) }
+                    }
+                    closestCall = min(closestCall, nearestDropped - farthestKept)
+                    if farthestKept > nearestDropped + 1e-4 {
+                        rankedWrong += 1
+                        if rankedWrong <= 5 {
+                            XCTFail("\(label): particle \(i) keeps a hull \(farthestKept) m from its rest position and drops one at \(nearestDropped) m (kept \(list) of \(expected.sorted()))")
+                        }
+                    }
+                }
+            }
+            XCTAssertEqual(rankedWrong, 0, "\(label): \(rankedWrong) capped particles do not keep their four nearest hulls")
+            XCTAssertEqual(candidates.histogram, expectedHistogram, "\(label): the candidate-count histogram")
+            XCTAssertEqual(candidates.capped, expectedCapped, "\(label): the particles capped")
+            XCTAssertEqual(candidates.histogram.reduce(0, +), free)
+            XCTAssertEqual(candidates.particlesPerHull.count, 11)
+            XCTAssertFalse(solver.walksEveryHull, "\(label): with the option on the shirt's solve walks its candidates")
+            print(String(format: "cloth gpu hull candidates, %@: %d free and %d pinned particles; %@; %d particles lost an influence joint's own hull to the cap; the nearest dropped hull is %.1f mm farther at rest than the farthest kept at the closest call",
+                         label, free, pins, candidates.description, ownHullDropped, closestCall * 1000))
+        }
+    }
+
+    /// The candidate loop against the every-hull loop on the four harness
+    /// poses the fit tests use, both proxies — the hang on the bind pose
+    /// (200 frames), the sway (300), the arms-forward idle (200) and the
+    /// arm swing (60, the left arm from the bind pose to the idle and held)
+    /// — two harnesses per scenario driven identically, one asking for the
+    /// candidates (`gpuHullCandidates` on) and one on every hull, the
+    /// default, the solvers recording which hulls pushed each particle in
+    /// each frame (`recordHullContacts`, `ZCHullContactsIndex`): every
+    /// particle's per-frame contact set must be the same on both paths, and
+    /// because both loops apply their push-outs in ascending hull order the
+    /// position buffers must then be bitwise equal frame after frame, which
+    /// is the stronger check and the one the every-hull reference cannot
+    /// pass by accident. A lost contact would print the particle, the
+    /// frame, its influences, its candidates and the hull that pushed it on
+    /// the reference path. Measured 2026-11-04 none is, on either proxy in
+    /// any of the four, and no particle meets more than two hulls in a
+    /// frame (the armpit, a clavicle's hull and its upper arm's). The
+    /// arms-forward idle and the swing are held to produce contacts at all,
+    /// so the diff is not vacuous. This is a statement about these four
+    /// poses and no other motion: in none of them does a sleeve meet the
+    /// torso, and over the chase's clips and the falls the lists lose
+    /// contacts in number
+    /// (`testTheCandidateRuleLosesContactsOnTheChaseClipsAndFalls`), which
+    /// is why the candidates are off by default. What the test still holds
+    /// is that the two loops are one kernel wherever their contact sets
+    /// agree.
+    func testTheCandidateHullLoopLosesNoContact() throws {
+        guard let pose = try ClothFixtures.clipPose(ZombieResources.waitingClip, at: 1.0), let joints = ClothFixtures.skeleton else { throw XCTSkip("the idle clip is not bundled") }
+        var everyHull = gpuConfiguration()
+        everyHull.gpuHullCandidates = false
+        let scenarios: [(name: String, frames: Int, posed: Bool)] = [("hang", 200, false), ("sway", 300, false), ("arms forward", 200, true), ("arm swing", 60, false)]
+        for (label, sidecar) in [("4k", nil), ("16k", ClothFixtures.sidecar16kName)] {
+            for scenario in scenarios {
+                let a = try makeHarness(configuration: withHullCandidates, pose: scenario.posed ? pose : nil, sidecar: sidecar)
+                let b = try makeHarness(configuration: everyHull, pose: scenario.posed ? pose : nil, sidecar: sidecar)
+                let ga = try gpu(a), gb = try gpu(b)
+                XCTAssertEqual(ga.hullCount, 11); XCTAssertEqual(gb.hullCount, 11)
+                XCTAssertFalse(ga.walksEveryHull); XCTAssertTrue(gb.walksEveryHull)
+                ga.recordHullContacts = true
+                gb.recordHullContacts = true
+                let candidates = try XCTUnwrap(ga.hullCandidates)
+                let count = a.shirt.particles.count
+                var perHull = [Int](repeating: 0, count: 11), contactsInAll = 0, mostOnOne = 0, differing = 0, positionFrames = 0
+                var lost: [String] = []
+                for frame in 0 ..< scenario.frames {
+                    switch scenario.name {
+                    case "sway":
+                        let t = a.time + a.dt
+                        let swayed = a.pose(offset: SIMD3(0.1 * sin(2 * Float.pi * t), 0, 0))
+                        a.body.pose = swayed; b.body.pose = swayed
+                    case "arm swing":
+                        let t = min(Float(frame + 1) / 30, 1)
+                        let swung = try XCTUnwrap(ClothMetrics.interpolatedPose(from: joints.bindModelTransforms, to: pose, at: t, only: { $0.contains("/clavicle_l") }))
+                        a.body.pose = swung; b.body.pose = swung
+                    default:
+                        break
+                    }
+                    a.frame(); b.frame()
+                    let ca = ga.hullContacts(), cb = gb.hullContacts()
+                    XCTAssertEqual(ca.count, count); XCTAssertEqual(cb.count, count)
+                    for i in 0 ..< count {
+                        let reference = cb[i]
+                        if reference != 0 {
+                            contactsInAll += 1
+                            mostOnOne = max(mostOnOne, reference.nonzeroBitCount)
+                            for hull in 0 ..< 11 where reference & (1 << UInt32(hull)) != 0 { perHull[hull] += 1 }
+                        }
+                        if ca[i] != reference {
+                            differing += 1
+                            if lost.count < 12 {
+                                lost.append("frame \(frame) particle \(i) (influences \(a.shirt.influences[i].map { "\(Int($0[0])):\($0[1])" }), candidates \(candidates.candidates(of: i))): candidates pushed by \(String(ca[i], radix: 2)), every hull by \(String(reference, radix: 2))")
+                            }
+                        }
+                    }
+                    let bytes = count * MemoryLayout<SIMD4<Float>>.stride
+                    if Data(bytes: try XCTUnwrap(ga.currentPositionBuffer).contents(), count: bytes) != Data(bytes: try XCTUnwrap(gb.currentPositionBuffer).contents(), count: bytes) {
+                        positionFrames += 1
+                    }
+                }
+                XCTAssertEqual(differing, 0, "\(label), \(scenario.name): \(differing) particle-frames differ in which hulls pushed them: \(lost.joined(separator: "; "))")
+                XCTAssertEqual(positionFrames, 0, "\(label), \(scenario.name): the two loops' positions differ in \(positionFrames) of \(scenario.frames) frames")
+                if scenario.posed || scenario.name == "arm swing" {
+                    XCTAssertGreaterThan(contactsInAll, 0, "\(label), \(scenario.name): no hull pushed any particle, so nothing was diffed")
+                }
+                XCTAssertEqual(a.cloth.runawayCount, 0); XCTAssertEqual(b.cloth.runawayCount, 0)
+                print("cloth gpu hull contacts, \(label), \(scenario.name) (\(scenario.frames) frames): \(contactsInAll) particle-frames pushed by a hull, per hull \(perHull), at most \(mostOnOne) hulls on one particle in a frame; \(differing) differ between the candidate and the every-hull loop, positions bitwise equal in \(scenario.frames - positionFrames) of \(scenario.frames) frames; \(a.cloth.report)")
+            }
+        }
+    }
+
+    /// The same diff on two of the clips the chase plays, the 100STYLE walk
+    /// and run (`s100_walk`, `s100_run`, a second and a half of each from
+    /// the clip's first second, sampled every 10 ms the way the clip-ground
+    /// test samples a clip, the root's travel kept from the sample's start
+    /// so the body moves over the floor at the clip's own speed and the
+    /// shirt lags it), blended in from the bind pose over thirty frames.
+    /// Two harnesses per clip and proxy, driven identically, the candidates
+    /// asked for on one and every hull, the default, on the other, the
+    /// contact masks and the position buffers compared every frame as
+    /// above; the counts are printed, and a clip that is not bundled skips
+    /// its row. Measured 2026-11-10: no contact differs on either proxy and
+    /// the positions are bitwise equal in every frame. The arms hang and
+    /// swing beside the body in both clips and no sleeve reaches the torso
+    /// (the pelvis and spine-2 hulls take no contact, spine 1 eleven at
+    /// 16k). The test covers these two clips and says nothing of the rest:
+    /// the Kimodo turns, the pack's clips and the knockdowns lose contacts
+    /// (the test below).
+    func testTheCandidateHullLoopLosesNoContactOnTheChaseClips() throws {
+        guard let joints = ClothFixtures.skeleton else { throw XCTSkip("the model is not bundled") }
+        var everyHull = gpuConfiguration()
+        everyHull.gpuHullCandidates = false
+        let blend = 30, played = 150
+        var measured = 0
+        for clip in ["s100_walk", "s100_run"] {
+            guard var poses = try ClothFixtures.clipPoses(clip, at: { duration in (0 ..< played).map { min(1.0 + Float($0) * 0.01, duration) } }), let first = poses.first,
+                  let root = joints.parentIndices.firstIndex(where: { $0 == nil }) else { continue }
+            // The travel from the sample's start, not from the clip's: the
+            // blend from the bind pose then stays in place.
+            let start = SIMD4(first[root].columns.3.x, 0, first[root].columns.3.z, 0)
+            for k in poses.indices { for j in poses[k].indices { poses[k][j].columns.3 -= start } }
+            let travel = simd_distance(poses[0][root].columns.3, poses[played - 1][root].columns.3)
+            for (label, sidecar) in [("4k", nil), ("16k", ClothFixtures.sidecar16kName)] {
+                let a = try makeHarness(configuration: withHullCandidates, sidecar: sidecar)
+                let b = try makeHarness(configuration: everyHull, sidecar: sidecar)
+                let ga = try gpu(a), gb = try gpu(b)
+                XCTAssertEqual(ga.hullCount, 11); XCTAssertEqual(gb.hullCount, 11)
+                XCTAssertFalse(ga.walksEveryHull); XCTAssertTrue(gb.walksEveryHull)
+                ga.recordHullContacts = true
+                gb.recordHullContacts = true
+                let candidates = try XCTUnwrap(ga.hullCandidates)
+                let count = a.shirt.particles.count
+                var perHull = [Int](repeating: 0, count: 11), contactsInAll = 0, mostOnOne = 0, differing = 0, positionFrames = 0
+                var lost: [String] = []
+                for frame in 0 ..< blend + played {
+                    let pose = frame < blend
+                        ? try XCTUnwrap(ClothMetrics.interpolatedPose(from: joints.bindModelTransforms, to: poses[0], at: Float(frame + 1) / Float(blend)))
+                        : poses[frame - blend]
+                    a.body.pose = pose; b.body.pose = pose
+                    a.frame(); b.frame()
+                    let ca = ga.hullContacts(), cb = gb.hullContacts()
+                    XCTAssertEqual(ca.count, count); XCTAssertEqual(cb.count, count)
+                    for i in 0 ..< count {
+                        let reference = cb[i]
+                        if reference != 0 {
+                            contactsInAll += 1
+                            mostOnOne = max(mostOnOne, reference.nonzeroBitCount)
+                            for hull in 0 ..< 11 where reference & (1 << UInt32(hull)) != 0 { perHull[hull] += 1 }
+                        }
+                        if ca[i] != reference {
+                            differing += 1
+                            if lost.count < 12 {
+                                lost.append("frame \(frame) particle \(i) (influences \(a.shirt.influences[i].map { "\(Int($0[0])):\($0[1])" }), candidates \(candidates.candidates(of: i))): candidates pushed by \(String(ca[i], radix: 2)), every hull by \(String(reference, radix: 2))")
+                            }
+                        }
+                    }
+                    let bytes = count * MemoryLayout<SIMD4<Float>>.stride
+                    if Data(bytes: try XCTUnwrap(ga.currentPositionBuffer).contents(), count: bytes) != Data(bytes: try XCTUnwrap(gb.currentPositionBuffer).contents(), count: bytes) {
+                        positionFrames += 1
+                    }
+                }
+                XCTAssertEqual(differing, 0, "\(label), \(clip): \(differing) particle-frames differ in which hulls pushed them: \(lost.joined(separator: "; "))")
+                XCTAssertEqual(positionFrames, 0, "\(label), \(clip): the two loops' positions differ in \(positionFrames) of \(blend + played) frames")
+                XCTAssertGreaterThan(contactsInAll, 0, "\(label), \(clip): no hull pushed any particle, so nothing was diffed")
+                print(String(format: "cloth gpu hull contacts, %@, %@ (%d frames, the body travelling %.2f m): %d particle-frames pushed by a hull, per hull %@, at most %d hulls on one particle in a frame; %d differ between the candidate and the every-hull loop, positions bitwise equal in %d of %d frames; hard skins %d and %d, runaways %d and %d; %@",
+                             label, clip, blend + played, travel, contactsInAll, "\(perHull)", mostOnOne, differing, blend + played - positionFrames, blend + played,
+                             a.cloth.hardSkinCount, b.cloth.hardSkinCount, a.cloth.runawayCount, b.cloth.runawayCount, a.cloth.report))
+                measured += 1
+            }
+        }
+        if measured == 0 { throw XCTSkip("the 100STYLE walk and run clips are not bundled") }
+    }
+
+    /// What the candidate rule loses, pinned, and why `gpuHullCandidates`
+    /// is off by default (2026-11-10). The two tests above stand on six
+    /// motions — the hang, the sway, the arms-forward idle, the arm swing,
+    /// the walk and the run — in none of which a sleeve meets the torso:
+    /// the pelvis and spine-2 hulls take no contact in any of them. Here
+    /// the every-hull loop, the shipped path, runs alone and records which
+    /// hulls pushed each particle in each frame (`recordHullContacts`),
+    /// and every contact is held against the rule's own list for that
+    /// particle, the words the solver builds at every attach
+    /// (`hullCandidates`): a contact with a hull the list does not name is
+    /// one the candidate loop cannot make, so the loss is counted on the
+    /// reference's own trajectory and no divergence between two runs is
+    /// taken for one. The scenes: the mixed set's clips (the eight
+    /// 100STYLE captures and the eighteen Kimodo gap clips), the two
+    /// arm-posture takes the pose layer plays over the chase and the wall
+    /// hold, a second of each at 10 ms a frame from the clip's first
+    /// second (from its start when it is under two seconds long), one
+    /// harness a proxy carried through them all the way the chase carries
+    /// the shirt from clip to clip — the next clip's first pose blended in
+    /// over twenty frames from wherever the last left the body, its travel
+    /// continued from the pelvis's place; and three knockdowns, where the
+    /// body is the ragdoll's and no clip's: the harness's powered ragdoll
+    /// stands for thirty frames, lets go with the knockdown's shove
+    /// (`ZombiePhysics.collapse(along:)`) forward, backward or sideways
+    /// and falls onto the floor slab for 220 more, the parts' pose read
+    /// each frame as the game reads it when the zombie is down
+    /// (`readRagdollPose`, every part's weight 1, a joint without a part
+    /// riding its parent at the bind offset). That is every clip the
+    /// 100STYLE and mixed sets play, 29 with the arm postures and the wall
+    /// hold, and three falls, about two and a half minutes on both
+    /// proxies; with `COOLZOMBIE_CLOTH_ALL_CLIPS` set the list grows by
+    /// the Kimodo core and the pack's clips, every clip bundled, about six
+    /// minutes, the run the README's larger figures are from. A clip that
+    /// is not bundled is skipped and the count printed.
+    ///
+    /// Measured 2026-11-10 on the suite's list: the lists lack a hull that
+    /// pushed in 121,655 particle-frames at 4k (2,229 distinct
+    /// particle-hull pairs; 882 in the clips, all in five Kimodo turns and
+    /// runs, and 120,773 in the falls) and in 415,842 at 16k (8,646 pairs;
+    /// 3,457 and 412,385). On every bundled clip, 77 with the pack: 866,205
+    /// particle-frames at 4k (5,385 distinct particle-hull pairs) and
+    /// 2,858,798 at 16k (21,624), the worst scenes the falls forward and
+    /// sideways, the pack's `walk_6`, `walk_3`, `chase_3`, its hyper runs
+    /// and `hold_3`. What is lost is arm against torso — the spine-2 hull
+    /// on the upper arms' and the forearms' particles, the arms' hulls on
+    /// the spine's and the pelvis's — three joints apart along the tree and
+    /// more, and touching in the pose, which no step count along a tree
+    /// follows: the two wider rules printed beside the rule's row (one step
+    /// without the cap of four, two steps without it) lose less and still
+    /// lose (674,341 and 266,275 particle-frames at 4k on every bundled
+    /// clip, 2,234,011 and 894,936 at 16k). A lost contact is a sleeve or a
+    /// forearm through the shirt. Asserted: the loss is above zero on both
+    /// proxies. If it is ever zero the rule has become exact and the
+    /// default may be reconsidered.
+    func testTheCandidateRuleLosesContactsOnTheChaseClipsAndFalls() throws {
+        guard let joints = ClothFixtures.skeleton, let pelvis = joints.jointPaths.firstIndex(of: "/root/pelvis") else { throw XCTSkip("the model is not bundled") }
+        let blend = 20, played = 100, standing = 30, down = 220
+        let wide = ProcessInfo.processInfo.environment["COOLZOMBIE_CLOTH_ALL_CLIPS"] != nil
+        var seen = Set<String>()
+        let names = (ZombieResources.mixedClips + ZombieResources.armPostureClips + [ZombieResources.contactClip]
+            + (wide ? ZombieResources.kimodoCoreClips + ZombieResources.packClips : [])).filter { seen.insert($0).inserted }
+        var clips: [(name: String, poses: [[simd_float4x4]])] = []
+        for name in names {
+            guard let poses = try ClothFixtures.clipPoses(name, at: { duration in
+                let start: Float = duration > 2 ? 1 : 0
+                return (0 ..< played).map { min(start + Float($0) * 0.01, duration) }
+            }), poses.count == played else { continue }
+            clips.append((name, poses))
+        }
+        let bindLocal = joints.bindModelTransforms.indices.map { j in
+            joints.parentIndices[j].map { joints.bindModelTransforms[$0].inverse * joints.bindModelTransforms[j] } ?? joints.bindModelTransforms[j]
+        }
+        let falls: [(name: String, direction: SIMD3<Float>)] = [("fall forward", SIMD3(0, 0, 1)), ("fall backward", SIMD3(0, 0, -1)), ("fall sideways", SIMD3(1, 0, 0))]
+        for (label, sidecar) in [("4k", nil), ("16k", ClothFixtures.sidecar16kName)] {
+            // The reference is the default configuration: every hull.
+            let reference = try makeHarness(configuration: gpuConfiguration(), sidecar: sidecar)
+            let solver = try gpu(reference)
+            XCTAssertTrue(solver.walksEveryHull, "\(label): the default configuration walks every hull")
+            solver.recordHullContacts = true
+            let candidates = try XCTUnwrap(solver.hullCandidates, "\(label): no candidates were built")
+            XCTAssertFalse(candidates.everyHull, "\(label): the shirt has joint paths")
+            let shirt = reference.shirt
+            let count = shirt.particles.count
+            let hullJoint = solver.hullPlaneSets.map(\.joint)
+            let hullCount = hullJoint.count
+            let parents = candidates.parents
+            var children = [[Int]](repeating: [], count: parents.count)
+            for (joint, parent) in parents.enumerated() where parent >= 0 { children[parent].append(joint) }
+            var hullsOfJoint = [[Int]](repeating: [], count: parents.count)
+            for (hull, joint) in hullJoint.enumerated() { hullsOfJoint[joint].append(hull) }
+            func neighbours(_ joint: Int) -> [Int] { (parents[joint] >= 0 ? [parents[joint]] : []) + children[joint] }
+            func mask(of jointSet: Set<Int>) -> UInt32 {
+                var bits: UInt32 = 0
+                for joint in jointSet { for hull in hullsOfJoint[joint] { bits |= 1 << UInt32(hull) } }
+                return bits
+            }
+            func jointName(_ joint: Int) -> String { shirt.jointPaths.indices.contains(joint) ? String(shirt.jointPaths[joint].split(separator: "/").last ?? "") : "\(joint)" }
+            // The rule's masks as the solver packed them, and the two wider
+            // rules off the same tree for the print: one step along it
+            // without the cap of four, and two steps without it.
+            var ruleMasks = [UInt32](repeating: 0, count: count), oneStep = ruleMasks, twoSteps = ruleMasks
+            var dominant = [Int](repeating: -1, count: count)
+            for i in 0 ..< count where shirt.maxDistance[i] > 0 {
+                for hull in candidates.candidates(of: i) { ruleMasks[i] |= 1 << UInt32(hull) }
+                var own = Set<Int>()
+                for pair in shirt.influences[i] where pair[1] > 0 { own.insert(Int(pair[0])) }
+                var one = own
+                for joint in own { one.formUnion(neighbours(joint)) }
+                var two = one
+                for joint in one { two.formUnion(neighbours(joint)) }
+                oneStep[i] = mask(of: one)
+                twoSteps[i] = mask(of: two)
+                dominant[i] = shirt.influences[i].max { $0[1] < $1[1] }.map { Int($0[0]) } ?? -1
+            }
+            let rules: [(name: String, masks: [UInt32])] = [("the rule", ruleMasks), ("one step, uncapped", oneStep), ("two steps, uncapped", twoSteps)]
+            var lostByScene = [[String: Int]](repeating: [:], count: rules.count)
+            var lostPairs = [Set<Int>](repeating: [], count: rules.count)
+            var relations: [String: Int] = [:]
+            var pushed = 0, frames = 0
+            func account(_ contacts: [UInt32], scene: String) {
+                XCTAssertEqual(contacts.count, count)
+                guard contacts.count == count else { return }
+                frames += 1
+                for i in 0 ..< count where contacts[i] != 0 {
+                    pushed += 1
+                    for r in rules.indices {
+                        let missing = contacts[i] & ~rules[r].masks[i]
+                        guard missing != 0 else { continue }
+                        lostByScene[r][scene, default: 0] += 1
+                        for hull in 0 ..< hullCount where missing & (1 << UInt32(hull)) != 0 {
+                            if lostPairs[r].insert(i * 32 + hull).inserted, r == 0 {
+                                relations["the \(jointName(hullJoint[hull])) hull on a \(jointName(dominant[i])) particle", default: 0] += 1
+                            }
+                        }
+                    }
+                }
+            }
+            // The clips, carried.
+            var current = joints.bindModelTransforms
+            for clip in clips {
+                // The clip's travel continued from where the body stands.
+                let offset = SIMD4(current[pelvis].columns.3.x - clip.poses[0][pelvis].columns.3.x, 0, current[pelvis].columns.3.z - clip.poses[0][pelvis].columns.3.z, 0)
+                let poses = clip.poses.map { pose in pose.map { m -> simd_float4x4 in var moved = m; moved.columns.3 += offset; return moved } }
+                let from = current
+                for k in 0 ..< blend + played {
+                    let pose = k < blend ? try XCTUnwrap(ClothMetrics.interpolatedPose(from: from, to: poses[0], at: Float(k + 1) / Float(blend))) : poses[k - blend]
+                    reference.body.pose = pose
+                    reference.frame()
+                    account(solver.hullContacts(), scene: clip.name)
+                    current = pose
+                }
+            }
+            let lostInClips = lostByScene[0].values.reduce(0, +)
+            // The knockdowns, a fresh shirt each.
+            var runaways = reference.cloth.runawayCount
+            for fall in falls {
+                let h = try makeHarness(configuration: gpuConfiguration(), sidecar: sidecar)
+                let g = try gpu(h)
+                XCTAssertTrue(g.walksEveryHull)
+                g.recordHullContacts = true
+                let rig = try XCTUnwrap(h.physics.rig, "the harness has no ragdoll")
+                let weights = [Float](repeating: 1, count: rig.partCount)
+                var lowestPelvis = Float.greatestFiniteMagnitude
+                for frame in 0 ..< standing + down {
+                    if frame == standing {
+                        h.physics.collapse(along: fall.direction)
+                        XCTAssertTrue(h.physics.isDown)
+                    }
+                    if frame >= standing {
+                        let physics = try XCTUnwrap(h.physics.readRagdollPose(entityWorld: h.body.world, partWeights: weights))
+                        var pose = [simd_float4x4](repeating: matrix_identity_float4x4, count: joints.jointPaths.count)
+                        for j in pose.indices {
+                            pose[j] = physics.weights[j] > 0 ? physics.transforms[j] : (joints.parentIndices[j].map { pose[$0] } ?? matrix_identity_float4x4) * bindLocal[j]
+                        }
+                        h.body.pose = pose
+                        lowestPelvis = min(lowestPelvis, pose[pelvis].columns.3.y)
+                    }
+                    h.frame()
+                    account(g.hullContacts(), scene: fall.name)
+                }
+                XCTAssertLessThan(lowestPelvis, 0.5, "\(label), \(fall.name): the body did not fall (the pelvis's lowest \(lowestPelvis) m)")
+                runaways += h.cloth.runawayCount
+            }
+            let lost = lostByScene[0].values.reduce(0, +)
+            XCTAssertGreaterThan(pushed, 0, "\(label): no hull pushed any particle, so nothing was held against the rule")
+            XCTAssertGreaterThan(lost, 0, "\(label): the candidate rule lacks no contact the every-hull loop made through \(clips.count) clips and \(falls.count) knockdowns. If this is ever zero the rule has become exact and the default (`gpuHullCandidates` off) may be reconsidered")
+            let worst = lostByScene[0].sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }.prefix(12).map { "\($0.key) \($0.value)" }.joined(separator: ", ")
+            let related = relations.sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }.prefix(10).map { "\($0.key) x\($0.value)" }.joined(separator: ", ")
+            let wider = rules.indices.dropFirst().map { "\(rules[$0].name) \(lostByScene[$0].values.reduce(0, +)) particle-frames / \(lostPairs[$0].count) pairs" }.joined(separator: "; ")
+            print("cloth gpu candidate rule, \(label), \(clips.count) of \(names.count) clips (\(blend) + \(played) frames each) and \(falls.count) knockdowns (\(standing + down) each), \(frames) frames on the every-hull loop: \(pushed) particle-frames pushed by a hull; the rule's list lacks a hull that pushed in \(lost) of them (\(lostInClips) in the clips, \(lost - lostInClips) in the knockdowns), \(lostPairs[0].count) distinct particle-hull pairs; worst scenes: \(worst); by relation (distinct pairs): \(related); wider rules off the same tree: \(wider); runaways \(runaways)")
+        }
+    }
+
+    /// The coplanar merge on the sidecar's eleven hulls: planes within 3
+    /// degrees and 1 mm of one another merged into the farthest-out one,
+    /// which takes the brute force's 87 / 83 / 82 / 88 / 52 / 84 / 82 /
+    /// 66 / 72 / 60 / 60 (816) to 73 / 75 / 75 / 72 / 44 / 72 / 72 / 63 /
+    /// 64 / 58 / 56 (724), 92 planes fewer (measured 2026-11-04 in double
+    /// precision, as the planes are found). Every kept plane is one the
+    /// brute force found, so the merged hull contains the raw one; every
+    /// hull point reads inside the merged set within 1e-5 m; the widest
+    /// pair merged is reported (a group is greedy around its seed, so a
+    /// removed plane can lie up to twice the tolerance from the one kept
+    /// for it) and held under twice the tolerances; and the merge depth —
+    /// how much deeper a particle can sink at a merged face, read at the
+    /// removed planes' own face points — is 2.8 mm at the pelvis, 1.9 at
+    /// spine 2, under a millimetre on the forearms and the neck, held
+    /// under 3.5 mm. The attached solver carries the merged count only
+    /// under `gpuPlaneMerge`, which is off by default — on a hot GPU the
+    /// merge reads a few per cent on top of the candidates and about a
+    /// tenth on the 16k with every hull
+    /// (`testTheHullPassCostWithTheArmsForward`), not enough to grow the
+    /// hulls for — and reports the raw count either way.
+    func testTheCoplanarMergeKeepsTheHullPointsInside() throws {
+        guard let colliders = ClothFixtures.asset?.colliders, colliders.count == 11 else { throw XCTSkip("the sidecar carries no skin colliders") }
+        let rawExpected = [87, 83, 82, 88, 52, 84, 82, 66, 72, 60, 60]
+        let mergedExpected = [73, 75, 75, 72, 44, 72, 72, 63, 64, 58, 56]
+        var rawTotal = 0, mergedTotal = 0, worstDepth: Float = 0
+        var lines: [String] = []
+        for (index, collider) in colliders.enumerated() {
+            let points = collider.pointVectors
+            let raw = try XCTUnwrap(GPUClothSolver.HullPlaneSet(points: points, joint: index, vertexRadius: 0.003, mergePlanes: false), "\(collider.joint): no planes")
+            let merged = try XCTUnwrap(GPUClothSolver.HullPlaneSet(points: points, joint: index, vertexRadius: 0.003, mergePlanes: true), "\(collider.joint): no planes")
+            XCTAssertEqual(raw.planeCount, rawExpected[index], "\(collider.joint): the brute force's planes")
+            XCTAssertEqual(raw.mergedPlaneCount, 0)
+            XCTAssertEqual(merged.rawPlaneCount, raw.planeCount)
+            XCTAssertEqual(merged.planeCount + merged.mergedPlaneCount, raw.planeCount, "\(collider.joint): the merge lost count")
+            XCTAssertEqual(merged.planeCount, mergedExpected[index], "\(collider.joint): \(merged.planeCount) planes after the merge")
+            let rawSet = Set(raw.planes.map { "\($0.x.bitPattern),\($0.y.bitPattern),\($0.z.bitPattern),\($0.w.bitPattern)" })
+            for plane in merged.planes {
+                XCTAssertTrue(rawSet.contains("\(plane.x.bitPattern),\(plane.y.bitPattern),\(plane.z.bitPattern),\(plane.w.bitPattern)"), "\(collider.joint): a merged plane is not one the brute force found")
+            }
+            for p in points {
+                XCTAssertTrue(merged.contains(p, tolerance: 1e-5), "\(collider.joint): a hull point reads \(merged.signedDistance(to: p)) m outside the merged set")
+            }
+            XCTAssertLessThanOrEqual(merged.mergeMaxAngleDegrees, 6.001, "\(collider.joint): a removed plane lies \(merged.mergeMaxAngleDegrees) degrees from the plane kept for it")
+            XCTAssertLessThanOrEqual(merged.mergeMaxOffset, 0.002001, "\(collider.joint): a removed plane lies \(merged.mergeMaxOffset) m from the plane kept for it")
+            XCTAssertLessThan(merged.mergeDepth, 0.0035, "\(collider.joint): the merge lets a particle sink \(merged.mergeDepth) m deeper at a face")
+            XCTAssertEqual(merged.boundsMin, raw.boundsMin); XCTAssertEqual(merged.boundsMax, raw.boundsMax)
+            rawTotal += raw.planeCount; mergedTotal += merged.planeCount
+            worstDepth = max(worstDepth, merged.mergeDepth)
+            lines.append(String(format: "%@ %d -> %d (depth %.2f mm, widest pair %.2f deg / %.2f mm)", collider.joint.split(separator: "/").last.map(String.init) ?? collider.joint, raw.planeCount, merged.planeCount, merged.mergeDepth * 1000, merged.mergeMaxAngleDegrees, merged.mergeMaxOffset * 1000))
+        }
+        XCTAssertEqual(rawTotal, 816); XCTAssertEqual(mergedTotal, 724)
+        let h = try makeHarness(configuration: gpuConfiguration())
+        let solver = try gpu(h)
+        XCTAssertEqual(solver.rawPlaneCount, 816)
+        XCTAssertEqual(solver.planeCount, h.cloth.configuration.gpuPlaneMerge ? 724 : 816, "the attached solver's planes under the default merge setting")
+        print("cloth gpu plane merge: \(lines.joined(separator: "; ")); \(rawTotal) -> \(mergedTotal) planes, the deepest merged face \(String(format: "%.2f", worstDepth * 1000)) mm; attached \(solver.planeCount) of \(solver.rawPlaneCount)")
+    }
+
+    /// A GPU load run before every timed frame of the cost tests below, so
+    /// each timed frame finds the GPU in the same clock state whatever was
+    /// timed before it (2026-11-10). The M4 Max's GPU clocks up under load
+    /// and down within milliseconds of idling, and `gpu=` follows the
+    /// clock two to four to one: timed in a fixed order, a variant that
+    /// always came after a 5 ms burst read 1.3 ms and the same variant
+    /// after a row of light ones 3.3 ms, so a fixed order compares the
+    /// neighbours as much as the variants. The heater is the heaviest
+    /// frame the solver has — the finest proxy bundled, every hull on
+    /// every particle, 16 substeps and two gathers, swaying so it never
+    /// sleeps, about 5 ms of GPU — and with it before each timed frame the
+    /// figures are a hot GPU's: the state a headset's GPU is in with the
+    /// render filling most of every frame, and the lowest the Mac reads.
+    /// The heater does not make the rotation flat. The frame before the
+    /// heater still leaves its trace, and one variant reads about a tenth
+    /// apart in two places of one rotation (2026-11-10), so a ratio
+    /// between two rows is good to that and no better.
+    private func makeHeater(pose: [simd_float4x4]?) throws -> ClothHarness {
+        var configuration = gpuConfiguration()
+        configuration.gpuHullCandidates = false
+        let sidecar = ClothFixtures.sidecar(named: ClothFixtures.sidecar16kName) != nil ? ClothFixtures.sidecar16kName : nil
+        return try makeHarness(configuration: configuration, pose: pose, sidecar: sidecar)
+    }
+
+    /// One heater frame: the body moved a millimetre sideways and back so
+    /// the heater's shirt stays awake, then its frame, waited for.
+    private func heat(_ heater: ClothHarness, base: [simd_float4x4]) throws {
+        let offset = SIMD4<Float>(0.001 * sin(2 * Float.pi * (heater.time + heater.dt)), 0, 0, 0)
+        heater.body.pose = base.enumerated().map { index, m in
+            guard heater.joints.parentIndices[index] != nil else { return m }
+            var moved = m
+            moved.columns.3 += offset
+            return moved
+        }
+        heater.frame()
+        try gpu(heater).waitForAll()
+    }
+
+    /// The hull pass's cost at exactly 16 substeps with the arms forward —
+    /// the pose where every hull is in play, the one the second review of
+    /// phase 2 measured its 87 % from — on both proxies, five ways: the
+    /// skin-only model (no hulls, the floor); every hull on every particle,
+    /// the default and the shipped path; every hull with the coplanar
+    /// merge; the candidates, the option; and the candidates with the
+    /// merge. The five harnesses are stepped in turn, frame by frame, 300
+    /// frames each, the turn rotating and a heater frame before every timed
+    /// one (`makeHeater`), so the five read the GPU in the same clock
+    /// state: the Mac release host at 27 substeps swings two to one between
+    /// runs as the GPU clocks up and down, a single `gpu=` reading off a
+    /// report line (the review's 0.49 against 3.65 ms) is one frame in
+    /// whatever state the GPU was in, and the first form of this test
+    /// (2026-11-04), which stepped four variants in a fixed order with no
+    /// heater, read the order: every hull, always after the light skin-only
+    /// frame, 4.2 ms at 16k, the candidates, always after that 4 ms burst,
+    /// 1.2-1.3, and the merge, after the candidates' short frame, 2.3-2.5 —
+    /// "a tenth" and "a millisecond lost", neither of them the kernel's.
+    /// The lowest decile and the median of `gpu=` are printed with this
+    /// run's ratios over the every-hull row, nothing pinned, because the
+    /// figure is a GPU's. Measured 2026-11-10 on the M4 Max, lowest deciles
+    /// (medians about twice them, the GPU still clocking inside a frame's
+    /// CPU work). Five runs of the four-variant rotation the test then had,
+    /// skin only / every hull / candidates / candidates and merge: 4k
+    /// 0.37-0.40 / 0.88-1.14 / 0.74-0.90 / 0.72-0.87 ms, 16k 0.47-0.67 /
+    /// 1.17-1.52 / 1.07-1.25 / 1.07-1.31 ms. Six runs of a six-variant
+    /// rotation, which added every hull with the merge and, for that day,
+    /// every hull on the phase-2 kernel's one-plane walk behind a kernel
+    /// flag since removed, skin only / every hull / every hull and merge /
+    /// candidates / candidates and merge: 4k 0.37-0.39 / 0.88-1.04 /
+    /// 0.87-0.98 / 0.79-0.88 / 0.79-0.87 ms, 16k 0.53-0.59 / 1.48-1.59 /
+    /// 1.35-1.48 / 1.21-1.31 / 1.14-1.27 ms. So the hull pass is half to
+    /// two thirds of either frame with every hull. The candidates take 7 to
+    /// 24 per cent off the 16k frame's lowest decile and 7 to 27 off the
+    /// 4k's, run by run (a solve dispatch on this GPU is the touching
+    /// lane's walk of its hull's 52-88 planes, 125 or 250 simdgroups on a
+    /// GPU that holds many times that, and the candidates do not shorten
+    /// that walk), and they lose contacts, which is why they are the
+    /// option. The merge reads a few per cent on top of the candidates and
+    /// 3 to 14 per cent under no merge on the 16k's lowest decile with
+    /// every hull, and it grows a hull by up to 2.8 mm, which is why it is
+    /// off. And the unrolled plane walk reads 0.86-0.90 of the one-plane
+    /// walk's frame at 4k and 0.88-0.92 at 16k with every hull, place for
+    /// place in the rotation: the two walks were timed in each other's
+    /// places, three runs each, because a variant's place moves it about a
+    /// tenth. That is the unroll's recorded gain. The static pose lets a
+    /// settled shirt sleep (the 4k variants after 221-246 frames); a slept
+    /// frame encodes nothing and is left out.
+    func testTheHullPassCostWithTheArmsForward() throws {
+        guard let pose = try ClothFixtures.clipPose(ZombieResources.waitingClip, at: 1.0) else { throw XCTSkip("the idle clip is not bundled") }
+        var everyHull = gpuConfiguration()
+        everyHull.gpuHullCandidates = false
+        everyHull.gpuPlaneMerge = false
+        var everyHullMerged = everyHull
+        everyHullMerged.gpuPlaneMerge = true
+        var candidates = withHullCandidates
+        candidates.gpuPlaneMerge = false
+        var candidatesMerged = withHullCandidates
+        candidatesMerged.gpuPlaneMerge = true
+        for (label, sidecar) in [("4k", nil), ("16k", ClothFixtures.sidecar16kName)] {
+            let variants = [("skin only", skinOnly), ("every hull (the default)", everyHull), ("every hull, merged planes", everyHullMerged),
+                            ("candidates (the option)", candidates), ("candidates, merged planes", candidatesMerged)]
+            var harnesses: [ClothHarness] = [], solvers: [GPUClothSolver] = []
+            for (_, configuration) in variants {
+                let h = try makeHarness(configuration: configuration, pose: pose, sidecar: sidecar)
+                harnesses.append(h)
+                solvers.append(try gpu(h))
+            }
+            XCTAssertTrue(solvers[1].walksEveryHull); XCTAssertFalse(solvers[3].walksEveryHull)
+            let heater = try makeHeater(pose: pose)
+            var gpuTime = [[Double]](repeating: [], count: variants.count)
+            var substeps = [Int](repeating: 0, count: variants.count)
+            for frame in 0 ..< 300 {
+                // The turn rotates and the heater runs before every timed
+                // frame, so each variant is read after the same burst.
+                for turn in variants.indices {
+                    let v = (frame + turn) % variants.count
+                    try heat(heater, base: pose)
+                    harnesses[v].frame()
+                    let stats = solvers[v].stats
+                    // A frame the cloth slept through encoded nothing (the
+                    // pose is still, and a settled shirt sleeps after half
+                    // a second); it is no reading of the pass.
+                    guard stats.substeps > 0 else { continue }
+                    gpuTime[v].append(stats.gpuMilliseconds * 1000)
+                    substeps[v] = max(substeps[v], stats.substeps)
+                }
+            }
+            var lines: [String] = []
+            for v in variants.indices {
+                let sorted = gpuTime[v].sorted()
+                XCTAssertFalse(sorted.isEmpty, "\(label), \(variants[v].0): no frame was encoded")
+                guard !sorted.isEmpty else { continue }
+                lines.append(String(format: "%@ (hulls %d, planes %d, %d frames awake): gpu lowest decile %.0f us, median %.0f, mean %.0f, max %.0f", variants[v].0, solvers[v].hullCount,
+                                    solvers[v].planeCount, sorted.count, sorted[sorted.count / 10], sorted[sorted.count / 2], gpuTime[v].reduce(0, +) / Double(gpuTime[v].count), sorted.last ?? 0))
+                XCTAssertEqual(substeps[v], 16)
+                XCTAssertEqual(harnesses[v].cloth.runawayCount, 0)
+            }
+            // This run's ratios on the lowest deciles and the medians: the
+            // options over the default.
+            func decile(_ v: Int) -> Double { let sorted = gpuTime[v].sorted(); return sorted.isEmpty ? .nan : sorted[sorted.count / 10] }
+            func median(_ v: Int) -> Double { let sorted = gpuTime[v].sorted(); return sorted.isEmpty ? .nan : sorted[sorted.count / 2] }
+            lines.append(String(format: "over every hull: the merge %.2f / %.2f, the candidates %.2f / %.2f, the candidates and the merge %.2f / %.2f (lowest deciles / medians)",
+                                decile(2) / decile(1), median(2) / median(1), decile(3) / decile(1), median(3) / median(1), decile(4) / decile(1), median(4) / median(1)))
+            print("cloth gpu hull pass, arms forward, \(label) (300 frames each, the turn rotating, a heater frame before each, 16 substeps, two gathers, \(device.name)): " + lines.joined(separator: "; "))
+        }
+    }
+
+    /// The schedules gate 2 can choose between, at a headset-length frame
+    /// (2026-11-10). The harness's 10 ms frame, and the hull-pass test
+    /// above with it, encodes the picker's own count, and the Mac's 16.7 ms
+    /// frame 27, 21, 17 and 14 where the picker says 16, 12, 10 and 8, so
+    /// neither is a device frame; here a frame is 1/90 s, 11.1 ms, and
+    /// `substepCount` encodes 18 substeps at the picker's 16, 14 at 12, 12
+    /// at 10 and 9 at 8. (The headset's one reading, 2026-11-04, encoded 14
+    /// at the picker's 16 and 21 at 24, a frame of 8.3-8.75 ms; which
+    /// display rate that was is not recorded, and 11.1 ms is the longer
+    /// frame and so the costlier case.) The idle clip plays at 1/90 s a
+    /// frame from its first second (the arms forward, the clavicles and the
+    /// upper arms on their hulls, the body breathing — the gate's own
+    /// scene), 300 frames, one harness per row stepped in turn, the turn
+    /// rotating and a heater frame before every timed one (`makeHeater`) so
+    /// the rows read the GPU in one clock state and a hot one, on both
+    /// proxies. The rows: every hull, the default, at six schedules; the
+    /// candidates, the option, at the four that matter to the gate; and the
+    /// headset's own row — the 4k shirt, every hull, 14 encoded substeps,
+    /// two gathers, what the headset measured at 2.58 ms on the phase-2
+    /// kernel — in both proxies' rotations, so each row over it is that
+    /// row's cost in the device's units, the README's projection. Two
+    /// things are read off each row: `gpu=`, its lowest decile and its
+    /// median over the frames, and how still the shirt holds — the fastest
+    /// particle of each frame (its displacement over the frame; the idle's
+    /// own joints move 1-2 mm a frame, 0.1-0.2 m/s), the median and the
+    /// worst of that over the last 200 frames. The second is what the Mac
+    /// release sweep of the same day found the schedule turns on before the
+    /// cost does: one gather and long substeps do not hold the 16k's 4.5 mm
+    /// edges still (`-clothSubsteps 12 -clothGPUIterations 1` read
+    /// `speed<=` 4.5-17 m/s through three of its four runs, `-clothSubsteps
+    /// 8` 3.2-4.9 m/s, 10 with two gathers and 16 with one 0.40, where 12
+    /// and 16 with two gathers read the idle's 0.08-0.09). Here the fastest
+    /// particle is the same in every run and on either hull loop, the GPU's
+    /// result being the same to the bit and the idle making no contact the
+    /// candidates lack: a median of 0.07-0.10 m/s at 16, 12 and 10 substeps
+    /// with two gathers and at 16 with one, and 0.58 / 0.74 m/s (16k / 4k)
+    /// at 8 with two and 0.57 / 0.66 at 12 with one — the still clip is
+    /// kinder than the host's idle to 10 and to one gather, and agrees with
+    /// it on what jitters. Measured on the M4 Max, five runs on 2026-11-10
+    /// and 11, lowest deciles: the 16k on every hull 1.26-1.34 ms at 16 x
+    /// 2, 1.28-1.39 at 12 x 2, 1.11-1.18 at 10 x 2, 0.88-0.94 at 8 x 2,
+    /// 0.85-0.91 at 16 x 1 and 0.66-0.70 at 12 x 1, and with the candidates
+    /// 1.23-1.32 / 1.03-1.09 / 0.86-0.92 / 0.70-0.73 at 16 x 2, 12 x 2, 10
+    /// x 2 and 16 x 1; the 4k 0.99-1.07, 0.92-0.96, 0.69-0.77, 0.56-0.60,
+    /// 0.64-0.71 and 0.54-0.62, and 0.98-1.10 / 0.70-0.75 / 0.63-0.67 /
+    /// 0.53-0.58; the headset's row 1.09-1.17 in the 16k's rotation and
+    /// 0.99-1.10 in the 4k's, where the same harness elsewhere in the
+    /// rotation reads 0.92-0.96, which is what a place in the rotation is
+    /// worth. Printed, and the two-gather schedules at 12 and 16 substeps
+    /// on every hull — the cheapest still one and the default — are held to
+    /// stay under 1 m/s on both proxies; the rest are measurements, the
+    /// device's to judge.
+    func testTheScheduleCostAndStillnessAtTheHeadsetsFrame() throws {
+        let frameDelta: Float = 1.0 / 90
+        let frames = 300, settle = 100
+        guard let poses = try ClothFixtures.clipPoses(ZombieResources.waitingClip, at: { duration in (0 ..< frames).map { min(1.0 + Float($0) * frameDelta, duration) } }),
+              poses.count == frames else { throw XCTSkip("the idle clip is not bundled") }
+        // Every hull, the default, at six schedules; the candidates, the
+        // option, at the four that matter to the gate; and the headset's
+        // own row, the 4k shirt on every hull at 14 encoded substeps and
+        // two gathers, in both proxies' rotations.
+        let schedules: [(substeps: Int, gathers: Int, held: Bool, candidates: Bool, fourK: Bool)] = [
+            (16, 2, true, false, false), (12, 2, true, false, false), (10, 2, false, false, false), (8, 2, false, false, false),
+            (16, 1, false, false, false), (12, 1, false, false, false),
+            (16, 2, false, true, false), (12, 2, false, true, false), (10, 2, false, true, false), (16, 1, false, true, false),
+            (12, 2, false, false, true),
+        ]
+        for (label, sidecar) in [("4k", nil), ("16k", ClothFixtures.sidecar16kName)] {
+            var harnesses: [ClothHarness] = [], solvers: [GPUClothSolver] = []
+            for schedule in schedules {
+                var configuration = gpuConfiguration(substeps: schedule.substeps, iterations: schedule.gathers)
+                configuration.gpuHullCandidates = schedule.candidates
+                let h = try makeHarness(configuration: configuration, pose: poses[0], sidecar: schedule.fourK ? nil : sidecar, frameDelta: frameDelta)
+                harnesses.append(h)
+                solvers.append(try gpu(h))
+                XCTAssertEqual(solvers[solvers.count - 1].walksEveryHull, !schedule.candidates)
+            }
+            var gpuTime = [[Double]](repeating: [], count: schedules.count)
+            var fastest = [[Float]](repeating: [], count: schedules.count)
+            var encoded = [Int](repeating: 0, count: schedules.count)
+            var before = harnesses.map(\.particles)
+            let heater = try makeHeater(pose: poses[0])
+            for frame in 0 ..< frames {
+                // The turn rotates and the heater runs before every timed
+                // frame (`makeHeater`), so each schedule is read after the
+                // same burst, on a hot GPU.
+                for turn in schedules.indices {
+                    let v = (frame + turn) % schedules.count
+                    try heat(heater, base: poses[0])
+                    harnesses[v].body.pose = poses[frame]
+                    harnesses[v].frame()
+                    let stats = solvers[v].stats
+                    gpuTime[v].append(stats.gpuMilliseconds * 1000)
+                    encoded[v] = max(encoded[v], stats.substeps)
+                    let now = harnesses[v].particles
+                    if frame >= settle {
+                        var speed: Float = 0
+                        for i in now.indices { speed = max(speed, simd_distance(now[i], before[v][i]) / frameDelta) }
+                        fastest[v].append(speed)
+                    }
+                    before[v] = now
+                }
+            }
+            var lines: [String] = []
+            for (v, schedule) in schedules.enumerated() {
+                let sorted = gpuTime[v].sorted(), speeds = fastest[v].sorted()
+                let median = speeds[speeds.count / 2], worst = speeds.last ?? 0
+                let path = schedule.fourK ? "the headset's row, 4k, every hull" : (schedule.candidates ? "candidates (the option)" : "every hull (the default)")
+                lines.append(String(format: "%d substeps x %d gathers, %@ (%d encoded, %d dispatches): gpu lowest decile %.0f us, median %.0f, max %.0f; fastest particle median %.2f m/s, worst %.2f; onClamp %.0f%%, hard skins %d, runaways %d",
+                                    schedule.substeps, schedule.gathers, path, encoded[v], solvers[v].ringState.dispatches, sorted[sorted.count / 10], sorted[sorted.count / 2], sorted.last ?? 0, median, worst,
+                                    solvers[v].stats.onClampShare * 100, harnesses[v].cloth.hardSkinCount, harnesses[v].cloth.runawayCount))
+                XCTAssertEqual(encoded[v], GPUClothSolver.substepCount(frameDelta: frameDelta, substeps: schedule.substeps), "\(label): the substeps the 11.1 ms frame encodes at \(schedule.substeps)")
+                if schedule.held {
+                    XCTAssertLessThan(worst, 1, "\(label), \(schedule.substeps) substeps x \(schedule.gathers) gathers: the idle shirt's fastest particle read \(worst) m/s")
+                    XCTAssertEqual(harnesses[v].cloth.runawayCount, 0)
+                }
+            }
+            print("cloth gpu schedules at an 11.1 ms frame, the idle clip, \(label) (\(frames) frames each, the turn rotating, a heater frame before each, \(device.name)): " + lines.joined(separator: "; "))
+        }
+    }
+
     // MARK: - Exactness: the hard skin, the pins, the clamp, the back-stop
 
     /// After the attach every particle sits on its skinned target (the CPU
@@ -533,7 +1373,12 @@ final class ZombieClothGPUTests: XCTestCase {
     /// at 16 substeps; `-clothGPUIterations 1` is the A/B back). Jolt's
     /// equilibrium stretch at 1e-2 m/N is a few per cent under the shirt's
     /// weight (README "Cloth"), which is what the gate's 1 % mean allows
-    /// for.
+    /// for. The 12-substep, two-gather row is the budget phase's
+    /// (2026-11-04), the cheapest schedule that holds the shirt as still as
+    /// the default's sixteen (`testTheScheduleCostAndStillnessAtTheHeadsetsFrame`)
+    /// and the second row of the device run: it reads mean 0.52 %, p99
+    /// 2.57 %, worst 4.63 %, between the 16- and 8-substep rows as the
+    /// step's square says, and is held to the 16-substep gate itself.
     func testStretchResidualAtRest() throws {
         guard let shirt = ClothFixtures.asset?.garment(named: "shirt") else { throw XCTSkip("the sidecar is not bundled") }
         let edges = Self.stretchEdges(of: shirt)
@@ -547,6 +1392,7 @@ final class ZombieClothGPUTests: XCTestCase {
             ("averaged 1.5, 8 substeps", 8, 1, true, 1.5, 0.071, 0.28, 0.02, 0.06),
             ("raw sum 0.5, 16 substeps, 2 gathers", 16, 2, false, 0.5, 0.01, 0.03, 0.01, 0.03),
             ("raw sum 0.5, 8 substeps, 2 gathers", 8, 2, false, 0.5, 0.02, 0.06, 0.02, 0.06),
+            ("raw sum 0.5, 12 substeps, 2 gathers", 12, 2, false, 0.5, 0.01, 0.03, 0.01, 0.03),
         ] {
             let h = try makeHarness(configuration: gpuConfiguration(substeps: substeps, iterations: gathers, relaxation: relaxation, averaged: averaged))
             h.frames(200)
@@ -566,7 +1412,7 @@ final class ZombieClothGPUTests: XCTestCase {
             XCTAssertEqual(try gpu(h).ringState.dispatches, substeps * (1 + gathers) + 1 + (try shellDispatches(h)), "\(label): the last encoded frame's dispatches")
             measured += 1
         }
-        XCTAssertEqual(measured, 6)
+        XCTAssertEqual(measured, 7)
     }
 
     /// The gate's rows at 16k (raw sum 0.5, 16 substeps, two gathers — the
@@ -592,18 +1438,31 @@ final class ZombieClothGPUTests: XCTestCase {
     /// needs to meet the gate — gathers beyond four, or the per-pass
     /// fractions retuned for the spacing — is the owner's at gate 2, and
     /// `gpu=` on the four-gather row (3.2 ms here in debug against 2.4 at
-    /// two) is the cost of the first.
+    /// two) is the cost of the first. The budget phase's three rows
+    /// (2026-11-10) are the other direction, what the cheaper schedules
+    /// cost the finer shirt, since the cost line of gate 2 asks for fewer
+    /// passes where its look asks for more: 12 substeps with two gathers
+    /// mean 1.82 %, p99 7.90 %, worst 20.0 %, 8,408 edges over 3 %; 10
+    /// with two 2.31 % / 9.93 % / 26.2 %, 11,700; 16 with one gather
+    /// 2.78 % / 11.74 % / 29.5 %, 14,489, a third of the edges — the
+    /// residual follows the gathers a frame gets (32, 24, 20, 16), and the
+    /// one schedule here whose projection reaches under the device's
+    /// 2.0 ms at all on every hull (1.65 to 2.1 ms) is the one that doubles
+    /// it. Held to the measurements with the same quarter of margin.
     func testStretchResidualAtRestAt16k() throws {
         guard let shirt = ClothFixtures.sidecar(named: ClothFixtures.sidecar16kName)?.garment(named: "shirt") else { throw XCTSkip("Models/Zombie/\(ClothFixtures.sidecar16kName) is not bundled (the phase-2 cook)") }
         let edges = Self.stretchEdges(of: shirt)
         XCTAssertEqual(edges.count, 42440)
         let rest = edges.map { simd_distance(shirt.positions[$0.0], shirt.positions[$0.1]) }
         var measured = 0
-        for (label, gathers, meanBound, p99Bound) in [
-            ("16 substeps, 2 gathers", 2, Float(0.0175), Float(0.075)),
-            ("16 substeps, 4 gathers", 4, 0.0095, 0.045),
+        for (label, substeps, gathers, meanBound, p99Bound) in [
+            ("16 substeps, 2 gathers", 16, 2, Float(0.0175), Float(0.075)),
+            ("16 substeps, 4 gathers", 16, 4, 0.0095, 0.045),
+            ("12 substeps, 2 gathers", 12, 2, 0.023, 0.099),
+            ("10 substeps, 2 gathers", 10, 2, 0.029, 0.125),
+            ("16 substeps, 1 gather", 16, 1, 0.035, 0.147),
         ] {
-            let h = try makeHarness16k(configuration: gpuConfiguration(iterations: gathers))
+            let h = try makeHarness16k(configuration: gpuConfiguration(substeps: substeps, iterations: gathers))
             h.frames(200)
             let p = h.particles
             var residuals = edges.indices.map { (abs(simd_distance(p[edges[$0].0], p[edges[$0].1]) - rest[$0]) / rest[$0], $0) }
@@ -621,7 +1480,7 @@ final class ZombieClothGPUTests: XCTestCase {
             XCTAssertEqual(h.cloth.runawayCount, 0)
             measured += 1
         }
-        XCTAssertEqual(measured, 2)
+        XCTAssertEqual(measured, 5)
     }
 
     // MARK: - The substeps
@@ -843,6 +1702,76 @@ final class ZombieClothGPUTests: XCTestCase {
         solver.destroy()
         XCTAssertEqual(solver.particleCount, 0)
         XCTAssertEqual(solver.hullCount, 0)
+    }
+
+    /// A garment without joint paths meets every hull, however many it has
+    /// (2026-11-10, the review's finding). The hull candidates are a word
+    /// of four, picked along the bind skeleton; a garment that names no
+    /// joint paths has no skeleton to pick along, and until this day the
+    /// solver still handed the kernel such a garment's words — every hull
+    /// capped at the four nearest at rest — so a sheet over five hulls
+    /// would have passed through whichever stood fifth at the bind pose,
+    /// against what the comments promised. The solver now runs the
+    /// every-hull loop for it (`walksEveryHull`) whether or not the
+    /// candidates are asked for; the solver here asks for them, the
+    /// default configuration walking every hull anyway. Here the cube sheet
+    /// drops onto the unit cube as above, but the cube is the fifth hull:
+    /// four thin slabs on the same joint hang over the sheet, 25 to 55 cm
+    /// above it at the bind pose where the cube's top is 80 cm below, so
+    /// they are the four nearest and the cube is the one a cap drops; the
+    /// joint is then held half a metre up, the slabs are out of the
+    /// sheet's way and the cube's top is at y 1.0. The sheet must land on
+    /// it — the lowest particle over the cube a radius off the top, the
+    /// cube's bit in the contact masks and no slab's — which it does only
+    /// if the fifth hull is walked. (With the candidates' words read it
+    /// falls through: the test was run once against the solver's old flag
+    /// line (2026-11-10) and failed, the cube pushing nothing and the sheet 2.97 m under the origin after its two seconds.)
+    func testASheetWithoutJointPathsMeetsEveryHull() throws {
+        let solver = try XCTUnwrap(GPUClothSolver(device: device, configuration: withHullCandidates), "the GPU solver could not be built")
+        solver.floorY = -10
+        let garment = sheet(n: 20, spacing: 0.4 / 19, y: 1.3)
+        XCTAssertTrue(garment.jointPaths.isEmpty, "the free sheet names no joint paths")
+        func slab(y: Float) -> ClothHullSetup {
+            var points: [SIMD3<Float>] = []
+            for x in [Float(-0.5), 0.5] { for dy in [Float(-0.02), 0.02] { for z in [Float(-0.5), 0.5] { points.append(SIMD3(x, y + dy, z)) } } }
+            return ClothHullSetup(joint: 1, points: points, friction: 0, layer: 9, world: Self.translation(SIMD3(0, 0.5, 0)))
+        }
+        let lifted = Self.translation(SIMD3(0, 0.5, 0))
+        let hulls = [slab(y: 1.57), slab(y: 1.67), slab(y: 1.77), slab(y: 1.87), cube(world: lifted, friction: 0)]
+        XCTAssertTrue(solver.build(garment, hulls: hulls), "the solver refused the sheet")
+        XCTAssertEqual(solver.hullCount, 5)
+        let candidates = try XCTUnwrap(solver.hullCandidates)
+        XCTAssertTrue(candidates.everyHull, "a garment without joint paths has no tree to pick candidates by")
+        XCTAssertEqual(candidates.candidates(of: 0), [0, 1, 2, 3], "the word holds the four slabs, the nearest at rest, and not the cube")
+        XCTAssertTrue(solver.walksEveryHull, "so the kernel must walk every hull and not the word")
+        solver.recordHullContacts = true
+        var onCube = 0, onSlab = 0
+        let p = drive(solver, frames: 200, hull: { _ in lifted }) { _, _ in
+            for mask in solver.hullContacts() {
+                if mask & 0b10000 != 0 { onCube += 1 }
+                if mask & 0b01111 != 0 { onSlab += 1 }
+            }
+        }
+        var lowest: Float = .greatestFiniteMagnitude, over = 0
+        for q in p where abs(q.x) < 0.5 && abs(q.z) < 0.5 { over += 1; lowest = min(lowest, q.y) }
+        print(String(format: "cloth gpu sheet over five hulls without joint paths: %d of 400 particles over the cube, the lowest at y %.4f (the top at 1.000); %d particle-frames pushed by the cube, the fifth hull, %d by a slab",
+                     over, lowest, onCube, onSlab))
+        XCTAssertGreaterThan(over, 300, "the sheet slid off the cube")
+        XCTAssertEqual(lowest, 1.003, accuracy: 0.0005, "the sheet did not land on the fifth hull (the lowest particle at \(lowest))")
+        XCTAssertGreaterThan(onCube, 0, "the cube pushed no particle")
+        XCTAssertEqual(onSlab, 0, "a slab over the sheet pushed a particle")
+        // With joint paths the same garment walks its candidates again.
+        var treed = garment
+        treed.jointPaths = ["/a", "/a/b"]
+        XCTAssertTrue(solver.build(treed, hulls: hulls))
+        XCTAssertFalse(try XCTUnwrap(solver.hullCandidates).everyHull)
+        XCTAssertFalse(solver.walksEveryHull, "a garment with a tree walks its candidates when the option is on")
+        let reference = try XCTUnwrap(GPUClothSolver(device: device, configuration: gpuConfiguration()))
+        XCTAssertFalse(reference.walksEveryHull, "nothing is walked before the build")
+        XCTAssertTrue(reference.build(treed, hulls: hulls))
+        XCTAssertTrue(reference.walksEveryHull, "the default configuration walks every hull, tree or no tree")
+        solver.destroy()
+        reference.destroy()
     }
 
     /// The same sheet dropped from 30 cm onto the floor plane at y 0 lands on

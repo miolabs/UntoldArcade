@@ -534,7 +534,8 @@ and `-clothSidecar <name>` with the unknown-value print of line 361. The
 existing `-cloth off|skin|world|ragdoll` and the collision-model pickers
 stay orthogonal and apply to both solvers (`skinOnly` builds no hulls on
 the GPU either). On visionOS a "Solver" segmented picker (Jolt / GPU) and a
-"GPU substeps" picker (8 / 12 / 16 / 24) sit beside "Cloth" and "Cloth
+"GPU substeps" picker (8 / 10 / 12 / 16 / 24, with a "Hull candidates"
+toggle since 2026-11-10, off by default) sit beside "Cloth" and "Cloth
 iterations" (CoolZombieVisionOSXRApp.swift:600-623), the iterations picker
 disabled for the GPU and the substeps one for Jolt, the holder clamping
 `gpuSubsteps` to the offered counts as it does the iterations (237-248),
@@ -897,8 +898,8 @@ samples at stage boundaries, E/Profiling/GPUPassTiming.swift:212-222). Gate
 stand-up clean, the cuff roll kept apart with the wrist band free.
 
 What is A/B-able, each a picker or a launch argument and each a line in
-the footnote: Jolt against GPU at the same proxy; 8 / 12 / 16 / 24
-substeps; one or two gathers per substep; the two relaxation forms; damping
+the footnote: Jolt against GPU at the same proxy; 8 / 10 / 12 / 16 / 24
+substeps; every hull against the hull candidates; one or two gathers per substep; the two relaxation forms; damping
 4 against 1; hull friction 0 against 0.2; wait against one frame of lag;
 and from phase 2, 4k against 16k on the GPU. The eight to ten working days
 to gate 2 are the honest expectation of where "fine folds" arrive.
@@ -1126,3 +1127,6 @@ the first cook targets 16,000 particles, with 12,000 as the fallback if
 gate 2 fails on cost rather than look; the Jolt arm stays selectable until
 the owner says otherwise; the Mac host stays on launch arguments for the
 substeps, as it does for the iterations.
+
+2026-11-10: static skeleton hull candidates measured lossy on the full
+clip set, shipped path is every hull.

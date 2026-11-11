@@ -38,8 +38,12 @@ import UntoldEngine
 /// (`ConstraintGraph`: one per edge and one across every interior edge,
 /// Jolt's own set, 10,425 + 10,425 on the shirt after the pin-pin drop),
 /// then applies the slack ball and the back-stop AFTER the edges so they
-/// are exact, the eleven skin hulls as plane sets (`HullPlaneSet`, 832
-/// planes), the floor and the balls, and on the last gather writes the
+/// are exact, the eleven skin hulls as plane sets (`HullPlaneSet`, 816
+/// planes on the cook of 2026-11-04; every hull's box and planes on
+/// every particle, the exact loop, or with `gpuHullCandidates` on each
+/// particle's four candidates at most, `HullCandidates`, which is cheaper
+/// and loses contacts), the floor and the balls, and
+/// on the last gather writes the
 /// velocity; `zcStats` reduces the frame's final positions once (the
 /// bounds for the swept-AABB wake test, the on-clamp share, the NaN
 /// count). The thirteen joints are slerped per substep on the CPU and the
@@ -316,19 +320,65 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
     /// force once at the attach: every triple's plane kept when all the
     /// points lie on one side (within a micrometre), oriented outward,
     /// deduplicated at 1e-4 in the normal and the offset — on the shirt 87,
-    /// 83, 82, 88, 66, 84, 82, 66, 70, 60 and 64 planes for the pelvis, the
+    /// 83, 82, 88, 52, 84, 82, 66, 72, 60 and 60 planes for the pelvis, the
     /// three spine links, the neck, the two clavicles, the two upper arms
-    /// and the two forearms, 832 in all, under the 2n - 4 bound of 848;
+    /// and the two forearms, 816 in all on the cook of 2026-11-04 (832 on
+    /// the cook of the day before), under the 2n - 4 bound of 832;
     /// about 190,000 triples times 48 tests, a few milliseconds, done in
     /// double precision as the design's judge did it. Phase 2's cook writes
     /// the planes into the sidecar and the runtime keeps this for one
     /// without them.
+    ///
+    /// The coplanar merge (`mergePlanes`, 2026-11-04; the design's section
+    /// 9 named it as the lever should the hull pass cost): a brute-force
+    /// plane set over a fitted hull carries near-duplicates — the fit's
+    /// pushed vertices leave faces that are a few points nearly in one
+    /// plane, which the triples read as several planes a degree or two
+    /// apart — and every one of them is a plane the solve kernel may walk
+    /// per particle per gather. Planes whose normals lie within 3 degrees
+    /// and whose offsets within 1 mm of one another are merged into the one
+    /// farthest out along its normal (the smallest `d`), which keeps every
+    /// hull point inside (each was inside both) and can only enlarge the
+    /// hull: where the two planes crossed inside the old face a particle
+    /// may now sink deeper by the sliver between them, and `mergeDepth` is
+    /// that depth measured at the removed planes' own face points — the
+    /// largest over the hull, 2.8 mm at the pelvis, under a millimetre on
+    /// the arms. The merge is greedy in discovery order and transitive
+    /// within a group (a plane 2 degrees off each of two others 4 degrees
+    /// apart joins the first), so a group's spread can reach twice the
+    /// tolerance; `mergeMaxAngleDegrees` and `mergeMaxOffset` report the
+    /// widest pair actually merged. It is OFF by default
+    /// (`Configuration.gpuPlaneMerge`, where the figures are): with the
+    /// GPU kept hot and the arms forward at 16 substeps (2026-11-10) it
+    /// reads 3 to 14 per cent under no merge on the 16k frame's lowest
+    /// decile with every hull, less steadily at 4k, and on top of the
+    /// candidates a few per cent on the 16k medians and nothing steady on
+    /// the lowest deciles — 92
+    /// planes fewer of 816 shorten the touching lane's walk by that much
+    /// and no more — and the hulls are not grown by up to 2.8 mm for it.
+    /// The figures of 2026-11-04 (0.2 ms saved at 4k, a millisecond lost
+    /// at 16k) came from timing the variants in a fixed order, the merged
+    /// one always after a light frame and a GPU that had clocked down; the
+    /// merge stays an A/B (`-clothPlaneMerge on`).
     public struct HullPlaneSet: Sendable {
         /// The feed joint the hull follows.
         public let joint: Int
         public let pointCount: Int
         /// n.xyz and d: inside where dot(n, p) + d < 0, joint frame.
         public let planes: [SIMD4<Float>]
+        /// The planes the brute force found before any merge (the count
+        /// `planes` has when the merge is off).
+        public let rawPlaneCount: Int
+        /// How many of them the coplanar merge removed (0 with it off).
+        public let mergedPlaneCount: Int
+        /// How much deeper a particle can sink at a merged face, metres:
+        /// over every removed plane, the largest distance of its own face
+        /// points (those within 1e-5 m of it) inside the plane kept for it.
+        public let mergeDepth: Float
+        /// The widest normal angle, degrees, and offset difference, metres,
+        /// between a removed plane and the plane kept for it.
+        public let mergeMaxAngleDegrees: Float
+        public let mergeMaxOffset: Float
         /// The bounding sphere, joint frame; the radius is inflated by the
         /// vertex radius, so a particle outside it is outside every plane by
         /// more than the radius.
@@ -347,8 +397,14 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
 
         public var planeCount: Int { planes.count }
 
+        /// The merge's tolerances: normals within this angle and offsets
+        /// within this distance are one plane.
+        static let mergeAngle: Double = 3 * .pi / 180
+        static let mergeOffset: Double = 0.001
+
         /// Nil for fewer than four points or points with no volume.
-        init?(points: [SIMD3<Float>], joint: Int, vertexRadius: Float) {
+        /// `mergePlanes` applies the coplanar merge after the brute force.
+        init?(points: [SIMD3<Float>], joint: Int, vertexRadius: Float, mergePlanes: Bool = false) {
             guard points.count >= 4 else { return nil }
             let p = points.map { SIMD3<Double>(Double($0.x), Double($0.y), Double($0.z)) }
             let n = p.count
@@ -385,9 +441,55 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
                 }
             }
             guard !found.isEmpty else { return nil }
+            rawPlaneCount = found.count
+            var kept = found
+            var merged = 0
+            var depth = 0.0, widestAngle = 0.0, widestOffset = 0.0
+            if mergePlanes {
+                // Greedy groups in discovery order: a plane joins the first
+                // group whose seed lies within the tolerances; the group
+                // keeps its farthest-out member and drops the rest.
+                let cosTolerance = cos(Self.mergeAngle)
+                var group = [Int](repeating: -1, count: found.count)
+                var seeds: [Int] = []
+                for a in found.indices where group[a] < 0 {
+                    group[a] = seeds.count
+                    seeds.append(a)
+                    let na = SIMD3(found[a].x, found[a].y, found[a].z)
+                    for b in (a + 1) ..< found.count where group[b] < 0 {
+                        let nb = SIMD3(found[b].x, found[b].y, found[b].z)
+                        if simd_dot(na, nb) >= cosTolerance, abs(found[a].w - found[b].w) <= Self.mergeOffset {
+                            group[b] = group[a]
+                        }
+                    }
+                }
+                var keepOf = [Int](repeating: -1, count: seeds.count)
+                for (index, plane) in found.enumerated() where keepOf[group[index]] < 0 || plane.w < found[keepOf[group[index]]].w {
+                    keepOf[group[index]] = index
+                }
+                kept = []
+                for (index, plane) in found.enumerated() {
+                    let keeper = found[keepOf[group[index]]]
+                    if keepOf[group[index]] == index {
+                        kept.append(plane)
+                        continue
+                    }
+                    merged += 1
+                    let nr = SIMD3(plane.x, plane.y, plane.z), nk = SIMD3(keeper.x, keeper.y, keeper.z)
+                    widestAngle = max(widestAngle, acos(min(max(simd_dot(nr, nk), -1), 1)))
+                    widestOffset = max(widestOffset, abs(plane.w - keeper.w))
+                    for q in p where simd_dot(nr, q) + plane.w > -1e-5 {
+                        depth = max(depth, -(simd_dot(nk, q) + keeper.w))
+                    }
+                }
+            }
+            mergedPlaneCount = merged
+            mergeDepth = Float(depth)
+            mergeMaxAngleDegrees = Float(widestAngle * 180 / .pi)
+            mergeMaxOffset = Float(widestOffset)
             self.joint = joint
             pointCount = n
-            planes = found.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), Float($0.w)) }
+            planes = kept.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), Float($0.w)) }
             var center = SIMD3<Double>.zero
             for q in p { center += q }
             center /= Double(n)
@@ -414,6 +516,201 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         /// Whether `point` is inside every plane within `tolerance`.
         public func contains(_ point: SIMD3<Float>, tolerance: Float = 0) -> Bool {
             signedDistance(to: point) <= tolerance
+        }
+    }
+
+    // MARK: - The hull candidates
+
+    /// Which hulls each particle's solve loop walks when
+    /// `gpuHullCandidates` is on, decided once at the build from the bind
+    /// skeleton and never from a distance (2026-11-04). The lists are an
+    /// option and off by default since 2026-11-10, because they lose
+    /// contacts (below); they are built at every attach all the same, so
+    /// the switch and the tests read the same words.
+    /// Why they were built: the phase-2 Mac sweeps put the hull pass at
+    /// 87 % of the 4k frame's GPU time with the arms forward (0.49 ms
+    /// skin-only against 3.65 ms with the eleven hulls; 1.55 against
+    /// 2.6-6.2 ms at 16k), because every particle inside a hull's box
+    /// walks that hull's planes until the first reads it outside, and the
+    /// shirt wraps the body so most particles sit in the boxes of one to
+    /// four hulls at once — and a simdgroup walks a hull's planes until
+    /// its last lane leaves, so eleven loops of a few planes each cost
+    /// eleven loops. Those were single report lines read in a fixed
+    /// order. With the GPU kept hot the hull pass is 50-65 % of the
+    /// arms-forward frame with every hull (2026-11-10), and the candidates
+    /// take 7 to 24 per cent off the 16k frame's lowest decile and 7 to 27
+    /// off the 4k's, run by run: what is left is the touching lane's walk
+    /// of its own hull's planes, which no candidate list shortens.
+    /// The rule: a hull belongs to a joint; a particle's candidates are the
+    /// hulls of the joints among its skin influences (weight above 0),
+    /// plus each such joint's parent's and children's hulls — one step
+    /// along the bind skeleton's tree, read off the feed joints' paths
+    /// (`ClothGarmentSetup.jointPaths`: a joint's parent is the longest
+    /// leading path among them, so a joint the garment is not skinned to
+    /// is stepped over, as it carries no hull of the garment's) — deduplicated,
+    /// capped at `zcHullCandidateCount` (4): when more qualify, the four
+    /// whose planes read the particle's rest position nearest (the
+    /// smallest signed distance in the hull's bind frame) are kept, which
+    /// on the shirt drops hulls 6 to 29 cm from the particle at rest. A pin
+    /// never collides and gets none. Stored as one `UInt32` per particle,
+    /// four 8-bit hull indices ascending with 0xFF in the empty slots, so
+    /// the kernel reads 4 B and the two loops (candidates, every hull)
+    /// apply their push-outs in the same order. On the shirt one step is
+    /// the whole rule: a chest particle skinned to a spine link has the
+    /// links above and below, the neck and the clavicles; an armhole
+    /// particle on a clavicle has the upper arm. A garment without joint
+    /// paths — the tests' free sheets — has no tree to step along, so
+    /// `everyHull` is set and the solver runs the kernel's every-hull loop
+    /// for it (`GPUClothSolver.walksEveryHull`, `ZCFlagEveryHull`): the
+    /// words built here still name every hull capped at the four nearest
+    /// at rest, but a word of four cannot stand for five hulls or more, so
+    /// they are not what the kernel reads (until 2026-11-10 they were, and
+    /// a sheet over more than four hulls would have passed through the
+    /// fifth; `testASheetWithoutJointPathsMeetsEveryHull`). The same holds
+    /// past 254 hulls, where a byte no longer indexes one.
+    /// What the rule loses. `testTheCandidateHullLoopLosesNoContact` runs
+    /// both loops through the hang, the sway, the arms-forward idle and
+    /// the arm swing on both proxies, and `...OnTheChaseClips` through the
+    /// 100STYLE walk and run, and they diff every particle's per-frame
+    /// contact mask (`ZCHullContactsIndex`): in those six motions the sets
+    /// are identical and the positions bitwise equal in every frame. In
+    /// none of them does a sleeve meet the torso. Held against the
+    /// every-hull loop's own contacts through every bundled clip (the
+    /// mixed set, the arm postures, the wall hold, the Kimodo core and the
+    /// pack) and three knockdowns, 2026-11-10, the lists lack a hull that
+    /// pushed in 866,205 particle-frames at 4k (5,385 distinct
+    /// particle-hull pairs) and 2,858,798 at 16k (21,624), most in the
+    /// falls forward and sideways and in the pack's walks, chases, hyper
+    /// runs and holds. The lost relations are arm against torso — the
+    /// spine-2 hull on the upper arms' and the forearms' particles, the
+    /// arms' hulls on the spine links' and the pelvis's — three joints
+    /// apart along the tree and more, touching in the pose. No rule read
+    /// off the tree follows that: one step without the cap of four still
+    /// lacks 674,341 / 2,234,011 particle-frames (4k / 16k), one step
+    /// with the siblings 519,274 / 1,714,374, two steps 266,275 / 894,936.
+    /// A lost contact is a sleeve or a forearm through the shirt.
+    /// `testTheCandidateRuleLosesContactsOnTheChaseClipsAndFalls` pins the
+    /// loss on the mixed set's clips and the three falls (121,655
+    /// particle-frames at 4k, 415,842 at 16k) and fails if it is
+    /// ever zero. The conservative alternative, not built: a per-frame
+    /// mask from each hull's box against the bounds of a cluster of
+    /// particles grown by their slack.
+    public struct HullCandidates: Sendable {
+        /// The packed candidates, one per particle (`ZCHullCandidatesIndex`).
+        public let words: [UInt32]
+        /// Per feed joint, its parent among the feed joints or -1.
+        public let parents: [Int]
+        /// Whether the garment had no joint paths, so every hull was a
+        /// candidate of every particle before the cap.
+        public let everyHull: Bool
+        /// Free particles by candidate count after the cap, index 0 to 4.
+        public let histogram: [Int]
+        /// Free particles that had more than four before the cap, and the
+        /// most any one had.
+        public let capped: Int
+        public let mostBeforeCap: Int
+        /// Per hull, the particles naming it.
+        public let particlesPerHull: [Int]
+
+        /// The candidates of `particle`, hull indices ascending.
+        public func candidates(of particle: Int) -> [Int] {
+            guard words.indices.contains(particle) else { return [] }
+            return Self.unpack(words[particle])
+        }
+
+        static func unpack(_ word: UInt32) -> [Int] {
+            var out: [Int] = []
+            for slot in 0 ..< zcHullCandidateCount {
+                let h = (word >> UInt32(8 * slot)) & 0xFF
+                if h == zcHullCandidateNone { break }
+                out.append(Int(h))
+            }
+            return out
+        }
+
+        static func pack(_ hulls: [Int]) -> UInt32 {
+            var word: UInt32 = 0xFFFF_FFFF
+            for (slot, h) in hulls.prefix(zcHullCandidateCount).enumerated() {
+                word &= ~(UInt32(0xFF) << UInt32(8 * slot))
+                word |= UInt32(min(h, 0xFE)) << UInt32(8 * slot)
+            }
+            return word
+        }
+
+        /// The parent of each path among `paths`: the longest leading path
+        /// (`/a/b/c` has `/a/b`, or `/a` when `/a/b` is not a feed joint),
+        /// -1 for a root.
+        public static func jointParents(paths: [String]) -> [Int] {
+            let index = Dictionary(paths.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+            return paths.map { path in
+                var prefix = path
+                while let slash = prefix.lastIndex(of: "/") {
+                    prefix = String(prefix[..<slash])
+                    if prefix.isEmpty { break }
+                    if let parent = index[prefix] { return parent }
+                }
+                return -1
+            }
+        }
+
+        /// The candidates of every particle of `garment` over `hulls` (in
+        /// the solver's hull order), as the rule above has them.
+        init(garment: ClothGarmentSetup, hulls: [HullPlaneSet]) {
+            let count = garment.bindPositions.count
+            let jointCount = garment.bindJointWorld.count
+            let paths = garment.jointPaths.count == jointCount ? garment.jointPaths : []
+            everyHull = paths.isEmpty
+            parents = everyHull ? Array(repeating: -1, count: jointCount) : Self.jointParents(paths: paths)
+            var children = [[Int]](repeating: [], count: jointCount)
+            for (joint, parent) in parents.enumerated() where parent >= 0 && parent < jointCount { children[parent].append(joint) }
+            var hullsOfJoint = [[Int]](repeating: [], count: jointCount)
+            for (h, set) in hulls.enumerated() where set.joint >= 0 && set.joint < jointCount { hullsOfJoint[set.joint].append(h) }
+            let inverseBind = garment.bindJointWorld.map(\.inverse)
+            var words = [UInt32](repeating: 0xFFFF_FFFF, count: count)
+            var histogram = [Int](repeating: 0, count: zcHullCandidateCount + 1)
+            var capped = 0, most = 0
+            var perHull = [Int](repeating: 0, count: hulls.count)
+            for i in 0 ..< count where garment.inverseMasses[i] > 0 {
+                var set = Set<Int>()
+                if everyHull {
+                    set = Set(hulls.indices)
+                } else {
+                    for influence in garment.influences[i] where influence.weight > 0 {
+                        let joint = Int(influence.joint)
+                        guard joint >= 0, joint < jointCount else { continue }
+                        set.formUnion(hullsOfJoint[joint])
+                        if parents[joint] >= 0 { set.formUnion(hullsOfJoint[parents[joint]]) }
+                        for child in children[joint] { set.formUnion(hullsOfJoint[child]) }
+                    }
+                }
+                var chosen = Array(set).sorted()
+                most = max(most, chosen.count)
+                if chosen.count > zcHullCandidateCount {
+                    capped += 1
+                    let world = SIMD4<Float>(garment.bindPositions[i] + garment.origin, 1)
+                    var ranked: [(distance: Float, hull: Int)] = []
+                    for h in chosen {
+                        let local: SIMD4<Float> = inverseBind[hulls[h].joint] * world
+                        let distance: Float = hulls[h].signedDistance(to: SIMD3<Float>(local.x, local.y, local.z))
+                        ranked.append((distance, h))
+                    }
+                    ranked.sort { a, b in a.distance < b.distance || (a.distance == b.distance && a.hull < b.hull) }
+                    chosen = ranked.prefix(zcHullCandidateCount).map { $0.hull }.sorted()
+                }
+                words[i] = Self.pack(chosen)
+                histogram[min(chosen.count, zcHullCandidateCount)] += 1
+                for h in chosen { perHull[h] += 1 }
+            }
+            self.words = words
+            self.histogram = histogram
+            self.capped = capped
+            mostBeforeCap = most
+            particlesPerHull = perHull
+        }
+
+        /// One line for the report and the tests.
+        public var description: String {
+            "candidates per free particle \(histogram.enumerated().map { "\($0.offset):\($0.element)" }.joined(separator: " ")), \(capped) capped from up to \(mostBeforeCap), per hull \(particlesPerHull)\(everyHull ? ", every hull (no joint paths)" : "")"
         }
     }
 
@@ -544,6 +841,11 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         let csrEntries: MTLBuffer
         let hullHeaders: MTLBuffer
         let hullPlanes: MTLBuffer
+        /// `uint` x N, the packed hull candidates (`HullCandidates.words`).
+        let hullCandidates: MTLBuffer
+        /// `uint` x N, the tests' contact masks, written by the kernel only
+        /// under `recordHullContacts`; zero at the build.
+        let hullContacts: MTLBuffer
         let skinMatrices: MTLBuffer
         let hullWorld: MTLBuffer
         let spheres: MTLBuffer
@@ -700,8 +1002,31 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
     /// and the tests.
     public private(set) var constraintGraph: ConstraintGraph?
     public private(set) var hullPlaneSets: [HullPlaneSet] = []
-    /// The planes over every hull (832 on the shirt).
+    /// The planes over every hull (816 on the shirt as cooked on
+    /// 2026-11-04; fewer after the coplanar merge, `rawPlaneCount` sums
+    /// the brute force's).
     public var planeCount: Int { hullPlaneSets.reduce(0) { $0 + $1.planeCount } }
+    /// The planes the brute force found before the merge.
+    public var rawPlaneCount: Int { hullPlaneSets.reduce(0) { $0 + $1.rawPlaneCount } }
+    /// Each particle's hull candidates as built (`HullCandidates`), nil
+    /// before the build.
+    public private(set) var hullCandidates: HullCandidates?
+    /// The tests' switch: on, every solve dispatch records which hulls
+    /// pushed each particle into the contact buffer (`ZCFlagRecordHullContacts`),
+    /// read back with `hullContacts()`; off in the hosts, where the kernel
+    /// never touches that buffer. Takes effect at the next encode.
+    public var recordHullContacts = false
+    /// Whether the solve kernel walks every hull on every particle in the
+    /// frames encoded from now: `gpuHullCandidates` off (the default), a
+    /// garment whose candidates were not read off a skeleton
+    /// (`HullCandidates.everyHull` — the four-slot word cannot name every
+    /// hull once there are more than four, so the kernel is told to
+    /// ignore it), or more hulls than a candidate's byte can index. False
+    /// before the build.
+    public var walksEveryHull: Bool {
+        guard let hullCandidates else { return false }
+        return !configuration.gpuHullCandidates || hullCandidates.everyHull || hullPlaneSets.count > Int(zcHullCandidateNone) - 1
+    }
 
     /// The world's gravity the particles fall under, m/s^2 (the setup's;
     /// a test raises it to read the on-clamp share).
@@ -826,7 +1151,8 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
               !garment.bindJointWorld.isEmpty
         else { return false }
         let graph = ConstraintGraph(faces: garment.faces, positions: garment.bindPositions, inverseMasses: garment.inverseMasses, maxDistance: garment.maxDistance)
-        let planeSets = hulls.compactMap { HullPlaneSet(points: $0.points, joint: $0.joint, vertexRadius: garment.vertexRadius) }
+        let planeSets = hulls.compactMap { HullPlaneSet(points: $0.points, joint: $0.joint, vertexRadius: garment.vertexRadius, mergePlanes: configuration.gpuPlaneMerge) }
+        let candidates = HullCandidates(garment: garment, hulls: planeSets)
         let joints = garment.bindJointWorld.count
         let hullCount = planeSets.count
 
@@ -852,6 +1178,8 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
               let csrEntries = makeBuffer(bytes: graph.entryCount * MemoryLayout<ZCEntry>.stride, label: "csr entries"),
               let hullHeaders = makeBuffer(bytes: hullCount * MemoryLayout<ZCHullHeader>.stride, label: "hull headers"),
               let hullPlanes = makeBuffer(bytes: planeTotal * float4, label: "hull planes"),
+              let hullCandidateBuffer = makeBuffer(bytes: n * MemoryLayout<UInt32>.stride, label: "hull candidates"),
+              let hullContactBuffer = makeBuffer(bytes: n * MemoryLayout<UInt32>.stride, label: "hull contacts"),
               let skinMatrices = makeBuffer(bytes: zcRingSlots * zcSubstepCap * joints * matrix, label: "skin matrices"),
               let hullWorld = makeBuffer(bytes: zcRingSlots * (zcSubstepCap + 1) * hullCount * matrix, label: "hull transforms"),
               let spheres = makeBuffer(bytes: zcRingSlots * zcSphereCapacity * MemoryLayout<ZCSphere>.stride, label: "spheres"),
@@ -909,8 +1237,8 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         let built = Buffers(
             positionA: positionA, positionB: positionB, previous: previous, velocity: velocity, rest: rest, restNormal: restNormal,
             influences: influenceBuffer, slack: slack, target: target, targetNormal: targetNormal, csrOffsets: csrOffsets, csrEntries: csrEntries,
-            hullHeaders: hullHeaders, hullPlanes: hullPlanes, skinMatrices: skinMatrices, hullWorld: hullWorld, spheres: spheres, stats: stats,
-            readBack: readBack
+            hullHeaders: hullHeaders, hullPlanes: hullPlanes, hullCandidates: hullCandidateBuffer, hullContacts: hullContactBuffer,
+            skinMatrices: skinMatrices, hullWorld: hullWorld, spheres: spheres, stats: stats, readBack: readBack
         )
 
         // The static arrays.
@@ -946,6 +1274,8 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
             let backstop = garment.bodyFacing.contains(i) || garment.backstop[i] == .greatestFiniteMagnitude ? Float.infinity : garment.backstop[i]
             slackPointer[i] = SIMD2(garment.maxDistance[i], backstop)
         }
+        candidates.words.withUnsafeBytes { hullCandidateBuffer.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+        memset(hullContactBuffer.contents(), 0, n * MemoryLayout<UInt32>.stride)
         graph.offsets.withUnsafeBytes { csrOffsets.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
         if graph.entryCount > 0 {
             graph.entries.withUnsafeBytes { csrEntries.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
@@ -998,6 +1328,7 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         self.garment = garment
         constraintGraph = graph
         hullPlaneSets = planeSets
+        hullCandidates = candidates
         currentIsA = true
         active = true
         restLayer = nil
@@ -1028,6 +1359,7 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         jointCount = 0
         constraintGraph = nil
         hullPlaneSets = []
+        hullCandidates = nil
         garment = nil
         lastFeed = nil
         pendingFrame = nil
@@ -1237,7 +1569,12 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         let pelvis = now[pelvisJoint].translation - origin
         params.pelvis = SIMD4(pelvis, configuration.runawayDistance)
         params.counts = SIMD4(UInt32(count), UInt32(jointCount), UInt32(hullCount), UInt32(sphereCount))
-        params.flags = SIMD4(configuration.gpuAveragedJacobi ? 1 : 0, floorEnabled ? 1 : 0, configuration.gpuHullFriction > 0 ? 1 : 0, 0)
+        // Every hull unless the candidates were asked for, and the
+        // candidates only when they were read off a skeleton: a garment
+        // without joint paths carries no rule to pick four hulls by, and the
+        // word holds four, so every hull is walked (`walksEveryHull`).
+        let hullFlags = (walksEveryHull ? zcFlagEveryHull : 0) | (recordHullContacts ? zcFlagRecordHullContacts : 0)
+        params.flags = SIMD4(configuration.gpuAveragedJacobi ? 1 : 0, floorEnabled ? 1 : 0, configuration.gpuHullFriction > 0 ? 1 : 0, hullFlags)
 
         guard let commandBuffer = queue.makeCommandBuffer(), let encoder = commandBuffer.makeComputeCommandEncoder() else {
             print("CoolZombie: cloth: the GPU solver got no command buffer; the frame is skipped")
@@ -1259,6 +1596,8 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
         encoder.setBuffer(buffers.hullHeaders, offset: 0, index: ZCBufferIndex.hullHeaders.rawValue)
         encoder.setBuffer(buffers.hullPlanes, offset: 0, index: ZCBufferIndex.hullPlanes.rawValue)
         encoder.setBuffer(buffers.hullWorld, offset: 0, index: ZCBufferIndex.hullWorld.rawValue)
+        encoder.setBuffer(buffers.hullCandidates, offset: 0, index: ZCBufferIndex.hullCandidates.rawValue)
+        encoder.setBuffer(buffers.hullContacts, offset: 0, index: ZCBufferIndex.hullContacts.rawValue)
         encoder.setBuffer(buffers.spheres, offset: 0, index: ZCBufferIndex.spheres.rawValue)
         encoder.setBuffer(buffers.stats, offset: slot * Self.statsSlotStride, index: ZCBufferIndex.stats.rawValue)
 
@@ -1568,6 +1907,18 @@ public final class GPUClothSolver: ClothSolver, @unchecked Sendable {
             p += influence.weight * SIMD3(moved.x, moved.y, moved.z)
         }
         return p + origin
+    }
+
+    /// The hulls that pushed each particle in the last encoded frame, bit h
+    /// for hull h, after a wait for anything in flight — what the solve
+    /// kernel accumulated under `recordHullContacts`; a pin's word is 0,
+    /// and so is every word while the switch is off. Empty before the
+    /// build.
+    public func hullContacts() -> [UInt32] {
+        guard let buffers, count > 0 else { return [] }
+        waitForAll()
+        let pointer = buffers.hullContacts.contents().bindMemory(to: UInt32.self, capacity: count)
+        return Array(UnsafeBufferPointer(start: pointer, count: count))
     }
 
     /// Waits for every command buffer in flight: the tests' bitwise reads.

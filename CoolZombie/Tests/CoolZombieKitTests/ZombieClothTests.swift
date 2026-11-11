@@ -1092,6 +1092,24 @@ final class ZombieClothTests: XCTestCase {
         XCTAssertTrue(defaults.gpuWait, "the read waits for the frame's command buffer")
         XCTAssertNil(defaults.sidecar, "the bundled sidecar")
         XCTAssertTrue(defaults.gpuShell, "the GPU arm evaluates the shell on the GPU (phase 2); the Jolt arm has no say")
+        XCTAssertFalse(defaults.gpuHullCandidates, "every hull on every particle, the exact loop; the candidates lose contacts (2026-11-10) and are the cost A/B")
+        XCTAssertFalse(defaults.gpuPlaneMerge, "the coplanar merge buys about a tenth on the 16k at most and grows a hull by up to 2.8 mm; it stays off")
+        // The hull pass's two switches (the review of 2026-11-10 found no
+        // test on them): on and off, an unknown value and a flag with no
+        // value leaving each where it was.
+        configuration = defaults
+        configuration.apply(launchArguments: ["-clothHullCandidates", "on", "-clothPlaneMerge", "on"])
+        XCTAssertTrue(configuration.gpuHullCandidates, "-clothHullCandidates on walks each particle's candidates, the cost A/B")
+        XCTAssertTrue(configuration.gpuPlaneMerge, "-clothPlaneMerge on merges the near-coplanar planes at the build")
+        configuration.apply(launchArguments: ["-clothHullCandidates", "sometimes", "-clothPlaneMerge", "maybe"])
+        XCTAssertTrue(configuration.gpuHullCandidates, "an unknown value leaves the candidates where they were")
+        XCTAssertTrue(configuration.gpuPlaneMerge, "and the merge")
+        configuration.apply(launchArguments: ["-clothPlaneMerge", "-clothHullCandidates"])
+        XCTAssertTrue(configuration.gpuHullCandidates, "a flag with no value is ignored")
+        XCTAssertTrue(configuration.gpuPlaneMerge, "and one with the next flag for a value")
+        configuration.apply(launchArguments: ["-clothHullCandidates", "off", "-clothPlaneMerge", "off"])
+        XCTAssertFalse(configuration.gpuHullCandidates, "-clothHullCandidates off is the default again: every hull on every particle")
+        XCTAssertFalse(configuration.gpuPlaneMerge)
         configuration = defaults
         configuration.apply(launchArguments: [])
         XCTAssertEqual(configuration.solver, .jolt)

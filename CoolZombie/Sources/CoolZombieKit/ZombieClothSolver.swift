@@ -139,6 +139,21 @@ public struct ClothGarmentSetup: Sendable {
     /// the skin matrix of a frame is its joint world times the inverse of
     /// this, which a solver takes once at the build.
     public var bindJointWorld: [simd_float4x4]
+    /// The feed joints' paths as the skeleton names them, one per entry of
+    /// `bindJointWorld` (`/root/pelvis/spine_01`, the sidecar's
+    /// `jointPaths`), or empty for a garment without a skeleton tree (the
+    /// tests' free sheets). The GPU solver reads the bind skeleton's tree
+    /// off them — a joint's parent is the longest leading path among the
+    /// feed joints — to pick each particle's hull candidates: the hulls of
+    /// its influence joints and of their parents and children, one step
+    /// along the tree (2026-11-04), which the kernel walks only with
+    /// `gpuHullCandidates` on (off by default since 2026-11-10: the lists
+    /// lose contacts). Empty, there is no tree to pick by and the GPU
+    /// solver walks every hull on every particle whatever the switch
+    /// says, the kernel's every-hull loop
+    /// (`GPUClothSolver.walksEveryHull`), so a garment without a tree
+    /// loses no contact however many hulls it has.
+    public var jointPaths: [String]
     /// Inverse stiffness of the edges, the shear and the bends, m/N
     /// (`ZombieCloth.Configuration`).
     public var stretchCompliance: Float
@@ -176,7 +191,7 @@ public struct ClothGarmentSetup: Sendable {
                 influences: [[ClothInfluence]], maxDistance: [Float], backstop: [Float], bodyFacing: Set<Int>, bindJointWorld: [simd_float4x4],
                 stretchCompliance: Float, shearCompliance: Float, bendCompliance: Float, linearDamping: Float, maxLinearVelocity: Float,
                 vertexRadius: Float, friction: Float, iterations: UInt32, oneWayAgainstRagdolls: Bool, layer: UInt32,
-                pelvisJoint: Int = 0, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), shell: ClothShellSetup? = nil)
+                pelvisJoint: Int = 0, gravity: SIMD3<Float> = SIMD3(0, -9.8, 0), shell: ClothShellSetup? = nil, jointPaths: [String] = [])
     {
         self.name = name
         self.origin = origin
@@ -201,6 +216,7 @@ public struct ClothGarmentSetup: Sendable {
         self.pelvisJoint = pelvisJoint
         self.gravity = gravity
         self.shell = shell
+        self.jointPaths = jointPaths
     }
 }
 

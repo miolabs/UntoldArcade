@@ -945,7 +945,9 @@ cost) and `xcrun simctl launch <udid> com.miolabs.CoolZombieVisionOS
 switch live: the Mac's Cloth and Solver dropdowns,
 and on the headset the control window's *Cloth* (Off / Skin only / World
 / Ragdoll too), *Solver* (Jolt / GPU), *Cloth iterations* (1, 2, 3, 4 or
-6; Jolt's knob) and *GPU substeps* (8, 12, 16 or 24; the GPU's) pickers,
+6; Jolt's knob) and *GPU substeps* (8, 10, 12, 16 or 24; the GPU's) pickers
+and the *Hull candidates* toggle (the GPU's; off by default, the hull
+pass's cost A/B, which loses contacts — the budget phase, below),
 each
 change taking the shirt off and putting it back on rebuilt
 (`ZombieChaseGame.setCloth`). Off returns the body to its own
@@ -1018,7 +1020,29 @@ for a second while the cloth was awake and in range; the headset shows
 the short form (state, timings, counters) in the control window's
 footnote, beside the frame's own line (the engine's CPU update and
 encode and GPU milliseconds in a debug build, and the frames whose GPU
-work finished after the compositor's deadline). A body that does not
+work finished after the compositor's deadline), and since 2026-11-04 it
+prints the full report to the Xcode console once a second whenever the
+shirt is attached, flag or no flag, because the headset run is the
+measurement and a photo of the footnote was the only way to carry its
+figures off the device until then: the Mac's line as it stands, with
+`| frame: N late this second, M so far, worst +X ms` from the engine's
+deadline counters (the engine's own `XR frame timing` line speaks only in
+a second that had late frames, so the cloth's line carries the figures in
+a quiet second too) and the engine's `cpu a+b gpu c ms` where the build
+fills them (a debug build; left out in release), plus the Mac's
+stood-still warning. For a gate the line to read is the GPU arm's on the
+idle with the arms forward: `gpu=` is the frame's GPU time from the
+solver's own command-buffer stamps and `wait=` what the first read
+stalled the frame thread, `sub=` and `it=` the schedule they belong to,
+`feed=`, `read=` and `bind=` the frame thread's own cost, `onClamp=`
+whether the look is bounded by the schedule or the solver, `proxy=` which
+cook ran, `hullCandidates=` which hull loop the solver ran (`off`, the
+default, is every hull on every particle; the footnote carries it too),
+and the late count beside them says whether that GPU time cost
+the compositor a deadline; the attach-time line above it (`cloth
+skinAndWorld, gpu, proxy 16k (Zombie.cloth16k), 4 iterations, 16
+substeps, 2 gathers, shell gpu, hull candidates off`) names the proxy,
+the gathers and the hull loop the figures belong to. A body that does not
 take the deformation component at the attach is refused like a stale
 sidecar, since the override's write is silent. The ragdoll's
 capsules are fitted inside the body and a particle's radius under the
@@ -1618,10 +1642,14 @@ for the device in Release (`xcodebuild ... -scheme
 CoolZombieVisionOS-visionOS -configuration Release -destination
 "generic/platform=visionOS"`). Left
 for gate 2, the owner's quality verdict on the headset at 16k and 16
-substeps (`Docs/GPUCloth.md` section 7): the drape figure pinned from the
-verdict, `Configuration.solver`'s default flipped to `.gpu` with the
-launch-argument test if it passes, the 2.0 ms `gpu=` line and the 0.6 ms
-read-plus-bind on the device, and the 12,000 cook as the fallback the
+substeps (`Docs/GPUCloth.md` section 7; the budget phase below says what
+16 substeps project at on the device and which rows to read beside
+them): the drape figure
+pinned from the verdict, `Configuration.solver`'s default flipped to
+`.gpu` with the launch-argument test if it passes, the 2.0 ms `gpu=` line
+and the 0.6 ms read-plus-bind on the device — read from the console's
+once-a-second cloth report (visionOS, below), not from a photo of the
+footnote, since 2026-11-04 — and the 12,000 cook as the fallback the
 owner settled on if the gate fails on cost rather than look, and phase 3's
 engine PR once the GPU shirt is the shirt. On the cost the Mac's own
 numbers say where the levers are, and it is not the proxy (the second
@@ -1629,7 +1657,9 @@ review of phase 2, 2026-11-04, from the arms-forward rows in the debug
 build at exactly 16 substeps): with every hull engaged the 4k reads
 `gpu=` 0.49 ms on the skin-only model and 3.65 ms with the eleven hulls,
 the 16k 1.55 ms and 2.57-6.22 ms — the hull plane pass is 87 % of the 4k's
-GPU time already and up to 4.7 ms of the 16k's — while on the sway the
+GPU time already and up to 4.7 ms of the 16k's (single report lines, the
+frames read in a fixed order: with the GPU kept hot the pass is half to
+two thirds of the frame, the budget phase below) — while on the sway the
 cost per particle per substep FALLS from 27 ns at 4k to 9 ns at 16k, the
 solve being dispatch-latency-bound at 4k and the finer proxy's marginal
 particle about 3 ns a substep. So the 2.0 ms line is threatened by the
@@ -1639,6 +1669,473 @@ bounding-sphere early-out in `zcSolve`, fewer planes per hull, the
 (0.9 ms on the 16k idle, nothing on the chase within the noise), and only
 then the 12,000 cook; and the headset run should print the arms-forward
 idle beside the sway, since the sway alone leaves most hulls idle.
+
+The budget phase landed on 2026-11-04, was measured again on 2026-11-10
+and closed that day with its main change switched off. It made three
+changes to the hull pass: per-particle hull candidates, which lose
+contacts and are now an option, off by default; a coplanar merge of the
+hull planes, an option that is off as well; and the plane walk unrolled by
+four, which ships. It took two readings of what they buy, because the
+first had timed the GPU's clock and not the kernel. And it left the device
+defaults where they were, because no schedule that keeps the 16k shirt
+still projects under gate 2's 2.0 ms. The shipped hull pass is phase 1's
+loop, every hull's box and planes on every particle, with the unrolled
+walk, because that loop is exact.
+
+The hull candidates (`gpuHullCandidates`, `-clothHullCandidates on|off`,
+the headset's *Hull candidates* toggle; the report line ends with
+`hullCandidates=on|off`, which is what the solver ran). On, the solve
+kernel walks, per particle, a static list of at most four hull candidates
+instead of the eleven — the hulls of the joints among its skin influences
+and of their parents and children, one step along the bind skeleton
+(`GPUClothSolver.HullCandidates`, four 8-bit hull indices a particle in
+`ZCHullCandidatesIndex`, ascending so the push-outs apply in the order the
+every-hull loop applies them; a pin carries none; a particle that
+qualifies more than four — 1,249 of the 4k's 3,463 free particles and
+5,047 of the 16k's 14,131, a spine-3 particle with a clavicle influence
+reaching nine — keeps the four nearest at the rest pose in the hulls' bind
+frames), built from the feed joints' paths the cloth hands the solver in
+`ClothGarmentSetup.jointPaths`. The tree, the histogram (80 / 294 / 923 /
+2,166 free particles with one to four candidates at 4k, 276 / 1,332 /
+3,770 / 8,753 at 16k), the cap, and that the four kept are the four
+nearest are pinned on both proxies by
+`testTheHullCandidatesFollowTheSkeleton`, which also holds the default: a
+default configuration has `gpuHullCandidates` false, its solver walks
+every hull (`walksEveryHull`) and its report reads `hullCandidates=off`. A
+garment without joint paths, or one with more than 254 hulls, walks every
+hull whatever the switch says
+(`testASheetWithoutJointPathsMeetsEveryHull`: a sheet over five hulls,
+which fell through the fifth until 2026-11-10).
+
+The rule is not exact, and the first verification did not show it. With
+both solvers recording which hulls pushed each particle in each frame
+(`recordHullContacts`, `ZCHullContactsIndex`, a buffer the kernel never
+touches unless the switch is set) `testTheCandidateHullLoopLosesNoContact`
+drives two harnesses identically through the hang, the sway, the
+arms-forward idle and the arm swing on both proxies, one on the candidates
+and one on every hull, and diffs the contact sets frame by frame — 760
+frames a proxy; 11,145 particle-frames pushed by a hull in the 4k
+arms-forward idle and 32,813 in the 16k's, almost all on the clavicles and
+the upper arms, 392 and 632 in the hang, the forearm hulls under the
+rolled cuffs, 1,069 and 3,229 in the swing — and
+`testTheCandidateHullLoopLosesNoContactOnTheChaseClips` does the same
+through a second and a half of the 100STYLE walk and of the run, sampled
+every 10 ms with the body travelling at the clip's own speed (0.53 and
+1.07 m) after a thirty-frame blend from the bind pose, 9,368 and 10,818
+particle-frames pushed at 4k, 25,563 and 32,064 at 16k. Not one differs in
+any of the 2,240 frames and the position buffers are bitwise equal in
+every one, and "the rule loses nothing" was written on that. It holds for
+those six motions and no further: in none of them does a sleeve meet the
+torso (the pelvis and spine-2 hulls take no contact in any, spine 1
+eleven). On 2026-11-10 the every-hull loop was run alone through every
+bundled clip — 77: the mixed set, the two arm postures, the wall hold, the
+Kimodo core and the pack, a second of each at 10 ms a frame, the shirt
+carried from clip to clip as the chase carries it — and through three
+knockdowns of the ragdoll, shoved forward, backward and sideways, and
+every contact it made was held against the rule's list for that particle.
+The rule lacks the hull in 866,205 particle-frames at 4k (5,385 distinct
+particle-hull pairs) and in 2,858,798 at 16k (21,624), a quarter of the
+3,576,172 and 12,336,677 particle-frames in which a hull pushed at all.
+The worst scenes are the falls forward and sideways (55,769 and 51,594
+particle-frames at 4k, 180,506 and 190,075 at 16k) and the pack's
+`walk_6`, `walk_3`, `chase_3`, its hyper runs and `hold_3` (30,000 to
+43,000 each at 4k, 95,000 to 136,000 at 16k); the 100STYLE captures lose
+none, and the Kimodo gap clips 882 and 3,457 particle-frames between them,
+nearly all in the running turns. What is lost is arm against torso: the
+spine-2 hull on the particles of the upper arms' and the forearms'
+sleeves, the spine-1 and spine-3 hulls on the right arm's, the upper arms'
+and the forearms' hulls on the particles of the spine links and the pelvis
+— an arm carried across the chest or lying under the body, three joints
+apart along the tree and more, and touching in the pose. No rule read off
+the tree follows that. The same contacts held against wider rules: the
+influence joints' own hulls alone lack 1,199,632 / 4,087,195
+particle-frames (4k / 16k), one step without the cap of four 674,341 /
+2,234,011, one step with the siblings 519,274 / 1,714,374, two steps
+266,275 / 894,936 (2,654 / 10,489 pairs). A lost contact is a sleeve or a
+forearm passing through the shirt, which is the defect the headset showed.
+So `gpuHullCandidates` is false by default since 2026-11-10 and the
+every-hull loop with its box cull is the shipped path.
+`testTheCandidateRuleLosesContactsOnTheChaseClipsAndFalls` pins the
+finding on the clips the 100STYLE and mixed sets play, the arm postures,
+the wall hold and the three falls — 29 clips; 121,655 particle-frames lost
+at 4k, 882 of them in the clips and 120,773 in the falls, 2,229 pairs;
+415,842 at 16k, 3,457 and 412,385, 8,646 pairs;
+`COOLZOMBIE_CLOTH_ALL_CLIPS=1` runs every bundled clip and reads the
+figures above — and fails when the loss is zero: if it ever is, the rule
+has become exact and the default may be reconsidered. The candidates stay
+in the code as the cost experiment they are, measured below. The next cost
+lever on the hull pass is the conservative one, not taken in this phase: a
+per-frame hull mask from each hull's box against the bounds of a cluster
+of particles grown by their slack, which skips a hull only where no
+particle of the cluster can reach it.
+
+The plane walk inside the loop is unrolled by four with the one-plane
+loop's test order kept — the same most-facing plane, the same early-out,
+so the same bits. That was held before the one-plane loop left the kernel:
+on 2026-11-10, with that loop still behind a kernel flag, every hull on
+the four-wide walk and every hull on the one-plane walk — the phase-2 hull
+pass, the kernel the headset ran — read the same contact sets and
+bitwise-equal positions through the arms-forward idle and the arm swing on
+both proxies, 520 frames. What the unroll buys was first written as a
+fifth to a quarter (1.76 to 1.40 ms at 4k, the same slot of a fixed order
+before and after), and that was the order's clock state. Timed side by
+side in the heater's rotation (below: every hull, the arms forward, 16
+substeps, six runs, the two walks changing places in the rotation after
+three, because a variant's place in it still moves it about a tenth), the
+four-wide walk reads 0.86-0.90 of the one-plane walk's frame at 4k and
+0.88-0.92 at 16k, place for place on the three-run means of the lowest
+deciles and of the medians (run by run and across places 0.75-1.00 and
+0.86-0.96): the unroll buys a tenth to a seventh. With the figure recorded
+the flag and the one-plane loop were removed, and the kernel carries one
+plane walk. A uniform loop over the hulls with per-lane membership and
+`simd_any`, tried before the per-lane candidates, read no better in the
+fixed-order test of 2026-11-04 (its figures are in the kernel's comment)
+and was not built again under the heater: it is not shown slower, only
+never shown faster. And a 3-degree / 1 mm coplanar merge of each hull's
+brute-force plane set (`HullPlaneSet`'s `mergePlanes`, 816 planes to 724,
+the farthest-out plane of a group kept so a hull can only grow, by the
+merge depth the solver reports — 2.8 mm at the pelvis, 1.9 at spine 2,
+under a millimetre on the forearms and the neck — every hull point inside
+the merged set at 1e-5, `testTheCoplanarMergeKeepsTheHullPointsInside`) is
+built, switchable (`gpuPlaneMerge`, `-clothPlaneMerge on`) and OFF
+(below).
+
+What the hull pass costs took two measurements, and the first was wrong in
+a way worth keeping. `testTheHullPassCostWithTheArmsForward` runs its
+variants at exactly 16 substeps and two gathers with the arms forward —
+skin only, every hull, every hull with the merge, the candidates, the
+candidates with the merge — and on 2026-11-04 it stepped the four it then
+had (skin only, every hull, the candidates, the candidates and the merge)
+in that fixed order, frame by frame, and read 16k medians of 0.94-0.96 /
+4.22-4.25 / 1.23-1.33 / 2.31-2.50 ms: the candidates a tenth of the hull
+pass, the merge a millisecond lost. Neither is the kernel's. The M4 Max's
+GPU clocks up under load and down within milliseconds of idling, and
+`gpu=` follows the clock two to four to one: in that order the every-hull
+frame always followed the light skin-only one and found the GPU slow, the
+candidates always followed the every-hull frame's 4 ms burst and found it
+fast, and the merge followed the candidates' short frame. On 2026-11-10
+the same 16k frame, the candidates at 16 substeps, read 1.3 ms stepped
+among four harnesses and 3.3 among eight, which is what gave the order
+away. The test now rotates the turn and runs a heater before every timed
+frame (`makeHeater`: the 16k shirt, every hull, about 5 ms of GPU, swaying
+so it never sleeps), so each variant is read after the same burst, and it
+prints the lowest decile beside the median — the hot GPU's figure, the
+state a headset's GPU is in with the render filling most of every frame. A
+row is still good to about a tenth and no better: the frame before the
+heater leaves its trace, so a variant's place in the rotation moves it
+(every hull read 0.98-1.04 ms at 4k in one place of the six-variant
+rotation and 0.88-1.00 in another), and the schedule test below carries
+one harness twice in the 4k's rotation and reads the two 2 to 15 per cent
+apart on the lowest decile.
+
+The readings, of 2026-11-10 but for the last two runs, lowest deciles.
+Five runs of the four-variant rotation, skin only / every hull /
+candidates / candidates and merge: 4k 0.37-0.40 / 0.88-1.14 / 0.74-0.90 /
+0.72-0.87 ms, 16k 0.47-0.67 / 1.17-1.52 / 1.07-1.25 / 1.07-1.31 ms (the
+medians about twice these and in the same order: 16k 0.92-1.01 / 1.86-2.44
+/ 1.91-2.02 / 1.84-1.94). Six runs of the six-variant rotation that timed
+the one-plane walk, skin only / every hull / every hull and merge /
+candidates / candidates and merge: 4k 0.37-0.39 / 0.88-1.04 / 0.87-0.98 /
+0.79-0.88 / 0.79-0.87 ms, 16k 0.53-0.59 / 1.48-1.59 / 1.35-1.48 /
+1.21-1.31 / 1.14-1.27 ms (medians 16k 0.90-0.93 / 2.43-2.68 / 2.34-2.39 /
+1.94-1.99 / 1.90-1.99; the one-plane walk 1.00-1.23 ms at 4k and 1.65-1.77
+at 16k). Two runs of the five-variant rotation the test has now, on the
+kernel as it stands (2026-11-11), skin only / every hull / every hull and
+merge / candidates / candidates and merge: 4k 0.37-0.39 / 0.95-1.05 /
+0.82-0.84 / 0.76-0.82 / 0.77-0.78 ms, 16k 0.59 / 1.42-1.54 / 1.35-1.38 /
+1.17-1.25 / 1.20-1.23 ms. A longer rotation leaves the GPU idle longer
+between one variant's frames, so the sets are not one scale; the ratios
+inside a run are what carries.
+
+So on a hot GPU the hull pass is 0.5-0.75 ms of the 4k frame and 0.7-1.05
+of the 16k's with every hull, half to two thirds of either — not the 87 %
+the phase-2 paragraph took from two report lines. Over the thirteen runs
+the candidates take 7 to 24 per cent off the 16k frame's lowest decile and
+7 to 27 off the 4k's (7 to 20 and 10 to 26 in the first five), and on the
+16k medians they read from 2.5 per cent worse to 26 per cent better: a
+real saving and a modest one, not nine tenths of the pass, because a solve
+dispatch on this GPU is the touching lane's walk of its hull's 52-88
+planes whichever hulls the other lanes skip. The merge on top of the
+candidates buys a few per cent on the 16k medians (from 1 per cent worse
+to 7.5 better over the thirteen runs) and nothing steady on the lowest
+deciles (within about 1 per cent in four of the first five runs and 5
+per cent worse in the fifth, from 5 per cent worse to 10 better in the
+last eight); on the every-hull loop, where a particle walks
+the planes of every hull whose box it is in, it reads 3 to 14 per cent
+under no merge on the 16k's lowest decile in the eight runs that carried
+it, 2 to 13 on its median, and at 4k from 2 per cent worse to 20 better.
+Against that it grows a hull by up to 2.8 mm (the pelvis) and moves the
+fit figures with it, so off stays right; `-clothPlaneMerge on` is a row
+the device run can read if a tenth is what is missing. What the candidates
+buy a GPU that is short of throughput the release host shows on one scene
+and not on the other (below: the 16k idle at 16 substeps 3.4-3.8 ms with
+them and 4.8-6.7 without, the 16k chase 5.50 / 4.05 against 4.88 / 4.25),
+and the headset's GPU is the smaller one, which is what the *Hull
+candidates* toggle is on the device to read. They lose contacts, so they
+are off. The follow-ups not taken attack the walk itself — the prep's
+24-point hulls (about 44 planes a hull, section 9 of the design) and the
+extreme-direction planes first in each hull's set — or, conservatively,
+the hulls a particle meets: the per-frame mask above.
+
+The Mac release sweep of the budget phase, 2026-11-10, the host as the
+phase-2 sweep ran it (`swift build -c release --product CoolZombie`, the
+M4 Max at 60 Hz, 35 s runs with the once-a-second `-debugLog` line, the
+idle inspect and the plain chase without balls — the phase-2 chase rows
+carried eight balls and a reset every 12 s, so no chase row here is like
+for like with a phase-2 one — the medians over the awake in-range lines,
+11-14 of them in an idle and 28-29 in a chase, with the maximum in
+brackets; the candidates on and the merge off unless the row says
+otherwise, the candidates being the default that day, so the rows marked
+`-clothHullCandidates off` are the path that ships; a Time Machine backup
+and another session's `gulp` holding half a core between them), run twice,
+the second pass in the reverse order of the first, eighty runs: the
+substeps 8 / 10 / 12 / 16 asked, which the 16.7 ms frame encodes as 14 /
+17 / 21 / 27, the gathers 1 / 2 / 4 at 16 and 1 at 12, the merge, every
+hull, and the colliders off as the floor. `ns` is the GPU nanoseconds per
+particle per encoded substep on the two passes' mean, `speed<=` the
+fastest particle's displacement over the report's frame, each pass's
+median, and the other columns the two passes' mean of medians:
+
+| run (`-clothSolver gpu`; `-clothSidecar Zombie.cloth16k` for 16k) | sub | it | gpu= first pass | gpu= second pass | ns | wait= | feed= | read= | bind= | speed<= | onClamp |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 4k, idle, `-clothSubsteps 8` | 14 | 2 | 2.59 ms (3.35) | 2.69 ms (2.85) | 47.2 | 3109 us | 184 us | 3332 us | 62 us | 0.33 / 0.32 m/s | 2 % |
+| 4k, idle, `-clothSubsteps 10` | 17 | 2 | 3.34 ms (3.68) | 3.35 ms (3.65) | 49.3 | 3881 us | 169 us | 4094 us | 56 us | 0.12 / 0.10 m/s | 1 % |
+| 4k, idle, `-clothSubsteps 12` | 21 | 2 | 3.57 ms (4.29) | 4.01 ms (4.40) | 45.1 | 4307 us | 162 us | 4520 us | 58 us | 0.09 / 0.10 m/s | 2 % |
+| 4k, idle, `-clothSubsteps 16` | 27/28 | 2 | 4.59 ms (7.76) | 5.27 ms (6.50) | 44.9 | 5200 us | 179 us | 5443 us | 56 us | 0.08 / 0.09 m/s | 1 % |
+| 4k, idle, 16, `-clothGPUIterations 1` | 27 | 1 | 2.85 ms (3.75) | 2.92 ms (4.88) | 26.5 | 3205 us | 172 us | 3450 us | 43 us | 0.29 / 0.29 m/s | 1 % |
+| 4k, idle, 12, `-clothGPUIterations 1` | 20/21 | 1 | 2.17 ms (2.80) | 2.10 ms (3.48) | 25.8 | 2524 us | 156 us | 2742 us | 60 us | 1.10 / 0.80 m/s | 1 % |
+| 4k, idle, 16, `-clothGPUIterations 4` | 27/28 | 4 | 7.62 ms (10.34) | 5.10 ms (6.86) | 57.9 | 6782 us | 200 us | 6932 us | 56 us | 0.10 / 0.07 m/s | 1 % |
+| 4k, idle, 16, `-clothPlaneMerge on` | 27/28 | 2 | 4.52 ms (6.81) | 4.67 ms (5.80) | 41.4 | 4864 us | 205 us | 5026 us | 58 us | 0.08 / 0.09 m/s | 2 % |
+| 4k, idle, 16, `-clothHullCandidates off` | 27/28 | 2 | 4.19 ms (6.92) | 4.71 ms (6.89) | 40.5 | 4732 us | 144 us | 4873 us | 43 us | 0.11 / 0.09 m/s | 1 % |
+| 4k, idle, 16, `-clothColliders off` | 27 | 2 | 2.18 ms (2.44) | 2.56 ms (3.72) | 22.0 | 2762 us | 193 us | 2922 us | 50 us | 0.09 / 0.09 m/s | 1 % |
+| 4k, chase, `-clothSubsteps 8` | 14 | 2 | 2.55 ms (3.26) | 2.68 ms (4.42) | 46.8 | 2808 us | 139 us | 2996 us | 55 us | 2.02 / 1.79 m/s | 1 % |
+| 4k, chase, `-clothSubsteps 10` | 17 | 2 | 3.14 ms (5.05) | 3.30 ms (4.20) | 47.4 | 3338 us | 104 us | 3518 us | 37 us | 1.61 / 1.73 m/s | 1 % |
+| 4k, chase, `-clothSubsteps 12` | 21 | 2 | 3.87 ms (5.12) | 4.05 ms (5.05) | 47.2 | 4132 us | 168 us | 4330 us | 59 us | 1.74 / 1.92 m/s | 2 % |
+| 4k, chase, `-clothSubsteps 16` | 27 | 2 | 4.56 ms (5.68) | 3.25 ms (5.84) | 35.9 | 4026 us | 200 us | 4232 us | 53 us | 2.04 / 1.62 m/s | 2 % |
+| 4k, chase, 16, `-clothGPUIterations 1` | 27/28 | 1 | 2.63 ms (3.02) | 1.96 ms (4.60) | 20.9 | 2484 us | 194 us | 2676 us | 54 us | 1.95 / 1.71 m/s | 2 % |
+| 4k, chase, 12, `-clothGPUIterations 1` | 21 | 1 | 2.11 ms (3.70) | 1.95 ms (3.69) | 24.2 | 2236 us | 166 us | 2456 us | 57 us | 1.86 / 1.99 m/s | 1 % |
+| 4k, chase, 16, `-clothGPUIterations 4` | 27/28 | 4 | 5.85 ms (8.76) | 5.69 ms (9.35) | 52.5 | 6135 us | 221 us | 6299 us | 57 us | 1.95 / 1.87 m/s | 2 % |
+| 4k, chase, 16, `-clothPlaneMerge on` | 27/28 | 2 | 4.68 ms (6.29) | 4.06 ms (6.67) | 39.8 | 4624 us | 195 us | 5036 us | 56 us | 2.01 / 1.68 m/s | 2 % |
+| 4k, chase, 16, `-clothHullCandidates off` | 27 | 2 | 3.45 ms (7.18) | 4.00 ms (6.99) | 34.5 | 3886 us | 211 us | 4148 us | 50 us | 1.95 / 1.71 m/s | 2 % |
+| 4k, chase, 16, `-clothColliders off` | 27 | 2 | 2.17 ms (3.79) | 1.60 ms (3.70) | 17.5 | 2148 us | 178 us | 2264 us | 50 us | 1.68 / 1.71 m/s | 2 % |
+| 16k, idle, `-clothSubsteps 8` | 14 | 2 | 3.04 ms (6.60) | 2.44 ms (4.43) | 12.2 | 3035 us | 94 us | 3256 us | 27 us | 3.20 / 4.86 m/s | 2 % |
+| 16k, idle, `-clothSubsteps 10` | 17 | 2 | 3.69 ms (5.66) | 3.66 ms (4.49) | 13.5 | 3872 us | 106 us | 4168 us | 41 us | 0.41 / 0.40 m/s | 1 % |
+| 16k, idle, `-clothSubsteps 12` | 21 | 2 | 4.15 ms (4.44) | 4.42 ms (5.85) | 12.8 | 4580 us | 156 us | 4891 us | 55 us | 0.09 / 0.09 m/s | 1 % |
+| 16k, idle, `-clothSubsteps 16` | 27 | 2 | 3.76 ms (6.18) | 3.41 ms (5.63) | 8.3 | 3851 us | 168 us | 4129 us | 50 us | 0.08 / 0.09 m/s | 1 % |
+| 16k, idle, 16, `-clothGPUIterations 1` | 27 | 1 | 3.02 ms (3.92) | 2.81 ms (4.69) | 6.8 | 3149 us | 132 us | 3373 us | 37 us | 0.40 / 0.41 m/s | 1 % |
+| 16k, idle, 12, `-clothGPUIterations 1` | 20/21 | 1 | 2.44 ms (3.68) | 1.75 ms (3.60) | 6.4 | 2392 us | 161 us | 2703 us | 54 us | 0.43 / 8.99 m/s | 1 % |
+| 16k, idle, 16, `-clothGPUIterations 4` | 27/28 | 4 | 6.06 ms (6.99) | 6.15 ms (8.45) | 13.9 | 6458 us | 136 us | 6691 us | 36 us | 0.10 / 0.08 m/s | 1 % |
+| 16k, idle, 16, `-clothPlaneMerge on` | 27 | 2 | 5.65 ms (6.44) | 4.50 ms (6.75) | 11.8 | 5375 us | 201 us | 5756 us | 60 us | 0.09 / 0.09 m/s | 1 % |
+| 16k, idle, 16, `-clothHullCandidates off` | 27 | 2 | 6.69 ms (7.44) | 4.83 ms (6.68) | 13.4 | 6133 us | 203 us | 6364 us | 54 us | 0.08 / 0.08 m/s | 1 % |
+| 16k, idle, 16, `-clothColliders off` | 27/28 | 2 | 2.71 ms (3.98) | 3.15 ms (4.44) | 6.7 | 3450 us | 172 us | 3760 us | 47 us | 0.10 / 0.08 m/s | 1 % |
+| 16k, chase, `-clothSubsteps 8` | 14 | 2 | 3.08 ms (3.70) | 2.22 ms (4.94) | 11.8 | 2830 us | 156 us | 3065 us | 56 us | 4.50 / 4.76 m/s | 2 % |
+| 16k, chase, `-clothSubsteps 10` | 17 | 2 | 3.69 ms (4.16) | 2.40 ms (4.28) | 11.2 | 3074 us | 120 us | 3390 us | 44 us | 2.15 / 2.26 m/s | 1 % |
+| 16k, chase, `-clothSubsteps 12` | 21 | 2 | 4.16 ms (6.07) | 3.28 ms (6.84) | 11.1 | 4028 us | 154 us | 4342 us | 50 us | 2.18 / 1.83 m/s | 1 % |
+| 16k, chase, `-clothSubsteps 16` | 27 | 2 | 5.50 ms (6.93) | 4.05 ms (6.98) | 11.1 | 4792 us | 176 us | 5004 us | 50 us | 1.97 / 1.65 m/s | 1 % |
+| 16k, chase, 16, `-clothGPUIterations 1` | 27 | 1 | 3.75 ms (5.44) | 2.33 ms (5.30) | 7.0 | 3214 us | 158 us | 3528 us | 46 us | 1.99 / 2.12 m/s | 1 % |
+| 16k, chase, 12, `-clothGPUIterations 1` | 21 | 1 | 1.56 ms (4.03) | 2.37 ms (4.27) | 5.9 | 1986 us | 105 us | 2266 us | 49 us | 16.81 / 4.55 m/s | 1 % |
+| 16k, chase, 16, `-clothGPUIterations 4` | 27/28 | 4 | 6.74 ms (10.67) | 5.68 ms (8.08) | 14.1 | 6413 us | 189 us | 6676 us | 52 us | 2.02 / 1.69 m/s | 1 % |
+| 16k, chase, 16, `-clothPlaneMerge on` | 27/28 | 2 | 4.18 ms (7.70) | 3.00 ms (5.99) | 8.2 | 3626 us | 182 us | 3847 us | 48 us | 2.03 / 1.87 m/s | 1 % |
+| 16k, chase, 16, `-clothHullCandidates off` | 27/28 | 2 | 4.88 ms (9.42) | 4.25 ms (5.89) | 10.4 | 4704 us | 166 us | 5036 us | 35 us | 1.79 / 1.94 m/s | 1 % |
+| 16k, chase, 16, `-clothColliders off` | 27 | 2 | 2.73 ms (5.07) | 1.60 ms (4.16) | 5.0 | 2180 us | 167 us | 2430 us | 49 us | 1.84 / 1.95 m/s | 1 % |
+
+Not a runaway, a warning or an error line in any of the eighty runs, the
+override written once per awake frame (759-819 in the idle, 1,606-1,714 in
+the chase), `proxy=16k shell=gpu hullCandidates=on` in every 16k line of
+the candidate runs. What the table says, and first what it cannot: the two
+passes of one row differ by a quarter to two fifths in the chase (the 16k
+at 16 substeps 5.50 and 4.05 ms, the 4k 4.56 and 3.25, the 16k with the
+colliders off 2.73 and 1.60), and the 16k idle reads less at 27 substeps
+than at 21 in both passes (3.76 and 3.41 against 4.15 and 4.42), the
+longer burst clocking the GPU up — so this host orders no two rows a fifth
+apart, and the per-substep figure is its only steady one: 30-49 ns a
+particle a substep at 4k and 7-16 at 16k with two gathers, pass by pass
+(phase 2 read 38-43 and 13-18 on the same rows), over floors of 15-24 and
+4-7 without
+hulls. Against the phase-2 sweep at the same settings the 16k idle is
+5.52-6.81 to 3.41-3.76 ms at 27 substeps and 5.93 to 4.15-4.42 at 21, and
+the 16k chase 6.06-6.28 to 4.05-5.50 and 6.78 to 3.28-4.16 — but the
+phase-2 chase rows carried eight balls and these carry none, so the
+chase's fall is not the kernel's to claim, and the same day's own A/B, the
+one like-for-like comparison there is, gives the candidates nothing on the
+chase: the 16k chase at 16 substeps reads 5.50 / 4.05 ms with them and
+4.88 / 4.25 without (first / second pass), inside what two passes of one
+row differ by. On the idle the same A/B reads 3.76 / 3.41 with them and
+6.69 / 4.83 without at 16k, and 4.59 / 5.27 against 4.19 / 4.71 at 4k. So
+what this host credits the candidates with is the 16k idle, and it credits
+them and the unrolled walk with none of the 16k chase and none of the 4k,
+whose frame is its dispatches; the every-hull rows, the shipped path, read
+the 16k idle at 4.83-6.69 ms where phase 2 read 5.52-6.81. `wait=` tracks
+`gpu=` within 0.1-0.6 ms in every row, `read=` is the wait and 0.1-0.6 ms,
+`feed=` 66-254 us and `bind=` 21-68, as phase 2 left them. What the sweep
+does settle is which schedules hold the shirt, in the `speed<=` column,
+the same in both passes and the same on either hull loop (the every-hull
+rows read 0.08-0.11 m/s on the idle as the candidate rows do): on the idle
+the 16k reads 0.08-0.10 m/s at 16 and at 12 substeps with two gathers and
+at 16 with four, 0.40-0.41 at 10 with two and at 16 with one, 3.2-4.9 at 8
+with two, and at 12 with one 4.5-17 m/s through three of its four runs,
+idle and chase together (nothing ran away, since the runaway rule is the
+pelvis's distance, and
+the cap is on the velocity carried into the next substep, not on where the
+clamp puts a particle); the 4k reads 0.08-0.12 at 16, 12 and 10 with two
+gathers, 0.29 at 16 with one, 0.32-0.33 at 8 with two and 0.8-1.1 at 12
+with one. So the finer cook's 4.5 mm edges take substeps of 0.83 ms with
+two gathers and no longer, and one gather only at 0.625 ms and then not
+quietly: 12 substeps with two gathers is the cheapest schedule that holds
+the 16k as still as the default does.
+
+The device defaults for gate 2, from that, from the one headset reading
+there is and from a test at a headset-length frame. The reading is the 4k
+shirt with every hull on every particle and the plane walk not yet
+unrolled (the phase-2 kernel), two gathers: the *GPU substeps* picker at
+16 gave `sub=14 gpu=2.58 ms` and at 24 `sub=21 gpu=3.54 ms` — 45 and 66
+dispatches, 57 and 54 us each, the same at either count, so on the device
+the frame is its dispatches, substeps x (1 + gathers) + 3. Which frame
+rate those two lines were read at is not recorded. The counts themselves
+put the frame at 8.3 to 8.75 ms (14 substeps of 0.625 ms, 21 of 0.417; a
+120 Hz frame is 8.33 ms), shorter than the design's 10 ms and than the
+11.1 ms of a 90 Hz display; an earlier form of this paragraph took the 14
+for the picker's 12 on an 11.1 ms frame, which the second line does not
+allow, 21 being no picker count's on that frame. So the report's `sub=` is
+what says how many substeps a device frame carried: 18, 14 and 12 for the
+picker's 16, 12 and 10 on an 11.1 ms frame, 14, 11 and 9 on the reading's.
+
+`testTheScheduleCostAndStillnessAtTheHeadsetsFrame` plays the idle clip at
+1/90 s a frame on both proxies — every hull at six schedules, the
+candidates at four, and the headset's own row (the 4k shirt, every hull,
+14 encoded substeps, two gathers) in both proxies' rotations — stepped in
+rotation with the heater before each, and reads `gpu=` and the fastest
+particle of every frame. On the hot M4 Max, five runs on 2026-11-10 and
+11, lowest deciles (medians in brackets), the 16k shirt on every hull:
+1.26-1.34 (2.23-2.66) ms at 16 substeps with two gathers (18 encoded, 57
+dispatches), 1.28-1.39 (2.16-2.21) at 12 (14, 45), 1.11-1.18 (1.79-1.97)
+at 10 (12, 39), 0.88-0.94 (1.45-1.56) at 8 (9, 30), 0.85-0.91 (1.45-1.52)
+at 16 with one gather (18, 39) and 0.66-0.70 (1.13-1.18) at 12 with one
+(14, 31); with the candidates 1.23-1.32 (2.08-2.22), 1.03-1.09
+(1.61-1.68), 0.86-0.92 (1.43-1.54) and 0.70-0.73 (1.19-1.22) at 16 x 2, 12
+x 2, 10 x 2 and 16 x 1. The 4k on every hull reads 0.99-1.07 (1.76-2.04),
+0.92-0.96 (1.68-1.91), 0.69-0.77 (1.27-1.45), 0.56-0.60 (1.07-1.15),
+0.64-0.71 (1.24-1.31) and 0.54-0.62 (1.04-1.16), and with the candidates
+0.98-1.10 (1.86-2.04), 0.70-0.75 (1.39-1.45), 0.63-0.67 (1.23-1.28) and
+0.53-0.58 (1.03-1.06): the 16k costs this GPU a fifth to two thirds over
+the 4k and not four times, so the 12,000 cook, the fallback settled on for
+a gate failed on cost, would buy a part of that and no more. The headset's
+row reads 1.09-1.17 ms (1.88-2.00) in the 16k's rotation and 0.99-1.10 ms
+(1.90-2.02) in the 4k's, where the same harness elsewhere in the rotation
+reads 0.92-0.96 (1.68-1.91): the tenth or so a place in the rotation is
+worth, which is the resolution of everything here (the 16k's lowest decile
+at 12 substeps reads at or over its decile at 16 in most runs for the same
+reason; the medians stand in order). The fastest particle is the same on
+either hull loop, the idle making no contact the candidates lack: on the
+16k a median of 0.08 m/s at 16 and at 12 substeps with two gathers, 0.10
+at 10, 0.09 at 16 with one, and 0.58 at 8 with two and 0.57 at 12 with
+one; on the 4k 0.07-0.08 and 0.74 and 0.66 — the still clip is kinder than
+the host's idle to 10 and to one gather, and agrees with it on what
+jitters.
+
+The projection is each 16k row over the headset's row in the same
+rotation, times the headset's 2.58 ms, times what the unrolled walk is
+worth on the device: 1 if the device keeps none of the gain, 0.86 if it
+keeps what this GPU reads at 4k, the proxy the reading was taken on. Each
+schedule is a range, from the smallest of the runs' ratios on either
+statistic times 0.86 to the largest times 1. On every hull, the shipped
+path: 16 substeps with two gathers 2.4 to 3.65 ms, 12 with two 2.4 to 3.3,
+10 with two 2.05 to 2.8, 16 with one 1.65 to 2.1. With the candidates on,
+the option: 2.3 to 2.95, 1.75 to 2.6, 1.6 to 2.1 and 1.3 to 1.75. The
+cruder scaling, the dispatch count at the headset's 54-57 us a dispatch,
+gives 3.1-3.2 / 2.4-2.6 / 2.1-2.2 / 2.1-2.2 ms for the four schedules at
+the 4k's cost, inside the ranges or at their edge. These are for an 11.1
+ms frame. On the reading's own shorter frame every row encodes about a
+fifth fewer substeps and costs about that much less — the picker's 16
+encodes 14 there and reads what the 12 row says here — and `sub=` on the
+device's line says which case it is.
+
+So the 16k shirt on every hull is not expected to meet 2.0 ms at 16
+substeps and two gathers: it projects at 2.4 to 3.65 ms, and the device
+run decides. The two schedules that hold the 16k as still as the design's,
+16 and 12 substeps with two gathers, both project over the line. The two
+whose ranges come nearest it, 10 with two gathers and 16 with one, read
+the 16k idle at 0.40 m/s against 0.09 on the release host and pay in the
+stretch the finer shirt is already short of —
+`testStretchResidualAtRestAt16k` has the hang's residual at mean 1.37 %,
+p99 5.99 % at 16 substeps with two gathers, 1.82 % / 7.90 % at 12, 2.31 %
+/ 9.93 % at 10 and 2.78 % / 11.74 % at 16 with one, a third of the edges
+over 3 % (0.73 % / 3.50 % at four gathers; the 4k 0.40 % / 2.09 %, 0.52 %
+/ 2.57 % at 12, 0.73 % / 3.38 % with one gather), the residual following
+the gathers a frame gets — and only one gather reaches under the line at
+all on every hull; 8 with two gathers and 12 with one do not hold the 16k.
+The candidates would put 12 substeps across the line (1.75 to 2.6 ms) and
+10 mostly under it (1.6 to 2.1), and they are not exact. The cost line
+asks for fewer passes where the look asks for more, and no schedule has
+both: `Configuration.gpuSubsteps` stays 16 and `gpuIterations` 2, the
+design's schedule and the pinned defaults test with them, because a
+default is not moved on a projection that misses; 16, 12 and 10 are the
+three rows of the device run, all on the headset's *GPU substeps* picker
+(8, 10, 12, 16, 24; ten since 2026-11-10), and one gather the fourth. What
+the projection does not know: the headset's 2.58 ms was one idle's line
+with the render taking most of the frame on the same GPU; whether the
+16k's extra traffic — 5.5 MB of working set against 1.3 — costs the
+smaller GPU more than it costs this one is the device's to say; and what
+would move the line rather than the schedule is the work a frame carries,
+not the proxy — the conservative hull mask above, and the dispatch count
+itself: the predict folded into the last gather of the substep before it,
+untried, would take 13 of the 45 dispatches of a 14-substep frame without
+touching a pass, a tenth of the frame if a predict costs the headset what
+it costs this GPU and up to three tenths if the headset's 54-57 us is a
+dispatch's own latency. Those are the follow-ups this phase points at
+before any cook.
+
+The suites on 2026-11-11 after everything above: `ZombieClothGPUTests` is
+49 tests (the 41 of phase 2, the candidates' tree with the default's path,
+the two contact diffs on the six motions, the loss over the chase's clips
+and the falls, the merge's enclosure, the sheet without joint paths, the
+hull-pass cost and the schedules at an 11.1 ms frame; the 16k residual
+test has three rows more and the hull-pass and schedule tests carry the
+heater), `ZombieClothTests` its 29 with the two hull switches in the
+launch-argument test, and the whole kit suite green in a debug build —
+`swift test --filter CoolZombieKitTests`, 165 tests — with the visionOS
+host built for the device in Release, the Mac host in release, and the
+five metallibs rebuilt from the shader sources as they stand.
+
+The gate-2 run, for the owner on the headset (`Physics`, above, for the
+console line). Build the visionOS host in Release, open the space and in
+the control window pick *Solver* GPU and *Proxy* 16k, leave *Hull
+candidates* off, and set *GPU substeps* to 16 first, then 12, then 10: a
+minute of each on the idle with the arms forward — the waiting clip, where
+the clavicles and the upper arms engage the hull pass, since the sway
+alone leaves most hulls idle — then on the chase, and through a knockdown.
+The Xcode console prints the cloth report once a second, `CoolZombie:
+cloth shirt[gpu]: ... proxy=16k ... read= bind= ... speed<= ... sub=
+it=2 feed= gpu= wait= ... onClamp= hullCandidates=off | frame: N late this
+second, M so far, worst +X ms`: `gpu=` is the frame's GPU time and
+`wait=` what the frame thread stalled for it, `sub=` the substeps the
+frame encoded (18, 14 and
+12 for the three picks on a frame that holds 11.1 ms, fewer on a shorter
+frame, more on a late one), `read=` plus `bind=` the frame thread's own
+cost, `onClamp=` the share of the shirt on its slack ball, `speed<=`
+whether the schedule holds the shirt (0.1 m/s on a still idle; 0.4 and
+more is the restlessness the Mac read at 10), `proxy=` the cook and
+`hullCandidates=` the hull loop that ran, with the late-frame figures
+beside them; the attach-time line above it (`cloth skinAndWorld, gpu,
+proxy 16k (Zombie.cloth16k), 4 iterations, 16 substeps, 2 gathers, shell
+gpu, hull candidates off`) names what the figures belong to. The *Hull
+candidates* toggle is the cost A/B and nothing else: on, `gpu=` should
+fall by something like the Mac's tenth to a quarter, and a forearm or a
+sleeve may pass through the shirt where an arm lies against the body, in a
+knockdown most of all; read the cost and switch it off again. The verdict
+is the look: folds under gravity at the hem and the sleeves, no skin
+through the sleeves, no shards at the cuffs. The cost line is `gpu=` at or
+under 2.0 ms with the late frames not above the Jolt arm's on the same
+scene (flip *Solver* to Jolt for that count; the flip resets *Proxy* to
+4k, so after flipping back to GPU pick *Proxy* 16k again and check the
+line reads `proxy=16k`). The projection says the 16k on every hull will
+read 2.4 to 3.65 ms at 16, 2.4 to 3.3 at 12 and
+2.05 to 2.8 at 10 on an 11.1 ms frame, so the device's own three lines
+against those are the calibration this phase lacked; `-clothGPUIterations
+1` in the scheme's arguments is a fourth row (16 substeps, one gather,
+1.65 to 2.1 ms projected) and `-clothPlaneMerge on` a fifth. If no row
+that keeps the look meets the line, the levers are the conservative hull
+mask and the dispatch count, not the candidates and not the 12,000 cook.
 
 The package depends on the miolabs fork of the plugin at its
 `feature/zombie_cloth` branch (the character controller, the ragdoll, the
@@ -1742,10 +2239,15 @@ set the engine's pose-timing knobs at launch; the window's *Pose*,
 *Pacing* and *AA* pickers switch the same two and the anti-aliasing live,
 for telling the presentation from the tracking when the body sways against
 the room while its coordinates hold; `-cloth off|skin|ragdoll`,
-`-clothSolver jolt|gpu`, `-clothIterations <n>` and `-clothSubsteps <n>`
-set the shirt's simulation at launch and the *Cloth*, *Solver*, *Cloth
-iterations* and *GPU substeps* pickers switch it live, the footnote's
-cloth and frame lines side by side for each — see Physics)
+`-clothSolver jolt|gpu`, `-clothSidecar <name>`, `-clothIterations <n>`,
+`-clothSubsteps <n>` and `-clothHullCandidates on|off` set the shirt's
+simulation at launch and the *Cloth*, *Solver*, *Proxy*, *Cloth
+iterations* and *GPU substeps* pickers and the *Hull candidates* toggle
+switch it live, the footnote's cloth and frame lines side by side for
+each and the cloth's full report in the console once a second with the
+late-frame figures beside it (a flip of *Solver* to Jolt resets *Proxy* to
+4k and drops the sidecar, since the Jolt arm runs the 4k whatever is
+named, so the picker and the footnote's `proxy=` agree) — see Physics)
 without gaze-and-pinch input, for automated runs:
 
 ```bash

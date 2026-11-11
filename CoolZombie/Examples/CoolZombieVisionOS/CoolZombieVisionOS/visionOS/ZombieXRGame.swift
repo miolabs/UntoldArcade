@@ -48,6 +48,13 @@ final class ZombieXRGame: @unchecked Sendable {
     private var autoThrowInterval: Float = 0
     private var autoThrowClock: Float = 0
     private var autoThrowCount = 0
+    /// The cloth's once-a-second console report: the clock since the last
+    /// line, the override count it read then (the Mac's wiring check), and
+    /// the engine's late-frame count it read then, so the line can say how
+    /// many of the second's frames were late.
+    private var clothClock: Float = 0
+    private var clothWrites = 0
+    private var reportedLateFrames = 0
 
     init() {
         var configuration = ZombieChaseGame.Configuration()
@@ -228,7 +235,15 @@ final class ZombieXRGame: @unchecked Sendable {
         }
         if let cloth = holder.takeClothRequest() {
             game.setCloth(cloth)
-            print("CoolZombie: cloth \(cloth.enabled ? "\(cloth.collisionModel.rawValue), \(cloth.solver.rawValue), \(cloth.sidecar ?? ZombieClothAsset.defaultSidecarName), \(cloth.iterationsPerStep) iterations, \(cloth.gpuSubsteps) substeps, shell \(cloth.gpuShell ? "gpu" : "cpu")" : "off")")
+            // What the picker asked for, in the console next to the report
+            // the attach prints: the proxy as the picker names it with the
+            // sidecar it stands for, Jolt's iterations and the GPU's
+            // substeps and gathers (`gpuIterations`, clamped as the solver
+            // clamps it) and whether the GPU's hull loop was asked to walk
+            // the candidates or every hull (the toggle; off is every hull),
+            // so a log read later says which cook, which schedule and which
+            // hull loop the figures that follow belong to.
+            print("CoolZombie: cloth \(cloth.enabled ? "\(cloth.collisionModel.rawValue), \(cloth.solver.rawValue), proxy \(ClothProxyChoice(cloth).rawValue) (\(cloth.sidecar ?? ZombieClothAsset.defaultSidecarName)), \(cloth.iterationsPerStep) iterations, \(cloth.gpuSubsteps) substeps, \(GPUClothSolver.gatherCount(configured: cloth.gpuIterations)) gathers, shell \(cloth.gpuShell ? "gpu" : "cpu"), hull candidates \(cloth.gpuHullCandidates ? "on" : "off")" : "off")")
         }
         // Test hooks: `-autoProvoke` starts the chase as soon as the zombie
         // is loaded, so a simulator run shows the chase without walking;
@@ -323,6 +338,55 @@ final class ZombieXRGame: @unchecked Sendable {
 
         let head = session.headPosition()
         game.update(deltaTime: deltaTime, playerPosition: head)
+
+        // The cloth's cost, in the console rather than in a photo of the
+        // footnote: once a second while the shirt is attached (not only
+        // under a flag, as the Mac's `-debugLog` has it, since the headset
+        // run is the measurement), the full report the Mac prints —
+        // `gpu=`, `wait=`, `sub=`, `it=`, `feed=`, `read=`, `bind=`,
+        // `onClamp=`, `proxy=`, `hullCandidates=` and the rest — with the
+        // frame's deadline figures the engine exposes beside it: how many
+        // of the second's
+        // frames finished their GPU work after the compositor's deadline,
+        // the count since the space opened and the worst overrun (the
+        // engine's own "XR frame timing" line, once a second from the GPU's
+        // completion thread, speaks only in a second with late frames, so
+        // the cloth's line carries the figures in a quiet second too), and
+        // the engine's CPU and GPU milliseconds where the build fills them
+        // (debug; zeros in release, and then left out). The report skins
+        // every particle on the CPU twice, which is why it is once a second
+        // and the footnote takes `summary` every frame. The Mac's wiring
+        // check comes with it: awake and in range the shirt is written every
+        // frame, so an override count that stood still for a second means
+        // the game stopped calling the cloth.
+        clothClock += deltaTime
+        if clothClock >= 1 {
+            clothClock = 0
+            if let report = game.clothReport {
+                var line = "CoolZombie: \(report)"
+                if let xr = holder.xr {
+                    let late = xr.deadlineMisses
+                    line += String(format: " | frame: %d late this second, %d so far, worst +%.2f ms", late - reportedLateFrames, late, xr.worstDeadlineOverrunMs)
+                    reportedLateFrames = late
+                }
+                let timing = getEngineStatsSnapshot().timing
+                if timing.updateMs > 0 || timing.encodeMs > 0 || timing.gpuExecutionMs > 0 {
+                    line += String(format: ", cpu %.1f+%.1f gpu %.1f ms", timing.updateMs, timing.encodeMs, timing.gpuExecutionMs)
+                }
+                print(line)
+                if let cloth = game.cloth, cloth.isAttached {
+                    if !cloth.isAsleep, !cloth.isBeyondRange, cloth.overrideWriteCount == clothWrites {
+                        print("CoolZombie: cloth WARNING: no override written in the last second while awake and in range")
+                    }
+                    clothWrites = cloth.overrideWriteCount
+                }
+            } else if let xr = holder.xr {
+                // No shirt: keep pace with the engine's count, so the first
+                // line after an attach counts its own second's late frames,
+                // not the loading's.
+                reportedLateFrames = xr.deadlineMisses
+            }
+        }
 
         let phase: String = switch game.phase {
         case .waiting: game.isReady ? "waiting" : "loading"

@@ -239,9 +239,10 @@ kernel void zcPredict(constant ZCParams &params [[buffer(ZCParamsIndex)]],
 // previous, target, targetNormal, slack, csrOffsets, csrEntries,
 // hullHeaders, hullPlanes, hullWorld (this substep's hulls at
 // params.rings.y, the previous substep's at .z), spheres (this frame's at
-// params.rings.w), params. Out: positionOut; velocity on the last gather
-// (params.substep.z == params.substep.w - 1): v = (x - previous) / dt
-// capped at params.material.y, 0 for a pin.
+// params.rings.w), hullCandidates, params. Out: positionOut; velocity on
+// the last gather (params.substep.z == params.substep.w - 1): v = (x -
+// previous) / dt capped at params.material.y, 0 for a pin; hullContacts
+// under `ZCFlagRecordHullContacts` alone.
 //
 // Per particle, in this order and why. A pin (w == 0) is put on its target
 // and done, as `zcPredict` left it. A free particle whose slack radius for
@@ -273,24 +274,57 @@ kernel void zcPredict(constant ZCParams &params [[buffer(ZCParamsIndex)]],
 //    fires. After the edges, not before as Jolt has it, so the edges do
 //    not get the last word and leave the cuff 3 mm behind its target
 //    (README "Cloth").
-// 3. The hulls: the particle enters each hull's frame (a rigid inverse),
+// 3. The hulls: under `ZCFlagEveryHull`, which the solver sets by default,
+//    the particle meets every hull in index order, the loop as phase 1 had
+//    it and the exact one. With the flag clear (`-clothHullCandidates on`,
+//    the cost A/B) it walks its hull CANDIDATES instead — the word at
+//    `ZCHullCandidatesIndex`, four 8-bit hull indices ascending, the first
+//    0xFF ending the list, static from the bind skeleton (the hulls of its
+//    influence joints and of their parents and children; the Swift
+//    `HullCandidates` says how, and what the lists lose: contacts between
+//    an arm and the torso, over the chase's clips and the falls, which is
+//    why they are not the default since 2026-11-10). The order is
+//    ascending in both so the two paths apply the same push-outs in the
+//    same order and come out bitwise equal wherever the contact sets
+//    agree, which `testTheCandidateHullLoopLosesNoContact` holds on both
+//    proxies through the four harness poses. For each hull, the particle
+//    enters the hull's frame (a rigid inverse),
 //    tests the hull's box inflated by twice the vertex radius (which culls
 //    all but the particles within 6 mm of the hull's extent; the design's
 //    bounding sphere held most of the shirt for a torso hull, and a
 //    simdgroup runs the plane loop until its last lane leaves, so the
-//    sphere left the eleven hulls at 3 ms of a Mac frame), and inside it
-//    finds the most-facing plane — the largest signed distance
+//    sphere left the eleven hulls at 3 ms of a Mac frame — and the shirt
+//    wraps the body, so most particles pass the box of one to four hulls:
+//    two report lines of 2026-11-04, single frames read in a fixed order,
+//    had the hull pass at 87 % of the 4k frame's GPU time with the arms
+//    forward, and with the GPU kept hot it is 50-65 % of that frame with
+//    every hull, 2026-11-10), and inside
+//    it finds the most-facing plane — the largest signed distance
 //    over the hull's plane set, as `ConvexHullShape::CollideSoftBodyVertices`
 //    picks it (ConvexHullShape.cpp:1060-1090) — and is inside iff that
 //    distance is below `vertexRadius`, pushed along that plane's normal by
 //    radius minus distance; the plane loop leaves at the first plane that
-//    reads the particle outside, since one such plane decides it. Friction is the one thing the Jolt arm could
+//    reads the particle outside, since one such plane decides it, and
+//    walks four planes a step in the one-plane loop's test order. The
+//    one-plane loop, the phase-2 kernel's and the one the headset ran on
+//    2026-11-04, stayed behind a flag until 2026-11-10 to hold the
+//    four-wide walk to its bits (the same contacts and bitwise-equal
+//    positions through the arms-forward idle and the arm swing on both
+//    proxies, 520 frames) and to time the two side by side on a hot GPU:
+//    the four-wide walk reads 0.86-0.90 of the one-plane walk's frame at
+//    4k and 0.88-0.92 at 16k with every hull, the arms forward. The flag
+//    and the loop were then removed. Friction is the one thing the Jolt arm could
 //    not have (Jolt reads a collider's velocity only from a dynamic body):
 //    with the hull's frame now and at the previous substep both bound, the
 //    pushed point's motion with the hull over the substep is known, and
 //    the tangential part of the particle's displacement relative to that
 //    motion is scaled by 1 - `gpuHullFriction`, so a moving hull carries a
 //    resting patch along; 0 by default to match the Jolt arm, 0.2 the A/B.
+//    Under `ZCFlagRecordHullContacts` every hull whose push-out fired sets
+//    its bit in the particle's word at `ZCHullContactsIndex`, accumulated
+//    over the frame (the frame's first dispatch starts the word at 0), the
+//    tests' contact diff; the hosts never set the flag and the buffer is
+//    never read or written there.
 // 4. The floor: y clamped to the floor's top plus the radius, and the xz
 //    motion mixed 0.4 of the way back toward the previous position,
 //    CoolCloth's contact friction (CoolCloth.metal:199-203).
@@ -327,6 +361,8 @@ kernel void zcSolve(constant ZCParams &params [[buffer(ZCParamsIndex)]],
                     constant float4 *hullPlanes [[buffer(ZCHullPlanesIndex)]],
                     constant float4x4 *hullWorld [[buffer(ZCHullWorldIndex)]],
                     device const ZCSphere *spheres [[buffer(ZCSpheresIndex)]],
+                    device const uint *hullCandidates [[buffer(ZCHullCandidatesIndex)]],
+                    device uint *hullContacts [[buffer(ZCHullContactsIndex)]],
                     uint gid [[thread_position_in_grid]]) {
     const uint particleCount = params.counts.x;
     if (gid >= particleCount) {
@@ -338,6 +374,13 @@ kernel void zcSolve(constant ZCParams &params [[buffer(ZCParamsIndex)]],
     const float3 skinned = target[gid].xyz;
     const float dt = params.gravityDt.w;
     const bool lastGather = params.substep.z + 1 >= params.substep.w;
+    const bool recordContacts = (params.flags.w & ZCFlagRecordHullContacts) != 0;
+    // The frame's contact mask so far: 0 on the frame's first dispatch
+    // (substep 0, gather 0), the word as the last dispatch left it after.
+    uint contactMask = 0;
+    if (recordContacts && !(params.substep.x == 0 && params.substep.z == 0)) {
+        contactMask = hullContacts[gid];
+    }
 
     if (inverseMass == 0.0f) {
         // A pin sits on its target; `zcPredict` already put previous there.
@@ -401,12 +444,39 @@ kernel void zcSolve(constant ZCParams &params [[buffer(ZCParamsIndex)]],
             }
         }
 
-        // 3. The hulls: the hull-frame box, planes, most-facing push-out,
-        // and the optional friction against the hull's own motion.
+        // 3. The hulls: every hull under the flag, the default, or the
+        // particle's candidates, each the hull-frame box, planes,
+        // most-facing push-out, and the optional friction against the
+        // hull's own motion.
         const float vertexRadius = params.material.z;
         const uint hullCount = params.counts.z;
         const bool hullFriction = params.flags.z != 0 && params.material.w > 0.0f;
-        for (uint h = 0; h < hullCount; h++) {
+        const bool everyHull = (params.flags.w & ZCFlagEveryHull) != 0;
+        const uint candidates = everyHull ? 0u : hullCandidates[gid];
+        // On the candidate path each lane walks its own four slots, so the
+        // header and the transform are read at indices that differ across
+        // the simdgroup. The uniform form — every lane looping over the
+        // eleven hulls in order, taking a hull when one of its bytes names
+        // it and the simdgroup skipping a hull no lane names — was tried
+        // the same day (2026-11-04) and read no better on either proxy (4k
+        // arms forward 1.79-1.80 ms against 1.71-1.73 here, 16k 1.93-2.06
+        // against 1.22-1.79). Those are readings of the fixed-order test
+        // of 2026-11-04, the kind the heater of 2026-11-10 showed to
+        // follow the GPU's clock state as much as the kernel, and the
+        // uniform form was not built again to be read under it: it is not
+        // shown to be slower, only never shown to be faster.
+        const uint slots = everyHull ? hullCount : uint(ZCHullCandidateCount);
+        for (uint c = 0; c < slots; c++) {
+            uint h = c;
+            if (!everyHull) {
+                h = (candidates >> (8u * c)) & 0xFFu;
+                if (h == ZCHullCandidateNone) {
+                    break;
+                }
+                if (h >= hullCount) {
+                    continue;
+                }
+            }
             const ZCHullHeader header = hullHeaders[h];
             const float4x4 world = hullWorld[params.rings.y + h];
             const float3 local = zcHullLocal(world, x);
@@ -423,22 +493,46 @@ kernel void zcSolve(constant ZCParams &params [[buffer(ZCParamsIndex)]],
             // 2026-11-03 in the release host — where nearly all of them sit
             // outside the hull by construction (the slack ball is centred
             // on the skin, 2 mm off the hull), and leave after a few planes.
+            // Four planes a step so their reads are in flight together:
+            // a particle in a hull's box but off the hull leaves at its
+            // first outside plane, but the lane that IS touching the hull
+            // walks every plane, and at 3,995 particles a solve dispatch is
+            // that lane's chain of plane reads, not the throughput (a 4k
+            // dispatch is 125 simdgroups on a GPU that can hold many times
+            // that). The order of the tests is the one-plane loop's, so
+            // the most-facing plane and the early out are the same; the
+            // tail below walks the last one to three planes of a set that
+            // is not a multiple of four.
             float maxDistance = -INFINITY;
             float3 maxNormal = float3(0.0f);
             const uint firstPlane = header.range.x;
             const uint endPlane = firstPlane + header.range.y;
-            for (uint p = firstPlane; p < endPlane; p++) {
+            uint p = firstPlane;
+            bool outside = false;
+            for (; p + 4u <= endPlane && !outside; p += 4u) {
+                const float4 plane0 = hullPlanes[p];
+                const float4 plane1 = hullPlanes[p + 1u];
+                const float4 plane2 = hullPlanes[p + 2u];
+                const float4 plane3 = hullPlanes[p + 3u];
+                const float4 distances = float4(dot(plane0.xyz, local) + plane0.w, dot(plane1.xyz, local) + plane1.w,
+                                                dot(plane2.xyz, local) + plane2.w, dot(plane3.xyz, local) + plane3.w);
+                if (distances.x > maxDistance) { maxDistance = distances.x; maxNormal = plane0.xyz; if (distances.x >= vertexRadius) { outside = true; break; } }
+                if (distances.y > maxDistance) { maxDistance = distances.y; maxNormal = plane1.xyz; if (distances.y >= vertexRadius) { outside = true; break; } }
+                if (distances.z > maxDistance) { maxDistance = distances.z; maxNormal = plane2.xyz; if (distances.z >= vertexRadius) { outside = true; break; } }
+                if (distances.w > maxDistance) { maxDistance = distances.w; maxNormal = plane3.xyz; if (distances.w >= vertexRadius) { outside = true; break; } }
+            }
+            for (; p < endPlane && !outside; p++) {
                 const float4 plane = hullPlanes[p];
                 const float distance = dot(plane.xyz, local) + plane.w;
                 if (distance > maxDistance) {
                     maxDistance = distance;
                     maxNormal = plane.xyz;
                     if (distance >= vertexRadius) {
-                        break;
+                        outside = true;
                     }
                 }
             }
-            if (maxDistance >= vertexRadius) {
+            if (outside || maxDistance >= vertexRadius) {
                 continue;
             }
             const float3 pushedLocal = local + maxNormal * (vertexRadius - maxDistance);
@@ -456,6 +550,9 @@ kernel void zcSolve(constant ZCParams &params [[buffer(ZCParamsIndex)]],
                 pushed -= tangential * params.material.w;
             }
             x = pushed;
+            if (recordContacts && h < 32u) {
+                contactMask |= 1u << h;
+            }
         }
 
         // 4. The floor, with CoolCloth's xz mix toward the previous position.
@@ -497,6 +594,9 @@ kernel void zcSolve(constant ZCParams &params [[buffer(ZCParamsIndex)]],
     }
 
     positionOut[gid] = float4(x, inverseMass);
+    if (recordContacts) {
+        hullContacts[gid] = contactMask;
+    }
 
     if (lastGather) {
         // The XPBD velocity, capped as Jolt caps it at a collision step's end.

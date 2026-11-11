@@ -237,11 +237,43 @@ public final class ZombieCloth: @unchecked Sendable {
         public var solver: Solver = .jolt
         /// GPU arm (phase 1): the substeps a 10 ms frame is cut into, so a
         /// substep is 0.01 / `gpuSubsteps` long — 0.625 ms at 16 — and the
-        /// count follows the frame's delta (16 at the headset's 10 ms, 27 at
-        /// the Mac's 16.7 ms, 32 at most). A small step's error falls with
-        /// the step squared, which is what pays back one Jacobi gather per
-        /// substep against Jolt's Gauss-Seidel passes; 8, 12, 16 and 24 are
-        /// the A/B (the headset's picker), 1 to 32 the launch argument's range.
+        /// count follows the frame's delta (16 at a 10 ms frame, 18 at
+        /// 11.1 ms, 27 at the Mac's 16.7 ms, 32 at most). A small step's
+        /// error falls with the step squared, which is what pays back one
+        /// Jacobi gather per substep against Jolt's Gauss-Seidel passes; 8,
+        /// 10, 12, 16 and 24 are the A/B (the headset's picker), 1 to 32
+        /// the launch argument's range.
+        /// Sixteen stays the default after the budget phase (2026-11-04,
+        /// measured again and closed 2026-11-10), because no schedule that
+        /// holds the 16k shirt as still as this one projects under gate 2's
+        /// 2.0 ms on the device, and a default is not moved on a projection
+        /// that misses. The projection is anchored on the headset's one
+        /// reading: the 4k shirt, every hull, two gathers, the phase-2
+        /// kernel, 2.58 ms over 14 encoded substeps at the picker's 16 and
+        /// 3.54 over 21 at 24, which is 54-57 us for each of the frame's
+        /// dispatches at either count (substeps x (1 + gathers) + 3). The
+        /// counts say that frame was 8.3-8.75 ms long; which display rate
+        /// it was read at is not recorded. Scaled by that reading
+        /// (`testTheScheduleCostAndStillnessAtTheHeadsetsFrame`, the M4 Max
+        /// hot, an 11.1 ms frame, the README's arithmetic) the 16k shirt on
+        /// every hull projects at 2.4-3.65 ms here, 2.4-3.3 at 12 substeps,
+        /// 2.05-2.8 at 10 and 1.65-2.1 at 16 with one gather; with the hull
+        /// candidates on, the lossy option, 2.3-2.95, 1.75-2.6, 1.6-2.1
+        /// and 1.3-1.75. Each range runs from the device keeping the
+        /// unrolled plane walk's gain as the Mac reads it to its keeping
+        /// none. The 16k is not expected to meet 2.0 ms at 16 substeps and
+        /// two gathers, and the device run decides. Twelve with two
+        /// gathers is the cheapest schedule that keeps the 16k idle as
+        /// still as sixteen does (the fastest particle 0.09 m/s on the
+        /// release host at either); 10 with two gathers and 16 with one
+        /// read 0.40 m/s on the same idle and leave the 16k's stretch
+        /// residual at rest at 2.3 % / 9.9 % and 2.8 % / 11.7 % (mean /
+        /// p99) against 1.4 % / 6.0 % here and 1.8 % / 7.9 % at 12; 8 with
+        /// two gathers and 12 with one do not hold the 16k's 4.5 mm edges
+        /// at all (3-5 m/s on the idle at 8, 4.5-17 m/s through three of
+        /// the four runs at 12 with one). So 16, 12 and 10 are the rows of
+        /// the device run, on the picker, and one gather its fourth
+        /// (`-clothGPUIterations 1`).
         public var gpuSubsteps = 16
         /// GPU arm: edge gathers per substep, 1 to 4. Two by default since
         /// 2026-11-03, the residual test's verdict (`testStretchResidualAtRest`,
@@ -308,6 +340,77 @@ public final class ZombieCloth: @unchecked Sendable {
         /// runaway — is evaluated on the cores, and the report's `shell=`
         /// says which ran.
         public var gpuShell = true
+        /// GPU arm: the hull loop's cost option, OFF by default since
+        /// 2026-11-10. Off, the solve kernel runs every hull's box and
+        /// planes on every particle, the loop as phase 1 had it: it is
+        /// exact, and it is the shipped path. On, the loop runs over each
+        /// particle's static hull candidates instead — the hulls of the
+        /// joints among its skin influences and of their parents and
+        /// children, one step along the bind skeleton, at most four (the
+        /// nearest at the rest pose when more qualify), none for a pin
+        /// (`GPUClothSolver.HullCandidates`) — with the box cull still
+        /// inside it. The rule loses contacts. Measured 2026-11-10, the
+        /// every-hull loop's own contacts through every bundled clip and
+        /// three knockdowns held against the lists: a hull that pushed is
+        /// missing from the particle's list in 866,205 particle-frames at
+        /// 4k (5,385 distinct particle-hull pairs) and 2,858,798 at 16k
+        /// (21,624), most in the falls forward and sideways and in the
+        /// pack's walks, chases, hyper runs and holds; on the mixed set's
+        /// clips and the three falls alone it is 121,655 and 415,842
+        /// (`testTheCandidateRuleLosesContactsOnTheChaseClipsAndFalls`,
+        /// which fails if the loss is ever zero). What is lost is arm
+        /// against torso, a forearm resting on the chest, which no rule
+        /// read off the skeleton's tree covers: two steps along it still
+        /// lack 266,275 / 894,936. A lost contact is a sleeve or a forearm
+        /// passing through the shirt, the defect seen on the headset. The
+        /// rule's first verdict, no contact lost, holds only for the six
+        /// motions it was read on (the hang, the sway, the arms-forward
+        /// idle, the arm swing, the 100STYLE walk and run:
+        /// `testTheCandidateHullLoopLosesNoContact`, `...OnTheChaseClips`).
+        /// The switch stays for the cost A/B, `-clothHullCandidates on`
+        /// and the headset's Hull candidates toggle. On the M4 Max kept
+        /// hot (a heavy frame before every timed one,
+        /// `testTheHullPassCostWithTheArmsForward`, 2026-11-10 and 11,
+        /// thirteen runs, 16 substeps, the arms forward) the candidates
+        /// take 7 to 24 per cent off the 16k frame's lowest decile of
+        /// `gpu=` and 7 to 27 off the 4k's (7 to 20 and 10 to 26 in the
+        /// first five runs), and on the 16k medians they read from 2.5
+        /// per cent worse to 26 per cent better: a solve dispatch there is
+        /// the touching lane's walk of its hull's planes whichever hulls
+        /// the other lanes skip. The first measurement of 2026-11-04 (4.2
+        /// to 1.2-1.3 ms at 16k) timed the variants in a fixed order and
+        /// read the candidates right after the every-hull frame's 5 ms
+        /// burst had clocked the GPU up. The release host, whose GPU idles
+        /// between frames, reads the 16k idle at 3.4-3.8 ms with them and
+        /// 4.8-6.7 without, and the 16k chase the same with and without
+        /// (5.50 / 4.05 against 4.88 / 4.25 ms, two passes). What they are
+        /// worth on the headset's GPU is the device's to read.
+        public var gpuHullCandidates = false
+        /// GPU arm: on, each hull's planes whose normals lie within 3
+        /// degrees and whose offsets within 1 mm of one another are merged
+        /// at the build, the one farthest out kept (816 planes to 724 on
+        /// the shirt), so a brute-force plane set's near-duplicates are not
+        /// walked per particle per gather; the merge can only enlarge a
+        /// hull, by up to the merge depth the solver reports per hull
+        /// (2.8 mm at the pelvis). OFF by default: what it buys is small and
+        /// it moves the fit. With the GPU kept hot and the arms forward at
+        /// 16 substeps (2026-11-10 and 11, the lowest deciles and the
+        /// medians of `gpu=`, `testTheHullPassCostWithTheArmsForward`): on
+        /// top of the candidates, thirteen runs, a few per cent on the 16k
+        /// medians (from 1 per cent worse to 7.5 better) and nothing
+        /// steady on the lowest deciles; on the every-hull loop, the
+        /// shipped path, eight runs, 3 to 14 per cent off the 16k frame's
+        /// lowest decile, 2 to 13 off its median, and at 4k from 2 per
+        /// cent worse to 20 better. The
+        /// release host's two passes disagree on its sign. 92 planes of
+        /// 816 shorten the touching lane's walk by that much and no more,
+        /// and a hull grown by up to 2.8 mm moves the fit tests' figures,
+        /// so it stays off unless the device run shows the tenth is the
+        /// one missing. The first measurement of 2026-11-04 (0.2 ms saved
+        /// at 4k, a millisecond lost at 16k) was the fixed order's clock
+        /// state, not the merge's.
+        /// It stays as the A/B (`-clothPlaneMerge on`).
+        public var gpuPlaneMerge = false
         /// Jolt solver iterations per step: Jolt divides each of the world's
         /// sub-steps by this count and runs one constraint pass per piece
         /// (small steps, not repeated passes), so four quarter the solver's
@@ -478,8 +581,12 @@ public final class ZombieCloth: @unchecked Sendable {
         /// (0 or more), `-clothHullFriction <f>` (0 or more),
         /// `-clothGPUWait on|off`, `-clothSidecar <name>` (phase 2: the
         /// 16k cook, `Zombie.cloth16k`, for the GPU arm; the Jolt arm keeps
-        /// the bundled 4k) and `-clothGPUShell on|off`. Anything else
-        /// stays as it was — a count outside its range, a word or an
+        /// the bundled 4k), `-clothGPUShell on|off`, `-clothHullCandidates
+        /// on|off` (`on`, the per-particle hull candidates of 2026-11-04,
+        /// the lossy cost A/B; `off`, the default, every hull on every
+        /// particle) and `-clothPlaneMerge on|off` (the 3-degree coplanar
+        /// merge of the hull planes at the build). Anything
+        /// else stays as it was — a count outside its range, a word or an
         /// infinity for a number, a flag with no value — and an unknown
         /// model, solver or switch is named once.
         public mutating func apply(launchArguments arguments: [String]) {
@@ -566,6 +673,20 @@ public final class ZombieCloth: @unchecked Sendable {
                 case "on": gpuShell = true
                 case "off": gpuShell = false
                 default: print("CoolZombie: unknown -clothGPUShell \(arguments[index + 1]); on or off")
+                }
+            }
+            if let index = arguments.firstIndex(of: "-clothHullCandidates"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "on": gpuHullCandidates = true
+                case "off": gpuHullCandidates = false
+                default: print("CoolZombie: unknown -clothHullCandidates \(arguments[index + 1]); on or off")
+                }
+            }
+            if let index = arguments.firstIndex(of: "-clothPlaneMerge"), index + 1 < arguments.count {
+                switch arguments[index + 1] {
+                case "on": gpuPlaneMerge = true
+                case "off": gpuPlaneMerge = false
+                default: print("CoolZombie: unknown -clothPlaneMerge \(arguments[index + 1]); on or off")
                 }
             }
         }
@@ -1251,7 +1372,8 @@ public final class ZombieCloth: @unchecked Sendable {
             stretchCompliance: configuration.stretchCompliance, shearCompliance: configuration.shearCompliance, bendCompliance: configuration.bendCompliance,
             linearDamping: configuration.linearDamping, maxLinearVelocity: configuration.maxLinearVelocity, vertexRadius: configuration.vertexRadius,
             friction: configuration.friction, iterations: configuration.iterationsPerStep, oneWayAgainstRagdolls: configuration.oneWayAgainstRagdolls,
-            layer: awakeLayer(physics), pelvisJoint: pelvisJoint, gravity: PhysicsCoordinator.shared.worldConfiguration().gravity
+            layer: awakeLayer(physics), pelvisJoint: pelvisJoint, gravity: PhysicsCoordinator.shared.worldConfiguration().gravity,
+            jointPaths: garment.jointPaths
         )
         let hulls = skinHulls(for: garment, jointInfo: jointInfo, physics: physics, model: model, meshToWorld: meshToWorld)
         let (solver, kind) = makeSolver(physics: physics)
@@ -1891,10 +2013,10 @@ public final class ZombieCloth: @unchecked Sendable {
             // `gpu`, the kernels' output copied; `cpu`, the cores).
             let stats = gpu.stats
             line += String(
-                format: " hulls=%d planes=%d stretch=%d bend=%d sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df shell=%@ onClamp=%d%%",
+                format: " hulls=%d planes=%d stretch=%d bend=%d sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df shell=%@ onClamp=%d%% hullCandidates=%@",
                 gpu.hullCount, gpu.planeCount, gpu.constraintGraph?.stretchConstraintCount ?? 0, gpu.constraintGraph?.bendConstraintCount ?? 0,
                 stats.substeps, GPUClothSolver.gatherCount(configured: configuration.gpuIterations), stats.feedMicroseconds, stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames,
-                shellMode.rawValue, Int((stats.onClampShare * 100).rounded())
+                shellMode.rawValue, Int((stats.onClampShare * 100).rounded()), gpu.walksEveryHull ? "off" : "on"
             )
         } else {
             line += " joltWakes=\(joltWakeCount)"
@@ -1953,9 +2075,10 @@ public final class ZombieCloth: @unchecked Sendable {
             // what the first read waited, and the lag mode.
             let stats = gpu.stats
             return String(
-                format: "cloth %@: %d particles proxy=%@%@ mult=%.2f %@ sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df shell=%@ read=%.0fus bind=%.0fus hard=%d runaway=%d writes=%d",
+                format: "cloth %@: %d particles proxy=%@%@ mult=%.2f %@ sub=%d it=%d feed=%.0fus gpu=%.2fms wait=%.0fus lag=%df shell=%@ hullCandidates=%@ read=%.0fus bind=%.0fus hard=%d runaway=%d writes=%d",
                 names, particles, proxyDescription, shellDescription, skinMultiplier, stateDescription, stats.substeps, GPUClothSolver.gatherCount(configured: configuration.gpuIterations), stats.feedMicroseconds,
-                stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames, shellMode.rawValue, readBackMicroseconds, bindMicroseconds, hardSkinCount, runawayCount, overrideWriteCount
+                stats.gpuMilliseconds, stats.waitMicroseconds, stats.lagFrames, shellMode.rawValue, gpu.walksEveryHull ? "off" : "on", readBackMicroseconds, bindMicroseconds, hardSkinCount, runawayCount,
+                overrideWriteCount
             )
         }
         return String(

@@ -91,6 +91,33 @@
 /// garment can have at most 65,535 joints and a particle four influences
 /// (one to four on the shirt, 2.60 on average).
 #define ZCMaxInfluences 4
+/// Hull candidates a particle carries (`ZCHullCandidatesIndex`): four
+/// 8-bit hull indices in one `uint`, the lowest byte first, so a hull index
+/// is under 255 and `ZCHullCandidateNone` (0xFF) marks an empty slot; the
+/// first empty slot ends the particle's list. Four because the contact
+/// sets of the four harness poses never name more than two hulls on one
+/// particle in a frame (2026-11-04, both proxies: the hang, the sway, the
+/// arms-forward idle and the arm swing) and a word is one 4 B read per
+/// particle per gather where a wider list would be two. The knockdowns
+/// of 2026-11-10 put up to six hulls on one particle in a frame, and the
+/// lists lose contacts there and on the chase's clips, so they are an
+/// option and not the shipped path (`ZCFlagEveryHull`).
+#define ZCHullCandidateCount 4
+#define ZCHullCandidateNone 0xFFu
+/// `ZCParams.flags.w` bits. `ZCFlagEveryHull`: the solve kernel runs every
+/// hull's box and planes on every particle, the loop as phase 1 had it,
+/// ignoring the candidates. It is the exact loop and the shipped path
+/// since 2026-11-10: the solver sets the bit unless `gpuHullCandidates`
+/// is on (`-clothHullCandidates on`, the cost A/B) and the garment has a
+/// skeleton tree to pick candidates by. Clear, the kernel walks each
+/// particle's candidates. `ZCFlagRecordHullContacts`: the kernel ORs bit
+/// h into `ZCHullContactsIndex` for every hull h whose push-out fired on
+/// the particle, accumulated over the frame's substeps and gathers (the
+/// first dispatch of the frame starts the mask at 0), so a test can hold
+/// the contacts of the every-hull loop against the candidates'; off in
+/// the hosts, where the buffer is never touched.
+#define ZCFlagEveryHull 1u
+#define ZCFlagRecordHullContacts 2u
 
 // ---------------------------------------------------------------------------
 // Buffer indices: the one place a binding is numbered. A kernel that does
@@ -140,8 +167,12 @@ enum ZCBufferIndex {
     ZCCSREntriesIndex = 13,
     /// `ZCHullHeader` x hulls (11).
     ZCHullHeadersIndex = 14,
-    /// `float4` x planes (832): n.xyz, d in the hull's joint frame, inside
-    /// where dot(n, p) + d < 0.
+    /// `float4` x planes (816 on the shirt's eleven hulls; 724 with the
+    /// solver's 3-degree coplanar merge, which is off by default: on a
+    /// hot GPU it reads about a tenth under no merge on the 16k frame
+    /// with every hull and little at 4k, 2026-11-10, and grows a hull by
+    /// up to 2.8 mm): n.xyz, d in the hull's joint frame, inside where
+    /// dot(n, p) + d < 0.
     ZCHullPlanesIndex = 15,
     /// `float4x4` x (ring slots x (substep cap + 1) x hulls): world-from-
     /// hull rigid transforms per substep plus the frame's start;
@@ -186,6 +217,34 @@ enum ZCBufferIndex {
     /// garment origin and the two counts, separate from `ZCParams` so the
     /// 256 B stay whole and the shell kernels take no substep state.
     ZCShellParamsIndex = 23,
+    // The hull candidates (2026-11-04; an option since 2026-11-10, off by
+    // default, because the lists lose contacts where an arm meets the
+    // torso — the Swift `HullCandidates` has the figures). They were built
+    // after two report lines of the phase-2 Mac sweeps put the hull pass
+    // at 87 % of the 4k frame's GPU time with the arms forward. That was a
+    // reading of single frames in a fixed order; with the GPU kept hot the
+    // pass is 50-65 % of the frame, measured 2026-11-10. Every particle
+    // inside a hull's box walks that hull's planes, and the shirt wraps
+    // the body so most particles sit in the boxes of one to four hulls at
+    // once, 816 planes over eleven hulls.
+    /// `uint` x N: each particle's hull candidates, static from the bind
+    /// skeleton — the hulls of the joints among its skin influences plus
+    /// each such joint's parent's and children's hulls, one step along the
+    /// tree, deduplicated, at most `ZCHullCandidateCount` (the nearest by
+    /// the rest-pose distance to the hull's planes when there are more),
+    /// none for a pin — packed as four 8-bit hull indices ascending, the
+    /// lowest byte first, `ZCHullCandidateNone` in the empty slots. With
+    /// `ZCFlagEveryHull` clear the solve kernel's hull loop runs over
+    /// these alone, the box cull still inside it; the solver sets the flag
+    /// by default, and always for a garment without joint paths, and the
+    /// words are then not read. Read by `zcSolve`.
+    ZCHullCandidatesIndex = 24,
+    /// `uint` x N: the hulls whose push-out fired on the particle this
+    /// frame, bit h for hull h, written by `zcSolve` only under
+    /// `ZCFlagRecordHullContacts` (the tests' contact diff between the
+    /// candidate loop and the every-hull loop); zero at the build, never
+    /// written for a pin, untouched in the hosts.
+    ZCHullContactsIndex = 25,
 };
 
 // ---------------------------------------------------------------------------
@@ -240,7 +299,10 @@ struct ZCParams {
     metal::uint4 substep;
     /// x 1 for the averaged Jacobi (relaxation x sum / count), 0 for the raw
     /// sum (CoolCloth); y 1 when the floor plane is on; z 1 when the hulls
-    /// apply friction (w of `material` above 0); w reserved, 0.
+    /// apply friction (w of `material` above 0); w the hull-loop bits,
+    /// `ZCFlagEveryHull` (every hull on every particle, the candidates
+    /// ignored; set by default) and `ZCFlagRecordHullContacts` (the
+    /// contact masks written; the tests' alone).
     metal::uint4 flags;
     /// Ring bases, in elements of the bound buffer: x the index of this
     /// substep's first skin matrix in `ZCSkinMatricesIndex` (slot x cap x
@@ -339,9 +401,11 @@ struct ZCInfluence {
 /// Offsets: 0 range (uint4), 16 boundsMin (float4), 32 boundsMax
 /// (float4); size and stride 48, alignment 16.
 struct ZCHullHeader {
-    /// x the index of the hull's first plane; y its plane count (60 to 88
-    /// on the shirt's eleven, 832 in all); z the joint the hull follows,
-    /// an index into the feed's joints; w reserved, 0.
+    /// x the index of the hull's first plane; y its plane count (52 to 88
+    /// on the shirt's eleven as the cook of 2026-11-04 fitted them, 816 in
+    /// all; 44 to 75 and 724 under the solver's optional 3-degree coplanar
+    /// merge); z the joint the hull follows, an index into the feed's
+    /// joints; w reserved, 0.
     metal::uint4 range;
     /// xyz the box's lower corner in the joint frame, m, the hull points'
     /// minimum less twice `vertexRadius`; w 0.

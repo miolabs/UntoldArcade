@@ -232,14 +232,14 @@ final class ZombieXRHolder: @unchecked Sendable {
 
     /// The shirt's simulation: the launch arguments' configuration until
     /// the window's Cloth, Solver, Proxy, Cloth iterations and GPU substeps
-    /// pickers change it. The game
+    /// pickers and its Hull candidates toggle change it. The game
     /// starts from it (so a space reopened keeps the choice) and applies a
     /// change on its thread: the garments come off and go back on rebuilt.
     private var clothConfigurationStorage: ZombieCloth.Configuration = {
         var configuration = ZombieCloth.Configuration()
         configuration.apply(launchArguments: ProcessInfo.processInfo.arguments)
         // The iterations picker offers one to four and six, the substeps
-        // one 8, 12, 16 and 24; a launch argument outside them would show
+        // one 8, 10, 12, 16 and 24; a launch argument outside them would show
         // as a choice the shirt is not running (and one it could not pick
         // again), so the device holds to the offered counts.
         if ClothQualityChoice(rawValue: configuration.iterationsPerStep) == nil {
@@ -249,8 +249,12 @@ final class ZombieXRHolder: @unchecked Sendable {
             configuration.gpuSubsteps = ClothSubstepChoice.sixteen.rawValue
         }
         // The Proxy picker offers the two cooks; a `-clothSidecar` naming
-        // another file would show as 4k while running something else.
-        if configuration.sidecar != nil, ClothProxyChoice(configuration) == .fourK {
+        // another file would show as 4k while running something else. And
+        // the Jolt arm runs the 4k whatever is named (the game prints as
+        // much), so a Jolt launch drops the sidecar too, for the picker to
+        // read 4k with the footnote's `proxy=4k` — as the picker's own flip
+        // to Jolt does below (`ClothSolverChoice.apply`).
+        if configuration.sidecar != nil, ClothProxyChoice(configuration) == .fourK || configuration.solver == .jolt {
             configuration.sidecar = nil
         }
         return configuration
@@ -420,10 +424,19 @@ enum ClothSolverChoice: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Jolt takes the sidecar with it: the Jolt arm keeps the 4k whatever
+    /// is named (its one-thread edge pass at 16k is four times its 3.4 ms
+    /// step), so a configuration that kept `Zombie.cloth16k` under Jolt
+    /// would have the Proxy picker read 16k, greyed, against the footnote's
+    /// `proxy=4k` (the second review of phase 2 read the two apart). The
+    /// window resets its picker to 4k on the same flip, and a later GPU pick
+    /// starts from the 4k as the picker shows.
     func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
         var result = configuration
         switch self {
-        case .jolt: result.solver = .jolt
+        case .jolt:
+            result.solver = .jolt
+            result.sidecar = nil
         case .gpu: result.solver = .gpu
         }
         return result
@@ -462,12 +475,19 @@ enum ClothProxyChoice: String, CaseIterable, Identifiable {
     }
 }
 
-/// The GPU solver's substeps per 10 ms frame: 8, 12, 16 (the default,
+/// The GPU solver's substeps per 10 ms frame: 8, 10, 12, 16 (the default,
 /// 0.625 ms each) or 24, the A/B of the design's budget — about 0.3-0.5 ms
-/// of GPU at 8 against 0.6-0.9 at 16. The GPU arm's knob alone: Jolt takes
+/// of GPU at 8 against 0.6-0.9 at 16. Ten since the budget phase
+/// (2026-11-10): it is the two-gather schedule whose projection for the
+/// 16k shirt comes nearest gate 2's 2.0 ms (2.05-2.8 ms on every hull, the
+/// shipped path, against 2.4-3.3 at 12 and 2.4-3.65 at 16; README, the
+/// budget phase), so the device run needs it on the picker to read that
+/// row beside the others, and what it costs the look — a shirt less still
+/// at rest on the Mac, a stretch residual two thirds over sixteen's — is
+/// the verdict's to weigh. The GPU arm's knob alone: Jolt takes
 /// iterations.
 enum ClothSubstepChoice: Int, CaseIterable, Identifiable {
-    case eight = 8, twelve = 12, sixteen = 16, twentyFour = 24
+    case eight = 8, ten = 10, twelve = 12, sixteen = 16, twentyFour = 24
     var id: Int { rawValue }
     var title: String { "\(rawValue)" }
 
@@ -526,6 +546,7 @@ struct CoolZombieVisionOSXRApp: App {
     @State private var clothProxy = ClothProxyChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var clothQuality = ClothQualityChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var clothSubsteps = ClothSubstepChoice(ZombieXRHolder.shared.clothConfiguration)
+    @State private var clothHullCandidates = ZombieXRHolder.shared.clothConfiguration.gpuHullCandidates
     @State private var throwHard = false
     private let clipSets = ZombieResources.availableClipSets
 
@@ -680,8 +701,8 @@ struct CoolZombieVisionOSXRApp: App {
                     // balls and the floor; the default) or the ragdoll's
                     // parts too (the A/B); the solver (Jolt or the GPU);
                     // the proxy (the 4k cook or phase 2's 16k, the GPU's
-                    // alone, since Jolt keeps the 4k); Jolt's iterations
-                    // and the GPU's substeps, each knob
+                    // alone, since Jolt keeps the 4k); Jolt's iterations,
+                    // the GPU's substeps and its hull candidates, each knob
                     // live for its own solver alone. Each
                     // change takes the shirt off and puts it back on
                     // rebuilt, so the footnote's cloth line can be read
@@ -707,6 +728,9 @@ struct CoolZombieVisionOSXRApp: App {
                         .disabled(cloth == .off)
                         .onChange(of: clothSolver) { _, choice in
                             ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
+                            // The flip to Jolt dropped the sidecar; the
+                            // picker follows, so it and the footnote agree.
+                            if choice == .jolt { clothProxy = .fourK }
                         }
                         Picker("Proxy", selection: $clothProxy) {
                             ForEach(ClothProxyChoice.allCases) { choice in
@@ -717,6 +741,12 @@ struct CoolZombieVisionOSXRApp: App {
                         .frame(maxWidth: 420)
                         .disabled(cloth == .off || clothSolver == .jolt)
                         .onChange(of: clothProxy) { _, choice in
+                            // Under Jolt the picker is greyed, so the one
+                            // change that reaches here is the reset above,
+                            // whose configuration the solver's request
+                            // already carried: a second request would take
+                            // the shirt off and put it back on for nothing.
+                            guard clothSolver == .gpu else { return }
                             ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
                         }
                         Picker("Cloth iterations", selection: $clothQuality) {
@@ -745,6 +775,24 @@ struct CoolZombieVisionOSXRApp: App {
                             configuration.gpuSubsteps = choice.rawValue
                             ZombieXRHolder.shared.requestCloth(configuration)
                         }
+                        // The hull pass's cost A/B (2026-11-10), off by
+                        // default (`ZombieCloth.Configuration.
+                        // gpuHullCandidates`). Off, every hull meets every
+                        // particle: the exact loop, the shipped path. On,
+                        // each particle walks its four static candidates,
+                        // which is cheaper and loses contacts: where an arm
+                        // lies against the torso a forearm or a sleeve can
+                        // pass through the shirt. The GPU arm's knob alone;
+                        // the footnote's and the console report's
+                        // `hullCandidates=on|off` say which ran.
+                        Toggle("Hull candidates", isOn: $clothHullCandidates)
+                            .frame(maxWidth: 420)
+                            .disabled(cloth == .off || clothSolver == .jolt)
+                            .onChange(of: clothHullCandidates) { _, on in
+                                var configuration = ZombieXRHolder.shared.clothConfiguration
+                                configuration.gpuHullCandidates = on
+                                ZombieXRHolder.shared.requestCloth(configuration)
+                            }
                     }
 
                     // The room. On the device the walls and furniture ARKit

@@ -38,6 +38,16 @@ let zcSphereCapacity = 8
 let zcRegionCount = 16
 /// Influences a particle can carry.
 let zcMaxInfluences = 4
+/// Hull candidates a particle carries, four 8-bit hull indices in one
+/// `UInt32`, the lowest byte first; `zcHullCandidateNone` marks an empty
+/// slot and the first empty slot ends the list.
+let zcHullCandidateCount = 4
+let zcHullCandidateNone: UInt32 = 0xFF
+/// `ZCParams.flags.w` bits: the every-hull loop (the candidates ignored;
+/// set by default, the candidates being an option since 2026-11-10) and
+/// the contact-mask recording of the tests.
+let zcFlagEveryHull: UInt32 = 1
+let zcFlagRecordHullContacts: UInt32 = 2
 
 /// The buffer index every kernel binds a role at (`ZCBufferIndex`).
 enum ZCBufferIndex: Int {
@@ -66,6 +76,10 @@ enum ZCBufferIndex: Int {
     case shellBindings = 21
     case shellOut = 22
     case shellParams = 23
+    // The hull candidates (read only with the option on) and the tests'
+    // contact masks (2026-11-04).
+    case hullCandidates = 24
+    case hullContacts = 25
 }
 
 /// `ZCParams`: the frame's and the dispatch's scalars, 256 B of sixteen
@@ -75,7 +89,7 @@ enum ZCBufferIndex: Int {
 /// friction; `floor` the floor's top, the xz mix, the slack multiplier,
 /// the frame's delta; `pelvis` xyz and w the runaway distance; `counts`
 /// N, joints, hulls, spheres; `substep` k, S, the gather index, the
-/// gathers; `flags` averaged Jacobi, floor on, hull friction on, 0;
+/// gathers; `flags` averaged Jacobi, floor on, hull friction on, the hull-loop bits;
 /// `rings` the skin-matrix, hull, previous-hull and sphere bases;
 /// `regionScale` the sixteen scales in four lanes; three reserved lanes.
 struct ZCParams {

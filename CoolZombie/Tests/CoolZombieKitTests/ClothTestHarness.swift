@@ -503,46 +503,61 @@ enum ClothFixtures {
     /// clip-ground test samples it (translation and rotation keys interpolated
     /// on the rest transforms, parents first).
     static func clipPose(_ name: String, at time: Float) throws -> [simd_float4x4]? {
+        try clipPoses(name, at: [time])?.first
+    }
+
+    /// The same at several times with the model and the clip loaded once
+    /// (a clip played through a scenario frame by frame samples hundreds of
+    /// times, and each load reads the 71,328-vertex body), and the clip's
+    /// length — the last key of any channel — for the caller's loop.
+    static func clipPoses(_ name: String, at times: [Float]) throws -> [[simd_float4x4]]? {
+        try clipPoses(name) { _ in times }
+    }
+
+    static func clipPoses(_ name: String, at times: (_ duration: Float) -> [Float]) throws -> [[simd_float4x4]]? {
         guard let base = ZombieResources.baseURL, let joints = ClothFixtures.skeleton else { return nil }
         let url = base.appendingPathComponent("Animations/\(name)/\(name).untold")
         guard FileManager.default.fileExists(atPath: url.path),
               let skeleton = try NativeFormatLoader().loadAssetSync(from: base.appendingPathComponent("Models/Zombie/Zombie.untold")).nodes.compactMap(\.skeleton).first,
               let clip = try NativeFormatLoader().loadAssetSync(from: url).animationClips.first else { return nil }
         let channels = Dictionary(uniqueKeysWithValues: clip.channels.map { ($0.jointPath, $0) })
-        func value(_ keys: [RuntimeTranslationKeyframe]) -> SIMD3<Float>? {
-            guard let first = keys.first else { return nil }
-            if time <= first.time { return first.value }
-            for (a, b) in zip(keys, keys.dropFirst()) where time <= b.time {
-                return simd_mix(a.value, b.value, SIMD3(repeating: (time - a.time) / max(b.time - a.time, 1e-6)))
+        let duration = clip.channels.reduce(Float(0)) { max($0, $1.translations.last?.time ?? 0, $1.rotations.last?.time ?? 0) }
+        return times(duration).map { time -> [simd_float4x4] in
+            func value(_ keys: [RuntimeTranslationKeyframe]) -> SIMD3<Float>? {
+                guard let first = keys.first else { return nil }
+                if time <= first.time { return first.value }
+                for (a, b) in zip(keys, keys.dropFirst()) where time <= b.time {
+                    return simd_mix(a.value, b.value, SIMD3(repeating: (time - a.time) / max(b.time - a.time, 1e-6)))
+                }
+                return keys.last!.value
             }
-            return keys.last!.value
-        }
-        func rotation(_ keys: [RuntimeRotationKeyframe]) -> simd_quatf? {
-            guard let first = keys.first else { return nil }
-            if time <= first.time { return simd_normalize(simd_quatf(vector: first.value)) }
-            for (a, b) in zip(keys, keys.dropFirst()) where time <= b.time {
-                return simd_slerp(simd_normalize(simd_quatf(vector: a.value)), simd_normalize(simd_quatf(vector: b.value)), (time - a.time) / max(b.time - a.time, 1e-6))
+            func rotation(_ keys: [RuntimeRotationKeyframe]) -> simd_quatf? {
+                guard let first = keys.first else { return nil }
+                if time <= first.time { return simd_normalize(simd_quatf(vector: first.value)) }
+                for (a, b) in zip(keys, keys.dropFirst()) where time <= b.time {
+                    return simd_slerp(simd_normalize(simd_quatf(vector: a.value)), simd_normalize(simd_quatf(vector: b.value)), (time - a.time) / max(b.time - a.time, 1e-6))
+                }
+                return simd_normalize(simd_quatf(vector: keys.last!.value))
             }
-            return simd_normalize(simd_quatf(vector: keys.last!.value))
+            var locals = skeleton.restTransforms
+            for index in joints.jointPaths.indices {
+                guard let channel = channels[joints.jointPaths[index]] else { continue }
+                let rest = skeleton.restTransforms[index]
+                var translation = simd_float3(rest.columns.3.x, rest.columns.3.y, rest.columns.3.z)
+                var basis = simd_float3x3(
+                    simd_float3(rest.columns.0.x, rest.columns.0.y, rest.columns.0.z),
+                    simd_float3(rest.columns.1.x, rest.columns.1.y, rest.columns.1.z),
+                    simd_float3(rest.columns.2.x, rest.columns.2.y, rest.columns.2.z))
+                if let t = value(channel.translations) { translation = t }
+                if let q = rotation(channel.rotations) { basis = simd_float3x3(q) }
+                locals[index] = simd_float4x4(simd_float4(basis.columns.0, 0), simd_float4(basis.columns.1, 0), simd_float4(basis.columns.2, 0), simd_float4(translation, 1))
+            }
+            var model = [simd_float4x4](repeating: matrix_identity_float4x4, count: locals.count)
+            for index in locals.indices {
+                let parent = joints.parentIndices[index].map { model[$0] } ?? matrix_identity_float4x4
+                model[index] = parent * locals[index]
+            }
+            return model
         }
-        var locals = skeleton.restTransforms
-        for index in joints.jointPaths.indices {
-            guard let channel = channels[joints.jointPaths[index]] else { continue }
-            let rest = skeleton.restTransforms[index]
-            var translation = simd_float3(rest.columns.3.x, rest.columns.3.y, rest.columns.3.z)
-            var basis = simd_float3x3(
-                simd_float3(rest.columns.0.x, rest.columns.0.y, rest.columns.0.z),
-                simd_float3(rest.columns.1.x, rest.columns.1.y, rest.columns.1.z),
-                simd_float3(rest.columns.2.x, rest.columns.2.y, rest.columns.2.z))
-            if let t = value(channel.translations) { translation = t }
-            if let q = rotation(channel.rotations) { basis = simd_float3x3(q) }
-            locals[index] = simd_float4x4(simd_float4(basis.columns.0, 0), simd_float4(basis.columns.1, 0), simd_float4(basis.columns.2, 0), simd_float4(translation, 1))
-        }
-        var model = [simd_float4x4](repeating: matrix_identity_float4x4, count: locals.count)
-        for index in locals.indices {
-            let parent = joints.parentIndices[index].map { model[$0] } ?? matrix_identity_float4x4
-            model[index] = parent * locals[index]
-        }
-        return model
     }
 }
