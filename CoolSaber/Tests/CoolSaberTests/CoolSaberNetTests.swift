@@ -45,6 +45,17 @@ final class CoolSaberNetTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(SaberEvent.self, from: data), event)
     }
 
+    func testFrameSyncEventRoundTrip() throws {
+        var matrix = simd_float4x4(simd_quatf(angle: 0.7, axis: SIMD3(0, 1, 0)))
+        matrix.columns.3 = SIMD4(1.5, 0, -2.25, 1)
+        let event = SaberEvent.frameSync(receiverFromSender: SaberFrameTransform(matrix))
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(SaberEvent.self, from: data)
+        XCTAssertEqual(decoded, event)
+        guard case .frameSync(let transform) = decoded else { return XCTFail("wrong case") }
+        XCTAssertEqual(transform.matrix, matrix)
+    }
+
     func testPosePacketIsCompactEnoughForUnreliableMessaging() throws {
         let packet = SaberPosePacket(
             sequence: .max,

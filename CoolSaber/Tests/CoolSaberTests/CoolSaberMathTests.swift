@@ -151,4 +151,46 @@ final class CoolSaberMathTests: XCTestCase {
         XCTAssertTrue(detector.update(pairKey: 1, distance: 0.03, deltaTime: 0.01))
         XCTAssertTrue(detector.update(pairKey: 2, distance: 0.03, deltaTime: 0.01))
     }
+
+    func testYawAlignedFrameRecoversAKnownOffset() {
+        // The opponent's frame is ours turned 35° about Y and shifted.
+        let yaw: Float = 35 * .pi / 180
+        var localFromRemote = simd_float4x4(simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)))
+        localFromRemote.columns.3 = SIMD4(0.8, 0, -1.7, 1)
+        let remoteFromLocal = simd_inverse(localFromRemote)
+
+        // One physical point and heading, seen from both frames.
+        let localPoint = SIMD3<Float>(0.2, 1.1, -0.5)
+        let localHeading = simd_normalize(SIMD3<Float>(0.3, 0.1, -0.9))
+        let remotePoint = (remoteFromLocal * SIMD4(localPoint, 1)).xyz
+        let remoteHeading = (remoteFromLocal * SIMD4(localHeading, 0)).xyz
+
+        let solved = CoolSaberMath.yawAlignedFrame(
+            localPoint: localPoint, localHeading: localHeading,
+            remotePoint: remotePoint, remoteHeading: remoteHeading
+        )
+        guard let solved else { return XCTFail("no solution") }
+        XCTAssertEqual(solved.yawDegrees, 35, accuracy: 0.01)
+        for i in 0 ..< 4 {
+            for j in 0 ..< 4 {
+                XCTAssertEqual(solved.localFromRemote[i][j], localFromRemote[i][j], accuracy: 1e-4)
+            }
+        }
+        // A second remote point lands where it physically is.
+        let probeLocal = SIMD3<Float>(-0.4, 1.3, -1.2)
+        let probeRemote = (remoteFromLocal * SIMD4(probeLocal, 1)).xyz
+        let mapped = (solved.localFromRemote * SIMD4(probeRemote, 1)).xyz
+        XCTAssertEqual(simd_distance(mapped, probeLocal), 0, accuracy: 1e-4)
+    }
+
+    func testYawAlignedFrameRejectsVerticalHeadings() {
+        XCTAssertNil(CoolSaberMath.yawAlignedFrame(
+            localPoint: .zero, localHeading: SIMD3(0, 1, 0),
+            remotePoint: .zero, remoteHeading: SIMD3(0.1, 0.99, 0)
+        ))
+    }
+}
+
+private extension SIMD4 where Scalar == Float {
+    var xyz: SIMD3<Float> { SIMD3(x, y, z) }
 }

@@ -23,6 +23,7 @@ import Foundation
 @preconcurrency import GameController
 import simd
 import UntoldEngine
+import UntoldEngineXR
 
 /// Per-wand trigger input read straight from GameController. The engine folds
 /// both Sense wands into one merged GameControllerState assuming side-prefixed
@@ -226,6 +227,12 @@ final class SaberXRGame {
     private var lastFrameLogUptime: TimeInterval = 0
     private var lastLoggedDisplacement = matrix_identity_float4x4
     private var loggedFirstRemotePacket = false
+    /// Our shared world anchor (engine handle) and the engine observer id.
+    private var ownAnchorHandle: UUID?
+    private var anchorObserverID: UUID?
+    private var ownAnchorTracked: Bool?
+    private var lastOwnAnchorLogUptime: TimeInterval = 0
+    private var lastOpponentAnchorLogUptime: TimeInterval = 0
 
     init() {
         clashDetector = CoolSaberClashDetector(triggerDistance: 0.05)
@@ -242,6 +249,7 @@ final class SaberXRGame {
         audio.start()
         haptics.start()
         wandInput.start()
+        startSharedAnchorObserver()
 
         print(
             "CoolSaber: starting — trigger or Cross ignites that hand's blade. "
@@ -253,7 +261,90 @@ final class SaberXRGame {
         audio.stop()
         haptics.stop()
         wandInput.stop()
+        stopSharedAnchor()
         clearCoolSaberScene()
+    }
+
+    // MARK: - Shared world anchor
+
+    /// Every anchor update the engine's world tracking reports. A shared
+    /// anchor that is not ours is the opponent's: they placed it at THEIR
+    /// ARKit origin, so its pose here maps their wire frame into ours.
+    private func startSharedAnchorObserver() {
+        guard let xr = SaberXRHolder.shared.xr else { return }
+        anchorObserverID = xr.addWorldAnchorObserver { [weak self] update in
+            self?.handleAnchorUpdate(update)
+        }
+    }
+
+    private func handleAnchorUpdate(_ update: XRWorldAnchorUpdate) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let t = update.originFromAnchorTransform.columns.3
+        if update.isOwn {
+            if ownAnchorTracked != update.isTracked || now - lastOwnAnchorLogUptime > 10 {
+                ownAnchorTracked = update.isTracked
+                lastOwnAnchorLogUptime = now
+                print(
+                    "CoolSaber[anchor]: own anchor \(update.id) \(update.event) tracked=\(update.isTracked) "
+                        + "shared=\(update.isSharedWithNearbyParticipants) at \(Self.fmt(SIMD3(t.x, t.y, t.z)))"
+                )
+            }
+            return
+        }
+        guard update.isSharedWithNearbyParticipants else { return }
+
+        switch update.event {
+        case .removed:
+            mailbox.setOpponentAnchor(nil, tracked: false, summary: "opponent anchor removed")
+            print("CoolSaber[anchor]: opponent anchor \(update.id) removed")
+        case .added, .updated:
+            let yaw = atan2(update.originFromAnchorTransform.columns.0.z, update.originFromAnchorTransform.columns.0.x) * 180 / .pi
+            let summary = String(
+                format: "shared anchor %@ · yaw %.0f° · offset (%.2f, %.2f, %.2f) m",
+                update.isTracked ? "tracked" : "NOT tracked", -yaw, t.x, t.y, t.z
+            )
+            if update.isTracked {
+                mailbox.setOpponentAnchor(update.originFromAnchorTransform, tracked: true, summary: summary)
+            } else {
+                // Keep the last pose; just report the tracking loss.
+                mailbox.setOpponentAnchor(
+                    mailbox.alignmentSource == .sharedAnchor ? update.originFromAnchorTransform : nil,
+                    tracked: false, summary: summary
+                )
+            }
+            if update.event == .added || now - lastOpponentAnchorLogUptime > 5 {
+                lastOpponentAnchorLogUptime = now
+                print("CoolSaber[anchor]: opponent anchor \(update.id) \(update.event) — \(summary)")
+            }
+        }
+    }
+
+    /// Place our anchor at our ARKit origin, shared, as soon as a nearby
+    /// opponent is in the session; drop it when the session ends.
+    private func updateSharedAnchor() {
+        let wanted = mailbox.sessionActive && mailbox.opponentNearby
+        if wanted, ownAnchorHandle == nil, let xr = SaberXRHolder.shared.xr {
+            ownAnchorHandle = xr.addWorldAnchor(
+                originFromAnchorTransform: matrix_identity_float4x4,
+                sharedWithNearbyParticipants: true
+            )
+            print("CoolSaber[anchor]: placing our shared anchor at the ARKit origin (handle \(String(describing: ownAnchorHandle)))")
+        } else if !wanted, ownAnchorHandle != nil {
+            stopSharedAnchor(keepObserver: true)
+        }
+    }
+
+    private func stopSharedAnchor(keepObserver: Bool = false) {
+        if let handle = ownAnchorHandle, let xr = SaberXRHolder.shared.xr {
+            xr.removeWorldAnchor(handle)
+            print("CoolSaber[anchor]: removed our shared anchor")
+        }
+        ownAnchorHandle = nil
+        ownAnchorTracked = nil
+        if !keepObserver, let id = anchorObserverID {
+            SaberXRHolder.shared.xr?.removeWorldAnchorObserver(id)
+            anchorObserverID = nil
+        }
     }
 
     var localColor: SIMD3<Float> {
@@ -268,6 +359,8 @@ final class SaberXRGame {
 
         updateLocalInput(dt: dt)
         updateLoadingSpinner(dt: dt)
+        updateSharedAnchor()
+        mailbox.setNudgeHeadingIfIdle(localHands[1].direction)
         updateRemote(dt: dt)
         publishBlades()
         detectClashes(dt: dt)
@@ -412,10 +505,38 @@ final class SaberXRGame {
 
     // MARK: - Remote opponent
 
+    /// How a point in the opponent's wire frame lands in our ARKit frame.
+    /// Manual sync wins; then the system displacement (identity for nearby
+    /// players in a Metal space, so raw); then the fixed opponent anchor.
+    private enum RemoteMapping {
+        case matrix(simd_float4x4)
+        case anchor
+
+        func point(_ p: SIMD3<Float>) -> SIMD3<Float> {
+            switch self {
+            case .matrix(let m): SaberXRGame.transformPoint(m, p)
+            case .anchor: SaberXRGame.opponentAnchor(p)
+            }
+        }
+
+        func direction(_ d: SIMD3<Float>) -> SIMD3<Float> {
+            switch self {
+            case .matrix(let m): SaberXRGame.transformDirection(m, d)
+            case .anchor: SaberXRGame.opponentAnchorRotation(d)
+            }
+        }
+    }
+
+    private func currentRemoteMapping(localFromShared: simd_float4x4) -> RemoteMapping {
+        if let localFromOpponent = mailbox.localFromOpponent {
+            return .matrix(localFromShared * localFromOpponent)
+        }
+        return mailbox.sharesFrame ? .matrix(localFromShared) : .anchor
+    }
+
     private func updateRemote(dt: Float) {
         // ARKit-from-shared for THIS device; the sender already removed its own.
         let localFromShared = SaberXRHolder.shared.spaceDisplacement
-        let sharesFrame = mailbox.sharesFrame
 
         for event in mailbox.takeRemoteEvents() {
             switch event {
@@ -425,18 +546,36 @@ final class SaberXRGame {
                 // Dedupe: our own detector probably saw the same contact.
                 let now = ProcessInfo.processInfo.systemUptime
                 if now - lastLocalClashUptime > 0.15 {
-                    let local = sharesFrame
-                        ? Self.transformPoint(localFromShared, position)
-                        : Self.opponentAnchor(position)
+                    let local = currentRemoteMapping(localFromShared: localFromShared).point(position)
                     spawnCoolSaberClashSpark(at: local, intensity: intensity)
                     audio.playClash(intensity: intensity)
                 }
+            case .frameSync(let transform):
+                let t = transform.matrix.columns.3
+                mailbox.setLocalFromOpponent(
+                    transform.matrix,
+                    heading: localHands[1].direction,
+                    summary: String(format: "synced by opponent · offset (%.2f, %.2f, %.2f) m", t.x, t.y, t.z)
+                )
+                print("CoolSaber[sync]: received frame sync from opponent — \(mailbox.frameSyncSummary)")
+                for hand in 0 ..< 2 { remoteHands[hand].hasPose = false } // snap, don't glide
             }
         }
 
         let snapshot = mailbox.remoteSnapshot()
         let now = ProcessInfo.processInfo.systemUptime
         logFrameDiagnostics(now: now, snapshot: snapshot, localFromShared: localFromShared)
+
+        if mailbox.takeFrameSyncRequest() {
+            solveFrameSync(snapshot: snapshot, now: now, localFromShared: localFromShared)
+        }
+        if let nudged = mailbox.takeSettledNudge(now: now) {
+            let t = nudged.columns.3
+            print(String(format: "CoolSaber[sync]: fine-tune settled — offset (%.2f, %.2f, %.2f) m, sending", t.x, t.y, t.z))
+            mailbox.pushLocalEvent(.frameSync(receiverFromSender: SaberFrameTransform(simd_inverse(nudged))))
+            for hand in 0 ..< 2 { remoteHands[hand].hasPose = false }
+        }
+        let mapping = currentRemoteMapping(localFromShared: localFromShared)
         guard mailbox.sessionActive, mailbox.opponentPresent,
               let packet = snapshot.packet,
               now - snapshot.arrivalUptime < 2.0
@@ -454,18 +593,8 @@ final class SaberXRGame {
             var state = remoteHands[hand]
             var wire = wires[hand]
 
-            if sharesFrame {
-                // The packet is in the group's shared immersive-space frame;
-                // our displacement brings it into our ARKit frame.
-                wire.hilt = Self.transformPoint(localFromShared, wire.hilt)
-                wire.direction = Self.transformDirection(localFromShared, wire.direction)
-            } else {
-                // No shared origin: re-base onto the opponent anchor 2 m in
-                // front of us, turned to face us. Both origins sit on their
-                // respective floors, so heights roughly line up.
-                wire.hilt = Self.opponentAnchor(wire.hilt)
-                wire.direction = Self.opponentAnchorRotation(wire.direction)
-            }
+            wire.hilt = mapping.point(wire.hilt)
+            wire.direction = mapping.direction(wire.direction)
 
             if !state.hasPose {
                 state.hilt = wire.hilt
@@ -506,6 +635,71 @@ final class SaberXRGame {
         return simd_length_squared(rotated) > 1e-8 ? simd_normalize(rotated) : direction
     }
 
+    /// The Sync tap: the players face each other and touch the fronts of
+    /// their right controller rings together, level, pointing at each other.
+    /// The contact point is `ringFront` metres along each blade axis from its
+    /// hilt — the same physical point seen from both frames — and the two
+    /// headings are opposite, which fixes the yaw. Unlike holding the
+    /// controllers side by side, nothing depends on hand or controller
+    /// width: only the hilt-to-ring-front distance, a hardware constant.
+    private func solveFrameSync(
+        snapshot: (packet: SaberPosePacket?, arrivalUptime: TimeInterval),
+        now: TimeInterval,
+        localFromShared: simd_float4x4
+    ) {
+        let heading = localHands[1].direction
+        guard let packet = snapshot.packet, now - snapshot.arrivalUptime < 0.5 else {
+            mailbox.setLocalFromOpponent(nil, heading: heading, summary: "sync failed: no fresh opponent pose")
+            print("CoolSaber[sync]: no fresh remote packet — is the opponent's right wand tracked?")
+            return
+        }
+        guard localHands[1].everTracked, localHands[1].untrackedTime == 0 else {
+            mailbox.setLocalFromOpponent(nil, heading: heading, summary: "sync failed: our right wand is not tracked")
+            print("CoolSaber[sync]: local right wand not tracked")
+            return
+        }
+        // Solve in our wire frame so the result composes with the sender's
+        // and our displacement exactly like a packet does.
+        let ringFront = mailbox.ringFront
+        let sharedFromLocal = simd_inverse(localFromShared)
+        let localHeading = Self.transformDirection(sharedFromLocal, heading)
+        let localContact = Self.transformPoint(sharedFromLocal, localHands[1].hilt) + localHeading * ringFront
+        let remoteContact = packet.right.hilt + packet.right.direction * ringFront
+        // Tip to tip means the opponent's blade points back at us: align
+        // their heading reversed onto ours.
+        guard let solved = CoolSaberMath.yawAlignedFrame(
+            localPoint: localContact,
+            localHeading: localHeading,
+            remotePoint: remoteContact,
+            remoteHeading: -packet.right.direction
+        ) else {
+            mailbox.setLocalFromOpponent(nil, heading: heading, summary: "sync failed: hold the controllers level")
+            print("CoolSaber[sync]: headings too vertical — local \(Self.fmt(localHeading)) remote \(Self.fmt(packet.right.direction))")
+            return
+        }
+        // Residual between the two blade axes after alignment: a large
+        // value means the controllers were not pointing at each other.
+        let mappedRemoteHeading = Self.transformDirection(solved.localFromRemote, packet.right.direction)
+        let axisErrorDegrees = acos(max(-1, min(1, simd_dot(-mappedRemoteHeading, localHeading)))) * 180 / .pi
+        let t = solved.localFromRemote.columns.3
+        let summary = String(
+            format: "synced · yaw %.0f° · offset (%.2f, %.2f, %.2f) m · axis error %.0f°",
+            solved.yawDegrees, t.x, t.y, t.z, axisErrorDegrees
+        )
+        mailbox.setLocalFromOpponent(solved.localFromRemote, heading: heading, summary: summary)
+        for hand in 0 ..< 2 { remoteHands[hand].hasPose = false }
+        print(
+            "CoolSaber[sync]: \(summary) — ring front \(String(format: "%.3f", ringFront)) m; "
+                + "local contact \(Self.fmt(localContact)) heading \(Self.fmt(localHeading)); "
+                + "remote contact \(Self.fmt(remoteContact)) heading \(Self.fmt(packet.right.direction)) "
+                + "→ mapped \(Self.fmt(Self.transformPoint(solved.localFromRemote, remoteContact)))"
+        )
+        // The opponent needs the inverse for OUR packets.
+        mailbox.pushLocalEvent(.frameSync(
+            receiverFromSender: SaberFrameTransform(simd_inverse(solved.localFromRemote))
+        ))
+    }
+
     private static func fmt(_ v: SIMD3<Float>) -> String {
         String(format: "(%.2f, %.2f, %.2f)", v.x, v.y, v.z)
     }
@@ -544,6 +738,7 @@ final class SaberXRGame {
         let localHilt = localHands[1].hilt
         var line = "CoolSaber[frame]: spatial \(mailbox.isSpatial) nearby \(mailbox.opponentNearby) "
             + "sharesFrame \(mailbox.sharesFrame) displacement \(SaberXRHolder.shared.displacementSummary)"
+            + " align \(mailbox.alignmentSource) [anchor: \(mailbox.anchorSummary)] [manual: \(mailbox.frameSyncSummary)]"
             + " | local R hilt ARKit \(Self.fmt(localHilt)) → shared \(Self.fmt(Self.transformPoint(sharedFromLocal, localHilt)))"
         if let packet = snapshot.packet {
             let age = now - snapshot.arrivalUptime

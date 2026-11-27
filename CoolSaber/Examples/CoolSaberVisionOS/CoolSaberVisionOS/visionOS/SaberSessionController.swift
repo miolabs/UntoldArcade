@@ -31,6 +31,21 @@ final class SaberDuelMailbox: @unchecked Sendable {
     private var isSpatialStorage = false
     private var opponentNearbyStorage = false
     private var opponentPresentStorage = false
+    private var frameSyncBase: simd_float4x4?
+    private var frameSyncHeading = SIMD3<Float>(0, 0, -1)
+    private var frameSyncNudge = SIMD2<Float>(0, 0) // side, forward (m)
+    private var frameSyncNudgeDirtyUptime: TimeInterval?
+    private var frameSyncRequested = false
+    private var frameSyncSummaryStorage = "not synced"
+    /// From the opponent's shared ARKit world anchor (placed at their origin):
+    /// its pose in our frame IS local-from-opponent. Preferred over the manual
+    /// solution unless the player synced manually afterwards.
+    private var anchorBase: simd_float4x4?
+    private var anchorTracked = false
+    private var anchorUpdateUptime: TimeInterval = 0
+    private var anchorSummaryStorage = "no shared anchor yet"
+    private var preferManualSync = false
+    private var ringFrontStorage: Float = 0.05
 
     // MARK: Game-thread side
 
@@ -82,6 +97,143 @@ final class SaberDuelMailbox: @unchecked Sendable {
         lock.withLock { opponentPresentStorage }
     }
 
+    // MARK: Manual frame sync
+
+    /// Maps the opponent's wire frame into ours, solved by touching the right
+    /// controllers together (`CoolSaberMath.yawAlignedFrame`). Set locally by
+    /// the player who tapped Sync, or received from the opponent. Takes
+    /// precedence over the system displacement, which is identity for nearby
+    /// participants in a Metal immersive space.
+    var localFromOpponent: simd_float4x4? {
+        lock.withLock { composedLocalFromOpponent() }
+    }
+
+    /// Solution plus the player's fine-tune nudge, expressed along the
+    /// heading captured at sync time (forward) and its horizontal right.
+    private func composedLocalFromOpponent() -> simd_float4x4? {
+        guard let base = activeBase() else { return nil }
+        guard frameSyncNudge != .zero else { return base }
+        let forward = frameSyncHeading
+        let right = simd_normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0)))
+        let shift = right * frameSyncNudge.x + forward * frameSyncNudge.y
+        var nudge = matrix_identity_float4x4
+        nudge.columns.3 = SIMD4<Float>(shift, 1)
+        return nudge * base
+    }
+
+    var frameSyncSummary: String {
+        lock.withLock { frameSyncSummaryStorage }
+    }
+
+    var isFrameSynced: Bool {
+        lock.withLock { activeBase() != nil }
+    }
+
+    enum AlignmentSource: Equatable {
+        case none
+        case sharedAnchor
+        case manual
+    }
+
+    /// Shared anchor when it exists and the player has not overridden it
+    /// manually; the manual solution otherwise.
+    private func activeBase() -> simd_float4x4? {
+        if !preferManualSync, let anchorBase { return anchorBase }
+        return frameSyncBase
+    }
+
+    var alignmentSource: AlignmentSource {
+        lock.withLock {
+            if !preferManualSync, anchorBase != nil { return .sharedAnchor }
+            return frameSyncBase != nil ? .manual : .none
+        }
+    }
+
+    var anchorSummary: String {
+        lock.withLock { anchorSummaryStorage }
+    }
+
+    /// Game thread, from the engine's anchor observer: the opponent's shared
+    /// anchor moved or changed tracking. `nil` forgets it (anchor removed).
+    func setOpponentAnchor(_ matrix: simd_float4x4?, tracked: Bool, summary: String) {
+        lock.withLock {
+            anchorBase = matrix
+            anchorTracked = tracked
+            anchorUpdateUptime = ProcessInfo.processInfo.systemUptime
+            anchorSummaryStorage = summary
+        }
+    }
+
+    /// Nudge axes follow the player's heading until they start nudging.
+    func setNudgeHeadingIfIdle(_ heading: SIMD3<Float>) {
+        lock.withLock {
+            guard frameSyncNudge == .zero else { return }
+            let flat = SIMD3<Float>(heading.x, 0, heading.z)
+            if simd_length(flat) > 1e-4 { frameSyncHeading = simd_normalize(flat) }
+        }
+    }
+
+    /// Installs a solution (ours or the opponent's). `heading` is our
+    /// horizontal heading at sync time, the axis the nudges run along.
+    func setLocalFromOpponent(_ matrix: simd_float4x4?, heading: SIMD3<Float>, summary: String) {
+        lock.withLock {
+            frameSyncBase = matrix
+            // An explicit manual sync (or one received from the opponent)
+            // overrides the shared anchor until the opponent changes.
+            preferManualSync = matrix != nil
+            let flat = SIMD3<Float>(heading.x, 0, heading.z)
+            frameSyncHeading = simd_length(flat) > 1e-4 ? simd_normalize(flat) : SIMD3<Float>(0, 0, -1)
+            frameSyncNudge = .zero
+            frameSyncNudgeDirtyUptime = nil
+            frameSyncSummaryStorage = summary
+        }
+    }
+
+    /// Distance from the hilt to the physical front of the controller ring
+    /// along the blade axis, in metres: the tip-to-tip contact point.
+    var ringFront: Float {
+        get { lock.withLock { ringFrontStorage } }
+        set { lock.withLock { ringFrontStorage = newValue } }
+    }
+
+    /// Fine tune after a sync: x = side (right +), y = forward, metres.
+    var frameSyncNudgeValue: SIMD2<Float> {
+        get { lock.withLock { frameSyncNudge } }
+        set {
+            lock.withLock {
+                guard frameSyncBase != nil else { return }
+                frameSyncNudge = newValue
+                frameSyncNudgeDirtyUptime = ProcessInfo.processInfo.systemUptime
+            }
+        }
+    }
+
+    /// Game thread: once the sliders have rested 0.3 s, the composed matrix
+    /// is re-sent so the opponent sees the same alignment.
+    func takeSettledNudge(now: TimeInterval) -> simd_float4x4? {
+        lock.withLock {
+            guard let dirty = frameSyncNudgeDirtyUptime, now - dirty > 0.3 else { return nil }
+            frameSyncNudgeDirtyUptime = nil
+            return composedLocalFromOpponent()
+        }
+    }
+
+    /// Window → game thread: solve the alignment on the next frame.
+    func requestFrameSync() {
+        lock.withLock {
+            frameSyncRequested = true
+            frameSyncSummaryStorage = "syncing…"
+        }
+    }
+
+    func takeFrameSyncRequest() -> Bool {
+        lock.withLock {
+            let requested = frameSyncRequested
+            frameSyncRequested = false
+            return requested
+        }
+    }
+
     // MARK: Session-controller side
 
     func takeOutgoing() -> (packet: SaberPosePacket?, events: [SaberEvent]) {
@@ -120,6 +272,15 @@ final class SaberDuelMailbox: @unchecked Sendable {
                 opponentPresentStorage = false
                 opponentNearbyStorage = false
                 isSpatialStorage = false
+                frameSyncBase = nil
+                frameSyncNudge = .zero
+                frameSyncNudgeDirtyUptime = nil
+                frameSyncRequested = false
+                frameSyncSummaryStorage = "not synced"
+                anchorBase = nil
+                anchorTracked = false
+                anchorSummaryStorage = "no shared anchor yet"
+                preferManualSync = false
             }
         }
     }
@@ -135,7 +296,18 @@ final class SaberDuelMailbox: @unchecked Sendable {
     func setOpponentPresent(_ present: Bool) {
         lock.withLock {
             opponentPresentStorage = present
-            if !present { remotePacket = nil }
+            if !present {
+                remotePacket = nil
+                // A new opponent has a new frame; the old solution is void.
+                frameSyncBase = nil
+                frameSyncNudge = .zero
+                frameSyncNudgeDirtyUptime = nil
+                frameSyncSummaryStorage = "not synced"
+                anchorBase = nil
+                anchorTracked = false
+                anchorSummaryStorage = "no shared anchor yet"
+                preferManualSync = false
+            }
         }
     }
 }
@@ -154,6 +326,9 @@ final class SaberSessionController {
     /// Mirrors the system's group-immersion request: true → open the immersive
     /// space, false → dismiss it, nil → no opinion (manual control).
     private(set) var groupImmersionActive: Bool?
+    /// Bumps once per successful join; the app cycles an already-open arena
+    /// on it so the space becomes the group's shared space.
+    private(set) var joinCount = 0
 
     let mailbox = SaberDuelMailbox.shared
 
@@ -241,6 +416,7 @@ final class SaberSessionController {
                     self.status = .joined(participants: session.activeParticipants.count)
                     self.statusMessage = "Duel joined — waiting for your opponent's blades."
                     self.mailbox.setSessionActive(true)
+                    self.joinCount += 1
                 case .waiting:
                     self.status = .waiting
                 case .invalidated:

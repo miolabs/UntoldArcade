@@ -52,8 +52,27 @@ public struct SaberPosePacket: Codable, Equatable, Sendable {
     }
 }
 
+/// A rigid transform on the wire, as the four columns of a 4×4 matrix.
+public struct SaberFrameTransform: Codable, Equatable, Sendable {
+    public var columns: [SIMD4<Float>]
+
+    public init(_ matrix: simd_float4x4) {
+        columns = [matrix.columns.0, matrix.columns.1, matrix.columns.2, matrix.columns.3]
+    }
+
+    public var matrix: simd_float4x4 {
+        guard columns.count == 4 else { return matrix_identity_float4x4 }
+        return simd_float4x4(columns: (columns[0], columns[1], columns[2], columns[3]))
+    }
+}
+
 /// Low-rate events, sent reliably. Positions are in the shared frame too.
 public enum SaberEvent: Codable, Equatable, Sendable {
     case ignite(hand: SaberHand, ignited: Bool, color: SIMD3<Float>)
     case clash(position: SIMD3<Float>, intensity: Float)
+    /// The sender solved the frame alignment (right controllers touching):
+    /// `receiverFromSender` maps the sender's wire frame into the receiver's
+    /// wire frame, so the receiver applies it to the sender's packets and
+    /// then its own displacement, exactly as for any other packet.
+    case frameSync(receiverFromSender: SaberFrameTransform)
 }

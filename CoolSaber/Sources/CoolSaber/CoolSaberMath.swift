@@ -115,3 +115,35 @@ public struct CoolSaberClashDetector: Sendable {
         pairs.removeAll()
     }
 }
+
+public extension CoolSaberMath {
+    /// Solves the rigid transform between two gravity-aligned frames from one
+    /// shared physical point and one shared horizontal heading — the manual
+    /// "touch controllers together" calibration between two headsets whose
+    /// ARKit origins are unrelated. Both frames have +Y up (ARKit guarantees
+    /// gravity alignment), so only a yaw and a translation are unknown.
+    ///
+    /// - Returns: the matrix mapping `remote` coordinates into `local`
+    ///   coordinates, and the yaw in degrees; nil when a heading is too close
+    ///   to vertical to define a yaw (hold the controllers level).
+    static func yawAlignedFrame(
+        localPoint: SIMD3<Float>,
+        localHeading: SIMD3<Float>,
+        remotePoint: SIMD3<Float>,
+        remoteHeading: SIMD3<Float>
+    ) -> (localFromRemote: simd_float4x4, yawDegrees: Float)? {
+        let a = SIMD3<Float>(localHeading.x, 0, localHeading.z)
+        let b = SIMD3<Float>(remoteHeading.x, 0, remoteHeading.z)
+        guard simd_length(a) > 0.2, simd_length(b) > 0.2 else { return nil }
+        let an = simd_normalize(a)
+        let bn = simd_normalize(b)
+        // Rotation about +Y taking the remote heading onto the local one.
+        let yaw = atan2(bn.z * an.x - bn.x * an.z, bn.x * an.x + bn.z * an.z)
+        let rotation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
+        let rotated = rotation.act(remotePoint)
+        let translation = localPoint - rotated
+        var matrix = simd_float4x4(rotation)
+        matrix.columns.3 = SIMD4<Float>(translation, 1)
+        return (matrix, yaw * 180 / .pi)
+    }
+}

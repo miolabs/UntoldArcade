@@ -26,6 +26,9 @@ final class SaberXRHolder: @unchecked Sendable {
     var spaceOpen = false
     /// Main-actor: result of the most recent openImmersiveSpace call.
     var lastOpenResult = "—"
+    /// Main-actor: the arena's open/dismiss gatekeeper, so the layer
+    /// lifecycle can report back to it.
+    weak var presenter: SaberArenaPresenter?
     /// Set by the game thread when the first wand delivers a tracked pose;
     /// reset on game start. While false the arena shows the loading spinner
     /// and the window shows a progress row.
@@ -132,6 +135,7 @@ struct CoolSaberVisionOSXRApp: App {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @State private var immersionStyle: ImmersionStyle = .mixed
     @State private var sessionController = SaberSessionController()
+    @State private var arena = SaberArenaPresenter()
     @State private var bladeColorID = "blue"
     // Saber fit, persisted per player AND per hand: the two wands are not
     // symmetric, so each blade needs its own alignment.
@@ -146,6 +150,9 @@ struct CoolSaberVisionOSXRApp: App {
     @AppStorage("saber.fit.l.side") private var lSide = Double(SaberFitDefaults.left.gripOffset.x)
     @AppStorage("saber.fit.l.height") private var lHeight = Double(SaberFitDefaults.left.gripOffset.y)
     @AppStorage("saber.fit.l.forward") private var lForward = Double(SaberFitDefaults.left.gripOffset.z)
+    /// Hilt → front of the controller ring along the blade, metres: where the
+    /// two rings touch during the tip-to-tip sync.
+    @AppStorage("saber.sync.ringFront") private var ringFront = 0.05
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -158,20 +165,17 @@ struct CoolSaberVisionOSXRApp: App {
                     .multilineTextAlignment(.center).foregroundStyle(.secondary)
 
                 Button {
-                    Task {
-                        let result = await openImmersiveSpace(id: "Saber")
-                        SaberXRHolder.shared.lastOpenResult = String(describing: result)
-                        print("CoolSaber: openImmersiveSpace → \(String(describing: result))")
-                    }
+                    arena.open(reason: "Enter the Duel Arena button")
                 } label: {
                     Label("Enter the Duel Arena", systemImage: "sparkles")
                         .frame(minWidth: 260)
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
+                .disabled(arena.phase != .closed)
                 #if targetEnvironment(simulator)
                 // The simulator has no controllers: enter directly and watch
                 // the auto-swinging debug blades.
-                .task { _ = await openImmersiveSpace(id: "Saber") }
+                .task { arena.open(reason: "simulator auto-enter") }
                 #endif
 
                 Divider()
@@ -274,7 +278,7 @@ struct CoolSaberVisionOSXRApp: App {
                             .foregroundStyle(.secondary)
                         }
                         Text(
-                            "Arena \(holder.spaceOpen ? "OPEN" : "closed")"
+                            "Arena \(arena.phaseLabel)"
                                 + " (last open: \(holder.lastOpenResult))"
                                 + " · PSVR2 \(sense.isConnected ? "connected" : "NOT connected")"
                                 + " · L \(sense.left.isTracked ? "tracked" : "—")"
@@ -307,6 +311,87 @@ struct CoolSaberVisionOSXRApp: App {
                     }
                     .buttonStyle(.bordered).controlSize(.large)
                 } else {
+                    // Manual frame sync. The system aligns nothing for nearby
+                    // players in a Metal space (displacement stays identity),
+                    // so the players align the frames themselves: one shared
+                    // point + heading from touching controllers.
+                    TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                        let mailbox = SaberDuelMailbox.shared
+                        VStack(spacing: 8) {
+                            // Alignment: the system's shared world anchor
+                            // when ARKit delivers it, else the manual sync.
+                            Text("Anchor: \(mailbox.anchorSummary)")
+                                .font(.callout.monospaced())
+                                .foregroundStyle(
+                                    mailbox.alignmentSource == .sharedAnchor ? Color.green : Color.secondary
+                                )
+                            Text("Manual: \(mailbox.frameSyncSummary)")
+                                .font(.callout.monospaced())
+                                .foregroundStyle(
+                                    mailbox.alignmentSource == .manual ? Color.green : Color.secondary
+                                )
+                            Text(
+                                mailbox.alignmentSource == .sharedAnchor
+                                    ? "Aligned by the shared world anchor. Sync manually only if the blades look off."
+                                    : "Face each other. Touch the fronts of your right controller rings "
+                                        + "together — level, pointing at each other — then one of you taps Sync."
+                            )
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            Button {
+                                mailbox.requestFrameSync()
+                            } label: {
+                                Label(
+                                    mailbox.alignmentSource == .sharedAnchor ? "Sync manually (override)" : "Sync positions",
+                                    systemImage: "scope"
+                                )
+                                .frame(minWidth: 260)
+                            }
+                            .buttonStyle(.borderedProminent).controlSize(.large)
+                            .disabled(!mailbox.opponentPresent || !SaberXRHolder.shared.spaceOpen)
+
+                            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                                GridRow {
+                                    Text(cmLabel("Ring front", ringFront)).monospacedDigit()
+                                    Slider(value: $ringFront, in: 0 ... 0.12, step: 0.005)
+                                        .onChange(of: ringFront) { _, value in
+                                            mailbox.ringFront = Float(value)
+                                        }
+                                }
+                                // Fine tune after a sync, by eye: shift the
+                                // opponent's blades sideways / forward along
+                                // the heading you had at sync time. Sent to
+                                // the opponent once the slider rests.
+                                GridRow {
+                                    Text(cmLabel("Side", Double(mailbox.frameSyncNudgeValue.x))).monospacedDigit()
+                                    Slider(
+                                        value: Binding(
+                                            get: { Double(mailbox.frameSyncNudgeValue.x) },
+                                            set: { mailbox.frameSyncNudgeValue.x = Float($0) }
+                                        ),
+                                        in: -0.25 ... 0.25,
+                                        step: 0.005
+                                    )
+                                    .disabled(!mailbox.isFrameSynced)
+                                }
+                                GridRow {
+                                    Text(cmLabel("Forward", Double(mailbox.frameSyncNudgeValue.y))).monospacedDigit()
+                                    Slider(
+                                        value: Binding(
+                                            get: { Double(mailbox.frameSyncNudgeValue.y) },
+                                            set: { mailbox.frameSyncNudgeValue.y = Float($0) }
+                                        ),
+                                        in: -0.25 ... 0.25,
+                                        step: 0.005
+                                    )
+                                    .disabled(!mailbox.isFrameSynced)
+                                }
+                            }
+                            .font(.callout)
+                        }
+                    }
+
                     Button(role: .destructive) {
                         sessionController.leaveDuel()
                     } label: {
@@ -318,7 +403,9 @@ struct CoolSaberVisionOSXRApp: App {
             }
             .padding(48)
             .task {
+                arena.bind(open: openImmersiveSpace, dismiss: dismissImmersiveSpace)
                 pushFit() // restore this player's saved saber fit
+                SaberDuelMailbox.shared.ringFront = Float(ringFront)
                 sessionController.startSessionObserver()
                 // Warm up the engine's input system at launch: touching it
                 // starts PSVR2 wand discovery and the (slow) ARKit accessory
@@ -330,13 +417,22 @@ struct CoolSaberVisionOSXRApp: App {
             }
             .onChange(of: sessionController.groupImmersionActive) { _, active in
                 guard let active else { return }
-                Task {
-                    if active, !SaberXRHolder.shared.spaceOpen {
-                        _ = await openImmersiveSpace(id: "Saber")
-                    } else if !active, SaberXRHolder.shared.spaceOpen {
-                        await dismissImmersiveSpace()
-                    }
+                if active {
+                    // The system wants the group immersive space. An arena
+                    // opened BEFORE the session joined is a private space
+                    // and never becomes shared (verified on device: the
+                    // opponent cannot connect until it is closed and
+                    // reopened), so cycle it.
+                    arena.joinGroup(reason: "groupImmersionStyle active")
+                } else {
+                    arena.dismiss(reason: "groupImmersionStyle ended")
                 }
+            }
+            .onChange(of: sessionController.joinCount) { _, _ in
+                // Belt and braces: the join itself also cycles an open
+                // arena, in case the style publisher stays quiet because
+                // our space already matched the requested style.
+                arena.joinGroup(reason: "session joined")
             }
             }
         }
@@ -418,7 +514,12 @@ struct SaberArena: CompositorContent {
     var body: some CompositorContent {
         CompositorLayer(configuration: SaberLayerConfiguration()) { layerRenderer in
             guard SaberXRHolder.shared.xr == nil else {
-                print("CoolSaber: immersive space reopened before teardown finished")
+                // The presenter defers every open until teardown completes,
+                // so this means an open bypassed it (e.g. a system-driven
+                // presentation). The space is up but renders nothing; the
+                // presenter learns about it so a dismiss can recover.
+                print("CoolSaber[arena]: layer created before teardown finished — empty space")
+                SaberXRHolder.shared.presenter?.arenaDidStart(rendering: false)
                 return
             }
             guard installCoolSaber() else { return }
@@ -426,6 +527,7 @@ struct SaberArena: CompositorContent {
             guard let xr = UntoldEngineXR(layerRenderer: layerRenderer) else { return }
             SaberXRHolder.shared.xr = xr
             SaberXRHolder.shared.spaceOpen = true
+            SaberXRHolder.shared.presenter?.arenaDidStart(rendering: true)
             xr.setImmersionMode(xrImmersionMode: .mixed)
 
             // The CompositorLayer renderer closure is @MainActor, so set up
@@ -454,6 +556,7 @@ struct SaberArena: CompositorContent {
                         SaberXRHolder.shared.game = nil
                         SaberXRHolder.shared.renderThread = nil
                         print("CoolSaber: immersive space torn down, ready to reopen")
+                        SaberXRHolder.shared.presenter?.arenaDidTearDown()
                     }
                 }
             }
@@ -499,5 +602,186 @@ private func installCoolSaber() -> Bool {
     case let .rejected(failure):
         print("CoolSaber installation rejected:", failure)
         return false
+    }
+}
+
+/// The one place that opens and dismisses the arena.
+///
+/// visionOS allows a single immersive-space request at a time: a second
+/// `openImmersiveSpace` while one is pending or presented fails with
+/// "Unable to present another Immersive Space when one is already requested
+/// or connected". The arena has several would-be openers (the window button,
+/// the simulator auto-enter, the SharePlay group-immersion signal, the join),
+/// and the engine's teardown finishes asynchronously after the space closes,
+/// so requests are serialised through this phase machine: at most one request
+/// in flight, an open during a close is deferred until teardown completes.
+@MainActor
+@Observable
+final class SaberArenaPresenter {
+    enum Phase: Equatable {
+        case closed
+        case opening
+        case open
+        case closing
+    }
+
+    private(set) var phase: Phase = .closed
+    /// True while the space is presented but the engine never attached
+    /// (teardown race): only a dismiss can recover.
+    private(set) var presentedEmpty = false
+
+    private var openAction: OpenImmersiveSpaceAction?
+    private var dismissAction: DismissImmersiveSpaceAction?
+    private var pendingOpen = false
+    private var pendingDismiss = false
+    private var lastJoinCycleUptime: TimeInterval = 0
+
+    init() {
+        SaberXRHolder.shared.presenter = self
+    }
+
+    var phaseLabel: String {
+        switch phase {
+        case .closed: SaberXRHolder.shared.xr == nil ? "closed" : "closed (tearing down)"
+        case .opening: "opening…"
+        case .open: presentedEmpty ? "OPEN (empty!)" : "OPEN"
+        case .closing: "closing…"
+        }
+    }
+
+    func bind(open: OpenImmersiveSpaceAction, dismiss: DismissImmersiveSpaceAction) {
+        openAction = open
+        dismissAction = dismiss
+    }
+
+    // MARK: Requests
+
+    func open(reason: String) {
+        switch phase {
+        case .open, .opening:
+            log("open (\(reason)) ignored — already \(phase)")
+        case .closing:
+            log("open (\(reason)) deferred — closing")
+            pendingOpen = true
+        case .closed:
+            guard SaberXRHolder.shared.xr == nil else {
+                log("open (\(reason)) deferred — engine teardown still running")
+                pendingOpen = true
+                return
+            }
+            guard let openAction else {
+                log("open (\(reason)) dropped — presenter not bound yet")
+                return
+            }
+            phase = .opening
+            pendingOpen = false
+            log("opening (\(reason))")
+            Task { [weak self] in
+                let result = await openAction(id: "Saber")
+                SaberXRHolder.shared.lastOpenResult = String(describing: result)
+                self?.openDidFinish(result)
+            }
+        }
+    }
+
+    func dismiss(reason: String) {
+        switch phase {
+        case .closed:
+            log("dismiss (\(reason)) ignored — already closed")
+            pendingOpen = false
+        case .closing:
+            log("dismiss (\(reason)) ignored — already closing")
+            pendingOpen = false
+        case .opening:
+            log("dismiss (\(reason)) deferred — opening")
+            pendingDismiss = true
+        case .open:
+            guard let dismissAction else { return }
+            phase = .closing
+            pendingDismiss = false
+            log("dismissing (\(reason))")
+            Task { await dismissAction() }
+        }
+    }
+
+    /// A SharePlay duel wants the group immersive space. A closed arena
+    /// simply opens; an open one must be cycled, because a space presented
+    /// before the session joined stays private.
+    func joinGroup(reason: String) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastJoinCycleUptime < 3 {
+            log("joinGroup (\(reason)) ignored — cycled \(String(format: "%.1f", now - lastJoinCycleUptime)) s ago")
+            return
+        }
+        lastJoinCycleUptime = now
+        switch phase {
+        case .closed:
+            open(reason: reason)
+        case .opening:
+            // Just requested, before the join: it will come up private.
+            log("joinGroup (\(reason)) — open in flight, cycling once it is up")
+            pendingDismiss = true
+            pendingOpen = true
+        case .open:
+            log("joinGroup (\(reason)) — cycling the open arena to make it shared")
+            pendingOpen = true
+            dismiss(reason: reason)
+        case .closing:
+            pendingOpen = true
+        }
+    }
+
+    // MARK: Lifecycle reports
+
+    private func openDidFinish(_ result: OpenImmersiveSpaceAction.Result) {
+        log("openImmersiveSpace → \(String(describing: result))")
+        switch result {
+        case .opened:
+            if phase == .opening { phase = .open }
+            if pendingDismiss {
+                pendingDismiss = false
+                dismiss(reason: "deferred dismiss")
+            }
+        case .userCancelled, .error:
+            phase = .closed
+            pendingDismiss = false
+            if pendingOpen {
+                // One retry, e.g. the failed request raced a closing space.
+                pendingOpen = false
+                log("retrying open after \(String(describing: result))")
+                open(reason: "retry")
+            }
+        @unknown default:
+            phase = .closed
+        }
+    }
+
+    /// From the CompositorLayer closure: the space is presented.
+    func arenaDidStart(rendering: Bool) {
+        presentedEmpty = !rendering
+        if phase != .open {
+            log("arena started (rendering: \(rendering)) while \(phase)")
+            phase = .open
+        }
+        if pendingDismiss || !rendering {
+            pendingDismiss = false
+            if !rendering { pendingOpen = true }
+            dismiss(reason: rendering ? "deferred dismiss" : "recover empty space")
+        }
+    }
+
+    /// From the engine's shutdown completion: safe to open again.
+    func arenaDidTearDown() {
+        log("arena torn down (was \(phase), pendingOpen: \(pendingOpen))")
+        phase = .closed
+        presentedEmpty = false
+        if pendingOpen {
+            pendingOpen = false
+            open(reason: "reopen after teardown")
+        }
+    }
+
+    private func log(_ message: String) {
+        print("CoolSaber[arena]: \(message)")
     }
 }
