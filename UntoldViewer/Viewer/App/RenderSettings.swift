@@ -27,6 +27,8 @@ enum RenderSettings {
     // Diagnostics, live: which engine system blinks a moving object.
     static let occlusionCullKey = "occlusionCull"     // the test against the previous frame's depth pyramid
     static let taaJitterKey = "taaJitter"             // the sub-pixel jitter (the resolve still runs)
+    static let inputWaitKey = "inputWait"             // the wait for the compositor's optimal input time before the frame is encoded (on: automatic by the measured deadline; off: never)
+    static let halfRateKey = "halfRate"               // every other refresh while the frames run late (on), or every refresh whatever their cost (off)
     static let textureStreamingKey = "textureStreaming" // texture tiers by screen coverage
     static let tileLightStageKey = "tileLightStage"     // the light pass as a tile stage (once per pixel) vs the quad (once per sample)
     static let hiddenSurfaceRemovalKey = "hiddenSurfaceRemoval" // opaque draws through the model pipeline without discards
@@ -132,6 +134,8 @@ enum RenderSettings {
         func on(_ key: String) -> Bool { diagnosticOn(key) }
         setRendering(.occlusionCullingMaxCameraStep(on(occlusionCullKey) ? 0.5 : 0))
         TAAParams.shared.jitterScale = on(taaJitterKey) ? 1 : 0
+        setRendering(.optimalInputWait(on(inputWaitKey) ? .automatic : .never))
+        setRendering(.framePacing(on(halfRateKey) ? .halfRateWhenLate : .fullRate))
         TextureStreamingSystem.shared.enabled = on(textureStreamingKey)
         setRendering(.tileLightStage(on(tileLightStageKey) ? .enabled : .disabled))
         setRendering(.opaqueHiddenSurfaceRemoval(on(hiddenSurfaceRemovalKey) ? .enabled : .disabled))
@@ -156,6 +160,10 @@ enum RenderSettings {
         // The engine's texture budget (200 MB by default) is under one 4K object's textures;
         // over it, the streaming sheds tiers under the wearer's eyes. The headset has the memory.
         MemoryBudgetManager.shared.textureBudget = 1536 * 1024 * 1024
+        // A tabletop scene: the sun's one cascade (the headset's default) reaches this far,
+        // so its texels are a few millimetres on the board instead of centimetres over the
+        // engine's 40 m.
+        setRendering(.maxShadowCastingDistance(4))
         applyTAAParams()
         applyDiagnostics()
         setRendering(.environment(.ibl(true)))

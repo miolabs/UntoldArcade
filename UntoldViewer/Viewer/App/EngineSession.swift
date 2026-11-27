@@ -109,6 +109,10 @@ struct EngineDiagnostics: Sendable, Equatable {
     /// pose was taken at.
     var skippedFrames = 0
     var presentationRevisions = 0
+    /// Frames whose GPU work finished after the compositor's rendering deadline (the display
+    /// showed the previous frame again), and the longest such overrun in milliseconds.
+    var lateFrames = 0
+    var worstLateMs: Double = 0
     /// The frame's draw calls and triangles, from the engine's own counters.
     var drawCalls = 0
     var triangles = 0
@@ -143,6 +147,14 @@ struct EngineDiagnostics: Sendable, Equatable {
     /// The diagnostic switches and the lighting mode the pass ran with, as set in the viewer.
     var occlusionCull = true
     var taaJitter = true
+    /// The input-time wait switch (automatic by the measured deadline, or never), and whether
+    /// the last frame waited.
+    var inputWait = true
+    var inputWaitActive = true
+    /// The half-rate pacing switch (every other refresh while the frames run late), and whether
+    /// the loop is rendering every other refresh at the moment.
+    var halfRate = true
+    var halfRateActive = false
     var textureStreaming = true
     var lighting = "room"
     /// The frames with the object whose picture's mean brightness fell by more than a third
@@ -442,6 +454,8 @@ final class EngineSession: @unchecked Sendable {
             tourTime: tourTime,
             skippedFrames: lock.withLock { skippedFrames },
             presentationRevisions: xr?.presentationTimeRevisions ?? 0,
+            lateFrames: xr?.deadlineMisses ?? 0,
+            worstLateMs: xr?.worstDeadlineOverrunMs ?? 0,
             drawCalls: stats.render.drawCallsTotal,
             triangles: stats.render.trianglesTotal,
             opaqueDrawsLeast: opaqueDrawsLeast == Int.max ? 0 : opaqueDrawsLeast,
@@ -458,6 +472,10 @@ final class EngineSession: @unchecked Sendable {
             renderPath: renderInfo.perFragmentLightingBuilt ? "forward" : renderInfo.perFragmentIndirectLightingBuilt ? "hybrid" : "deferred",
             occlusionCull: RenderSettings.diagnosticOn(RenderSettings.occlusionCullKey),
             taaJitter: RenderSettings.diagnosticOn(RenderSettings.taaJitterKey),
+            inputWait: RenderSettings.diagnosticOn(RenderSettings.inputWaitKey),
+            inputWaitActive: xr?.optimalInputWaitActive ?? true,
+            halfRate: RenderSettings.diagnosticOn(RenderSettings.halfRateKey),
+            halfRateActive: xr?.halfRatePacingActive ?? false,
             textureStreaming: RenderSettings.diagnosticOn(RenderSettings.textureStreamingKey),
             lighting: RenderSettings.lighting,
             darkFrames: lock.withLock { darkFrames },

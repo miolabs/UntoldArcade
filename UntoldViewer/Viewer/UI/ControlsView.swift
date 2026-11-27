@@ -29,6 +29,8 @@ struct ControlsView: View {
     @AppStorage(RenderSettings.taaClipGammaKey) private var taaClipGamma = 1.25
     @AppStorage(RenderSettings.occlusionCullKey) private var occlusionCull = true
     @AppStorage(RenderSettings.taaJitterKey) private var taaJitter = true
+    @AppStorage(RenderSettings.inputWaitKey) private var inputWait = true
+    @AppStorage(RenderSettings.halfRateKey) private var halfRate = true
     @AppStorage(RenderSettings.textureStreamingKey) private var textureStreaming = true
     @AppStorage(RenderSettings.tileLightStageKey) private var tileLightStage = true
     @AppStorage(RenderSettings.hiddenSurfaceRemovalKey) private var hiddenSurfaceRemoval = true
@@ -239,6 +241,8 @@ struct ControlsView: View {
                 HStack(spacing: 24) {
                     Toggle("Occlusion cull", isOn: $occlusionCull)
                     Toggle("TAA jitter", isOn: $taaJitter)
+                    Toggle("Input-time wait", isOn: $inputWait)
+                    Toggle("Half-rate pacing", isOn: $halfRate)
                     Toggle("Texture streaming", isOn: $textureStreaming)
                     Toggle("Hidden-surface removal", isOn: $hiddenSurfaceRemoval)
                     Toggle("GPU pass timing", isOn: $gpuPassTiming)
@@ -325,6 +329,8 @@ struct ControlsView: View {
                 .onChange(of: wideGamut) { RenderSettings.applyDiagnostics() }
                 .onChange(of: occlusionCull) { RenderSettings.applyDiagnostics() }
                 .onChange(of: taaJitter) { RenderSettings.applyDiagnostics() }
+                .onChange(of: inputWait) { RenderSettings.applyDiagnostics() }
+                .onChange(of: halfRate) { RenderSettings.applyDiagnostics() }
                 .onChange(of: textureStreaming) { RenderSettings.applyDiagnostics() }
                 .onChange(of: hiddenSurfaceRemoval) { RenderSettings.applyDiagnostics() }
             }
@@ -383,7 +389,7 @@ struct ControlsView: View {
                     .lineLimit(2)
             }
             Text(engineOpen
-                ? "engine · \(d.object.isEmpty ? "placing…" : d.object)\(d.tourTime.map { String(format: " · tour %.1f s", $0) } ?? "") · frames \(d.frames)\(d.skippedFrames > 0 ? " (\(d.skippedFrames) skipped)" : "") · AA \(d.antiAliasing) ×\(d.opaqueSampleCount) · \(d.viewport.x)×\(d.viewport.y)\(d.screenSize.x > 0 ? " fov \(d.screenSize.x)×\(d.screenSize.y)" : "") · \(gpu)\(fps)\(d.compositeSkipped ? " · composite skipped" : "") · \(d.renderPath)\(d.tileLightStage ? " (tile light)" : "")"
+                ? "engine · \(d.object.isEmpty ? "placing…" : d.object)\(d.tourTime.map { String(format: " · tour %.1f s", $0) } ?? "") · frames \(d.frames)\(d.skippedFrames > 0 || d.lateFrames > 0 ? " (\(d.skippedFrames) skipped, \(d.lateFrames) late\(d.inputWaitActive ? "" : ", no wait"))" : "")\(d.halfRateActive ? " · half rate" : "") · AA \(d.antiAliasing) ×\(d.opaqueSampleCount) · \(d.viewport.x)×\(d.viewport.y)\(d.screenSize.x > 0 ? " fov \(d.screenSize.x)×\(d.screenSize.y)" : "") · \(gpu)\(fps)\(d.compositeSkipped ? " · composite skipped" : "") · \(d.renderPath)\(d.tileLightStage ? " (tile light)" : "")"
                 : (rkOpen ? "realitykit · \(Catalog.selectedID) · updates \(String(format: "%.0f", rkRate)) Hz · gpu: out of process — Instruments ▸ RealityKit Trace, with and without the object" : "no space open · \(EngineSession.shared.lastOpenResult)"))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
