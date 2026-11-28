@@ -56,7 +56,7 @@ final class ZombieXRHolder: @unchecked Sendable {
 
     // MARK: Game-thread writers
 
-    func setDiagnostics(phase: String, distance: Float, tracked: Bool, floor: Float, floorMeasured: Bool, clipSet: String, position: simd_float3, meshFloor: Float?, planeFloor: Float?, floorSource: String) {
+    func setDiagnostics(phase: String, distance: Float, tracked: Bool, floor: Float, floorMeasured: Bool, clipSet: String, position: simd_float3, meshFloor: Float?, planeFloor: Float?, floorSource: String, cloth: String) {
         lock.withLock {
             phaseStorage = phase
             distanceStorage = distance
@@ -68,8 +68,16 @@ final class ZombieXRHolder: @unchecked Sendable {
             meshFloorStorage = meshFloor
             planeFloorStorage = planeFloor
             floorSourceStorage = floorSource
+            clothStorage = cloth
         }
     }
+
+    /// The shirt simulation's short line (`ZombieCloth.summary`), empty
+    /// while it is not running: the headset's measurement of the skin feed,
+    /// the read-back and the step, with the state and the counters. The
+    /// game writes it every frame, so it is the cheap form, not the report.
+    var cloth: String { lock.withLock { clothStorage } }
+    private var clothStorage = ""
 
     /// Which estimate the floor in use came from ("mesh", "plane" or "assumed").
     var floorSource: String { lock.withLock { floorSourceStorage } }
@@ -221,6 +229,37 @@ final class ZombieXRHolder: @unchecked Sendable {
             return pending
         }
     }
+
+    /// The shirt's simulation: the launch arguments' configuration until
+    /// the window's Cloth and Cloth quality pickers change it. The game
+    /// starts from it (so a space reopened keeps the choice) and applies a
+    /// change on its thread: the garments come off and go back on rebuilt.
+    private var clothConfigurationStorage: ZombieCloth.Configuration = {
+        var configuration = ZombieCloth.Configuration()
+        configuration.apply(launchArguments: ProcessInfo.processInfo.arguments)
+        // The iterations picker offers one to four and six; a launch
+        // argument outside them would show as a choice the shirt is not
+        // running (and one it could not pick again), so the device holds
+        // to the offered counts.
+        if ClothQualityChoice(rawValue: configuration.iterationsPerStep) == nil {
+            configuration.iterationsPerStep = ClothQualityChoice.four.rawValue
+        }
+        return configuration
+    }()
+
+    private var clothPending: ZombieCloth.Configuration?
+    var clothConfiguration: ZombieCloth.Configuration { lock.withLock { clothConfigurationStorage } }
+
+    func requestCloth(_ configuration: ZombieCloth.Configuration) {
+        lock.withLock {
+            clothConfigurationStorage = configuration
+            clothPending = configuration
+        }
+    }
+
+    func takeClothRequest() -> ZombieCloth.Configuration? {
+        lock.withLock { defer { clothPending = nil }; return clothPending }
+    }
 }
 
 /// The footnote under the phase readout, assembled in pieces: one long
@@ -241,6 +280,27 @@ func diagnosticsLine(_ holder: ZombieXRHolder) -> String {
     parts.append("room: \(holder.room)")
     if !holder.roomSaved.isEmpty {
         parts.append("saved \(holder.roomSaved)")
+    }
+    if !holder.cloth.isEmpty {
+        parts.append(holder.cloth)
+    }
+    // The frame beside the cloth's step: the CPU's update and encode and
+    // the GPU's time per frame from the engine's stats (filled in debug
+    // builds; zeros in release, where only the deadline count below is
+    // kept), and the frames whose GPU work finished after the compositor's
+    // deadline since the space opened, with the worst overrun. Kept short
+    // — "frame cpu 1.2+0.8 gpu 5.3 ms, 3 late +1.2 ms" — as the footnote
+    // is one line of monospaced type.
+    let timing = getEngineStatsSnapshot().timing
+    var frame: [String] = []
+    if timing.updateMs > 0 || timing.encodeMs > 0 || timing.gpuExecutionMs > 0 {
+        frame.append(String(format: "cpu %.1f+%.1f gpu %.1f ms", timing.updateMs, timing.encodeMs, timing.gpuExecutionMs))
+    }
+    if let xr = holder.xr {
+        frame.append(String(format: "%d late +%.1f ms", xr.deadlineMisses, xr.worstDeadlineOverrunMs))
+    }
+    if !frame.isEmpty {
+        parts.append("frame " + frame.joined(separator: ", "))
     }
     return parts.joined(separator: " · ")
 }
@@ -288,6 +348,52 @@ enum PacingChoice: String, CaseIterable, Identifiable {
     }
 }
 
+/// Control-window choices for the shirt's simulation: the collision model
+/// (off is the shirt body-skinned) and the solver's iterations. A change
+/// rebuilds the cloth on the game thread (`ZombieChaseGame.setCloth`).
+enum ClothChoice: String, CaseIterable, Identifiable {
+    case off = "Off"
+    case skinOnly = "Skin only"
+    case skinAndWorld = "World"
+    case ragdollAndSkin = "Ragdoll too"
+    var id: String { rawValue }
+
+    init(_ configuration: ZombieCloth.Configuration) {
+        guard configuration.enabled else { self = .off; return }
+        switch configuration.collisionModel {
+        case .skinOnly: self = .skinOnly
+        case .skinAndWorld: self = .skinAndWorld
+        case .ragdollAndSkin: self = .ragdollAndSkin
+        }
+    }
+
+    func apply(to configuration: ZombieCloth.Configuration) -> ZombieCloth.Configuration {
+        var result = configuration
+        result.enabled = self != .off
+        switch self {
+        case .off: break
+        case .skinOnly: result.collisionModel = .skinOnly
+        case .skinAndWorld: result.collisionModel = .skinAndWorld
+        case .ragdollAndSkin: result.collisionModel = .ragdollAndSkin
+        }
+        return result
+    }
+}
+
+/// The solver's iterations: one to four and six (Jolt runs a pass per
+/// iteration on a sub-step divided by the count, so six is a 0.9 ms solver
+/// step on the device).
+enum ClothQualityChoice: UInt32, CaseIterable, Identifiable {
+    case one = 1, two, three, four, six = 6
+    var id: UInt32 { rawValue }
+    var title: String { "\(rawValue)" }
+
+    /// The holder keeps the count among the offered.
+    init(_ configuration: ZombieCloth.Configuration) {
+        self = ClothQualityChoice(rawValue: configuration.iterationsPerStep) ?? .four
+    }
+}
+
 /// Control-window choice; maps onto the game's inspection modes.
 enum InspectionChoice: String, CaseIterable, Identifiable {
     case chase = "Chase"
@@ -332,6 +438,8 @@ struct CoolZombieVisionOSXRApp: App {
     @State private var inputWait: InputWaitChoice = .auto
     @State private var pacing: PacingChoice = .full
     @State private var antiAliasing: AntiAliasingChoice = .taa
+    @State private var cloth = ClothChoice(ZombieXRHolder.shared.clothConfiguration)
+    @State private var clothQuality = ClothQualityChoice(ZombieXRHolder.shared.clothConfiguration)
     @State private var throwHard = false
     private let clipSets = ZombieResources.availableClipSets
 
@@ -478,6 +586,39 @@ struct CoolZombieVisionOSXRApp: App {
                         .frame(maxWidth: 420)
                         .onChange(of: antiAliasing) { _, choice in
                             ZombieXRHolder.shared.requestAntiAliasing(choice.mode)
+                        }
+                    }
+
+                    // The shirt: off (body-skinned), on its skin alone (no
+                    // collisions: what they cost), meeting the world (the
+                    // balls and the floor; the default) or the ragdoll's
+                    // parts too (the A/B); and the solver's iterations. Each
+                    // change takes the shirt off and puts it back on
+                    // rebuilt, so the footnote's cloth line can be read
+                    // against the frame line for each.
+                    VStack(spacing: 10) {
+                        Picker("Cloth", selection: $cloth) {
+                            ForEach(ClothChoice.allCases) { choice in
+                                Text(choice.rawValue).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        .onChange(of: cloth) { _, choice in
+                            ZombieXRHolder.shared.requestCloth(choice.apply(to: ZombieXRHolder.shared.clothConfiguration))
+                        }
+                        Picker("Cloth iterations", selection: $clothQuality) {
+                            ForEach(ClothQualityChoice.allCases) { choice in
+                                Text(choice.title).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 420)
+                        .disabled(cloth == .off)
+                        .onChange(of: clothQuality) { _, choice in
+                            var configuration = ZombieXRHolder.shared.clothConfiguration
+                            configuration.iterationsPerStep = choice.rawValue
+                            ZombieXRHolder.shared.requestCloth(configuration)
                         }
                     }
 

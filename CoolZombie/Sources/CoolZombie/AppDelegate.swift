@@ -139,6 +139,8 @@
                                 current: scene.targetMode) { scene.setTargetMode($0) }
                     optionGroup("Height", options: ZombieScene.TargetHeight.allCases.map { ($0.title, $0) },
                                 current: scene.targetHeight) { scene.setTargetHeight($0) }
+                    optionGroup("Cloth", options: ZombieScene.ClothChoice.allCases.map { ($0.title, $0) },
+                                current: scene.clothChoice) { scene.setClothChoice($0) }
                     if clipSets.count > 1 {
                         optionGroup("Clips", options: clipSets.map { ($0.title, $0) },
                                     current: scene.clipSet) { scene.setClipSet($0) }
